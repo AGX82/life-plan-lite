@@ -1,0 +1,11 @@
+node_modules
+out
+dist
+.vite
+backups
+*.tsbuildinfo
+*.local
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
