@@ -218,7 +218,7 @@ function AdminApp({
   }
 
   return (
-    <main className="admin-shell" onClick={closeMenu}>
+    <main className="admin-shell theme-black-glass-blue" onClick={closeMenu}>
       <aside className="side-rail">
         <h1 aria-label="Life Plan Lite" className="side-app-title">
           <span className="cap-word">
@@ -1533,7 +1533,7 @@ function DisplayBoard({
   snapshot: BoardSnapshot
 }): ReactElement {
   return (
-    <section className={compact ? 'display-board compact' : 'display-board'}>
+    <section className={`theme-black-glass-blue ${compact ? 'display-board compact' : 'display-board'}`}>
       <div className="board-shell">
         <header className="display-top-band">
           <div className="display-title">
