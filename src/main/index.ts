@@ -231,6 +231,8 @@ function registerIpc(): void {
   })
   ipcMain.handle('app:requestAdminMode', () => requestAdminMode())
   ipcMain.handle('display:state', () => getDisplayState())
+  ipcMain.handle('appSettings:get', () => repository.getAppSettings())
+  ipcMain.handle('appSettings:update', (_event, settings) => handleMutation(repository.updateAppSettings.bind(repository))(settings))
   ipcMain.handle('display:open', () => {
     createDisplayWindow()
     return getDisplayState()
@@ -248,6 +250,7 @@ function registerIpc(): void {
   ipcMain.handle('items:publishList', (_event, listId: string) => handleMutation(repository.publishList.bind(repository))(listId))
   ipcMain.handle('items:publishBoard', (_event, boardId: string) => handleMutation(repository.publishBoard.bind(repository))(boardId))
   ipcMain.handle('items:complete', (_event, itemId: string) => handleMutation(repository.completeItem.bind(repository))(itemId))
+  ipcMain.handle('items:close', (_event, input) => handleMutation(repository.closeItem.bind(repository))(input))
   ipcMain.handle('items:create', (_event, input: CreateItemInput) => handleMutation(repository.createItem.bind(repository))(input))
   ipcMain.handle('items:update', (_event, input: UpdateItemInput) => handleMutation(repository.updateItem.bind(repository))(input))
   ipcMain.handle('items:delete', (_event, itemId: string) => handleMutation(repository.deleteItem.bind(repository))(itemId))

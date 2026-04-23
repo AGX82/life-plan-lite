@@ -83,7 +83,7 @@ export function migrate(client: DbClient): void {
       item_number INTEGER NOT NULL,
       item_order INTEGER NOT NULL,
       publication_status TEXT NOT NULL CHECK(publication_status IN ('draft', 'published', 'dirty')),
-      operational_state TEXT NOT NULL CHECK(operational_state IN ('active', 'completed')),
+      operational_state TEXT NOT NULL CHECK(operational_state IN ('active', 'completed', 'cancelled')),
       created_by TEXT NOT NULL DEFAULT 'admin',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -122,6 +122,8 @@ export function migrate(client: DbClient): void {
       list_name TEXT NOT NULL,
       item_code TEXT NOT NULL,
       values_json TEXT NOT NULL,
+      close_action TEXT NOT NULL DEFAULT 'completed',
+      close_comment TEXT NOT NULL DEFAULT '',
       closed_at TEXT NOT NULL
     );
 
@@ -165,8 +167,11 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'lists', 'show_created_at_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'lists', 'show_created_by_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'item_groups', 'display_config', 'TEXT')
+  rebuildItemsForCloseActionsIfNeeded(client)
   addColumnIfMissing(client, 'items', 'group_id', 'TEXT REFERENCES item_groups(id) ON DELETE SET NULL')
   addColumnIfMissing(client, 'items', 'created_by', "TEXT NOT NULL DEFAULT 'admin'")
+  addColumnIfMissing(client, 'item_archives', 'close_action', "TEXT NOT NULL DEFAULT 'completed'")
+  addColumnIfMissing(client, 'item_archives', 'close_comment', "TEXT NOT NULL DEFAULT ''")
   client.database.exec(`
     UPDATE list_columns
     SET name = 'Deadline',
@@ -214,6 +219,40 @@ function rebuildListColumnsForRichTypesIfNeeded(client: DbClient): void {
 
     DROP TABLE list_columns;
     ALTER TABLE list_columns_new RENAME TO list_columns;
+
+    PRAGMA foreign_keys = ON;
+  `)
+}
+
+function rebuildItemsForCloseActionsIfNeeded(client: DbClient): void {
+  const table = client.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'items'").get<{ sql: string }>()
+  if (table?.sql.includes("'cancelled'")) return
+
+  client.database.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    CREATE TABLE items_new (
+      id TEXT PRIMARY KEY,
+      list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      group_id TEXT REFERENCES item_groups(id) ON DELETE SET NULL,
+      item_number INTEGER NOT NULL,
+      item_order INTEGER NOT NULL,
+      publication_status TEXT NOT NULL CHECK(publication_status IN ('draft', 'published', 'dirty')),
+      operational_state TEXT NOT NULL CHECK(operational_state IN ('active', 'completed', 'cancelled')),
+      created_by TEXT NOT NULL DEFAULT 'admin',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      published_at TEXT,
+      UNIQUE(list_id, item_number)
+    );
+
+    INSERT INTO items_new
+      (id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
+    SELECT id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at
+    FROM items;
+
+    DROP TABLE items;
+    ALTER TABLE items_new RENAME TO items;
 
     PRAGMA foreign_keys = ON;
   `)

@@ -29,6 +29,30 @@
   text-rendering: optimizeLegibility;
 }
 
+.theme-midnight-clear {
+  --color-bg: #010405;
+  --color-rail: rgba(4, 7, 10, 0.028);
+  --color-panel: rgba(8, 11, 15, 0.024);
+  --color-panel-deep: rgba(5, 7, 11, 0.064);
+  --color-panel-soft: rgba(10, 13, 18, 0.032);
+  --color-border: rgba(223, 229, 236, 0.14);
+  --color-border-strong: rgba(239, 243, 247, 0.26);
+  --color-ink: #f4fbff;
+  --color-muted: rgba(227, 232, 238, 0.66);
+  --color-subtle: rgba(183, 190, 198, 0.46);
+  --color-accent: rgba(231, 236, 242, 0.9);
+  --color-accent-strong: #f6fcff;
+  --color-accent-soft: rgba(225, 231, 238, 0.055);
+  --color-button-text: #f6fcff;
+  --glass-highlight: rgba(255, 255, 255, 0.065);
+  --glass-lowlight: rgba(255, 255, 255, 0.01);
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  --oil-blue: rgba(6, 10, 15, 0.028);
+  --oil-blue-soft: rgba(9, 14, 21, 0.02);
+  color: var(--color-ink);
+  background: transparent;
+}
+
 * {
   box-sizing: border-box;
   scrollbar-color: rgba(232, 238, 238, 0.42) rgba(3, 7, 10, 0.58);
@@ -86,7 +110,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -321,7 +346,8 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 1.95rem;
   border: 1px solid var(--color-border);
@@ -331,6 +357,11 @@ select {
     linear-gradient(180deg, rgba(176, 192, 255, 0.08), rgba(0, 0, 0, 0.14)),
     var(--color-bg);
   color: var(--color-ink);
+}
+
+textarea {
+  padding: 0.55rem;
+  resize: vertical;
 }
 
 input[type="checkbox"] {
@@ -1175,6 +1206,49 @@ input[type="checkbox"] {
   font-size: 0.74rem;
 }
 
+.row-actions-heading,
+.row-actions-cell {
+  width: 4.3rem;
+  min-width: 4.3rem;
+}
+
+.row-actions-cell {
+  white-space: nowrap;
+}
+
+.row-action-button {
+  display: inline-flex;
+  width: 1.45rem;
+  height: 1.45rem;
+  min-height: 1.45rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.22rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.08)),
+    rgba(255, 255, 255, 0.035);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.row-action-button.complete {
+  color: #84e0a3;
+}
+
+.row-action-button.cancel {
+  color: #ff8f86;
+}
+
+.row-action-button:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.04)),
+    rgba(255, 255, 255, 0.06);
+}
+
 .due-chip,
 .status-pill {
   display: inline-flex;
@@ -1303,6 +1377,252 @@ input[type="checkbox"] {
   bottom: 0;
   left: 0;
   cursor: nesw-resize;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(12px);
+}
+
+.modal-card {
+  width: min(460px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(0, 0, 0, 0.1)),
+    rgba(8, 16, 20, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
+    0 28px 64px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header,
+.modal-actions {
+  padding: 0.75rem 0.85rem;
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-header h3,
+.modal-body p {
+  margin: 0;
+}
+
+.modal-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+}
+
+.modal-field {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.theme-midnight-clear.admin-shell,
+.theme-midnight-clear.display-board,
+.theme-midnight-clear .board-shell {
+  background: linear-gradient(135deg, #000306 0%, #01050b 36%, #020913 68%, #00050a 100%);
+}
+
+.theme-midnight-clear .side-rail,
+.theme-midnight-clear .admin-toolbar,
+.theme-midnight-clear .tree-pane,
+.theme-midnight-clear .preview-widget,
+.theme-midnight-clear .editor-card,
+.theme-midnight-clear .display-top-band,
+.theme-midnight-clear .summary-slot.top,
+.theme-midnight-clear .board-list-panel,
+.theme-midnight-clear .nav-button,
+.theme-midnight-clear .icon-button,
+.theme-midnight-clear .mini-button,
+.theme-midnight-clear .icon-only,
+.theme-midnight-clear .primary-button,
+.theme-midnight-clear input,
+.theme-midnight-clear select,
+.theme-midnight-clear textarea,
+.theme-midnight-clear .context-menu,
+.theme-midnight-clear .modal-card,
+.theme-midnight-clear .list-tree-card,
+.theme-midnight-clear .inline-config-panel,
+.theme-midnight-clear .dependency-picker,
+.theme-midnight-clear .weekday-picker {
+  background: rgba(10, 14, 20, 0.085);
+  backdrop-filter: blur(14px) saturate(108%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.075),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.02),
+    0 0 0 1px rgba(201, 227, 235, 0.03);
+}
+
+.theme-midnight-clear .side-rail {
+  border-right-color: rgba(228, 241, 244, 0.12);
+  box-shadow: inset -1px 0 0 rgba(244, 250, 252, 0.04);
+}
+
+.theme-midnight-clear .nav-button,
+.theme-midnight-clear .icon-button,
+.theme-midnight-clear .mini-button,
+.theme-midnight-clear .icon-only,
+.theme-midnight-clear .primary-button,
+.theme-midnight-clear .danger-button {
+  border: 1px solid rgba(228, 241, 244, 0.16);
+}
+
+.theme-midnight-clear .nav-button.active,
+.theme-midnight-clear .primary-button {
+  background: rgba(230, 236, 242, 0.055);
+  color: var(--color-ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.065),
+    0 0 0 1px rgba(228, 241, 244, 0.024);
+}
+
+.theme-midnight-clear .danger-button,
+.theme-midnight-clear .danger-mini {
+  background: rgba(64, 36, 34, 0.07);
+  color: #ffb8af;
+  border: 1px solid rgba(255, 186, 178, 0.12);
+}
+
+.theme-midnight-clear .tree-pane,
+.theme-midnight-clear .preview-widget,
+.theme-midnight-clear .editor-card,
+.theme-midnight-clear .inline-config-panel,
+.theme-midnight-clear .dependency-picker,
+.theme-midnight-clear .summary-slot.top,
+.theme-midnight-clear .display-top-band,
+.theme-midnight-clear .board-list-panel,
+.theme-midnight-clear .context-menu,
+.theme-midnight-clear .modal-card {
+  border-color: rgba(228, 241, 244, 0.16);
+}
+
+.theme-midnight-clear .property-pane {
+  overflow: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.theme-midnight-clear .property-pane > .editor-card,
+.theme-midnight-clear .property-pane > .editor-stack {
+  margin: 0;
+}
+
+.theme-midnight-clear .loaded-board-panel,
+.theme-midnight-clear .pane-heading,
+.theme-midnight-clear .panel-heading,
+.theme-midnight-clear .board-list-panel > header,
+.theme-midnight-clear .display-top-band,
+.theme-midnight-clear .modal-header,
+.theme-midnight-clear .modal-actions {
+  border-color: rgba(228, 241, 244, 0.12);
+}
+
+.theme-midnight-clear .list-tree-card,
+.theme-midnight-clear .list-tree-card > .tree-node,
+.theme-midnight-clear .tree-node.active,
+.theme-midnight-clear .tree-node:hover {
+  background: rgba(225, 230, 236, 0.03);
+}
+
+.theme-midnight-clear .display-board.compact .board-shell,
+.theme-midnight-clear .board-shell {
+  background: transparent;
+}
+
+.theme-midnight-clear .display-board.compact .board-shell {
+  border-color: rgba(228, 241, 244, 0.14);
+}
+
+.theme-midnight-clear .summary-slot.top {
+  background: rgba(217, 225, 234, 0.055);
+}
+
+.theme-midnight-clear .board-list-panel.selected-layout,
+.theme-midnight-clear .board-list-panel.selectable:hover,
+.theme-midnight-clear .row-action-button:hover:not(:disabled),
+.theme-midnight-clear .context-menu button:hover {
+  border-color: rgba(241, 248, 250, 0.28);
+}
+
+.theme-midnight-clear .board-list-panel {
+  background: rgba(10, 15, 22, 0.092);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.085),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.02),
+    0 0 0 1px rgba(201, 227, 235, 0.03);
+}
+
+.theme-midnight-clear .board-list-panel > header {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(0, 0, 0, 0.08)),
+    rgba(4, 8, 13, 0.58);
+}
+
+.theme-midnight-clear .board-list-panel h3 {
+  font-size: 1.08rem;
+}
+
+.theme-midnight-clear .board-list-panel .table-wrap {
+  padding-top: 0;
+}
+
+.theme-midnight-clear .board-list-panel thead tr {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 54%, rgba(0, 0, 0, 0.04)),
+    rgba(18, 24, 32, 0.34);
+}
+
+.theme-midnight-clear .row-action-button {
+  background: rgba(235, 239, 244, 0.028);
+  border-color: rgba(228, 241, 244, 0.12);
+}
+
+.theme-midnight-clear .due-chip,
+.theme-midnight-clear .status-pill {
+  background: rgba(228, 233, 239, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.theme-midnight-clear .editable-grid {
+  background-image:
+    linear-gradient(rgba(196, 223, 232, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(196, 223, 232, 0.08) 1px, transparent 1px);
+}
+
+.theme-midnight-clear .board-list-panel th {
+  color: rgba(236, 241, 246, 0.88);
+  font-size: 0.71rem;
+  font-weight: 420;
+  padding-top: 0.42rem;
+  padding-bottom: 0.42rem;
+}
+
+.theme-midnight-clear .board-list-panel td {
+  font-size: 0.8rem;
 }
 
 @media (max-width: 1180px) {

@@ -12,16 +12,19 @@ import {
   Save,
   Send,
   SquarePen,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react'
 import { FormEvent, PointerEvent, useEffect, useRef, useState } from 'react'
 import type { Dispatch, ReactElement, SetStateAction } from 'react'
 import type {
+  AppSettings,
   BoardItem,
   BoardList,
   BoardSnapshot,
   BoardSummary,
   ChoiceConfig,
+  CloseConfirmationMode,
   ColumnType,
   CurrencyCode,
   DateFieldValue,
@@ -40,7 +43,7 @@ type Route = 'admin' | 'display'
 
 type FormValues = Record<string, FieldValue>
 
-type AppActionResult = BoardSnapshot | DisplayState | void
+type AppActionResult = BoardSnapshot | DisplayState | AppSettings | void
 type RunAction = (action: () => Promise<AppActionResult>) => Promise<AppActionResult>
 
 type SelectedNode =
@@ -95,22 +98,25 @@ export function App(): ReactElement {
   const [previewSnapshot, setPreviewSnapshot] = useState<BoardSnapshot | null>(null)
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [displayState, setDisplayState] = useState<DisplayState | null>(null)
+  const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments' })
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [busy, setBusy] = useState(false)
   const editingBoardId = useRef<string | null>(null)
 
   async function load(nextRoute = route, boardId = editingBoardId.current): Promise<void> {
-    const [nextSnapshot, nextPreviewSnapshot, nextBoards, nextDisplayState] = await Promise.all([
+    const [nextSnapshot, nextPreviewSnapshot, nextBoards, nextDisplayState, nextAppSettings] = await Promise.all([
       nextRoute === 'admin' && boardId ? window.lpl.getBoardSnapshot(boardId, 'admin') : window.lpl.getActiveBoardSnapshot(nextRoute),
       nextRoute === 'admin' && boardId ? window.lpl.getBoardSnapshot(boardId, 'display') : window.lpl.getActiveBoardSnapshot('display'),
       window.lpl.listBoards(),
-      window.lpl.getDisplayState()
+      window.lpl.getDisplayState(),
+      window.lpl.getAppSettings()
     ])
     setSnapshot(nextSnapshot)
     setPreviewSnapshot(nextPreviewSnapshot)
     editingBoardId.current = nextSnapshot.id
     setBoards(nextBoards)
     setDisplayState(nextDisplayState)
+    setAppSettings(nextAppSettings)
     setSelectedNode((current) => (current && nodeExists(current, nextSnapshot) ? current : { kind: 'board', id: nextSnapshot.id }))
   }
 
@@ -125,10 +131,19 @@ export function App(): ReactElement {
         editingBoardId.current = result.id
       }
       if (result && 'displays' in result) setDisplayState(result)
-      const [nextBoards, nextDisplayState] = await Promise.all([window.lpl.listBoards(), window.lpl.getDisplayState()])
+      if (result && 'closeConfirmationMode' in result) setAppSettings(result)
+      const [nextBoards, nextDisplayState, nextAppSettings] = await Promise.all([
+        window.lpl.listBoards(),
+        window.lpl.getDisplayState(),
+        window.lpl.getAppSettings()
+      ])
       setBoards(nextBoards)
       setDisplayState(nextDisplayState)
+      setAppSettings(nextAppSettings)
       return result
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Something went wrong.')
+      return undefined
     } finally {
       setBusy(false)
     }
@@ -160,6 +175,7 @@ export function App(): ReactElement {
   if (route === 'display') {
     return (
       <DisplayBoard
+        appSettings={appSettings}
         snapshot={snapshot}
         onAdmin={async () => {
           const result = await window.lpl.requestAdminMode()
@@ -174,6 +190,7 @@ export function App(): ReactElement {
       boards={boards}
       busy={busy}
       displayState={displayState}
+      appSettings={appSettings}
       previewSnapshot={previewSnapshot ?? snapshot}
       runAction={runAction}
       onSelectBoard={(boardId) => {
@@ -189,6 +206,7 @@ export function App(): ReactElement {
 }
 
 function AdminApp({
+  appSettings,
   boards,
   busy,
   displayState,
@@ -199,6 +217,7 @@ function AdminApp({
   setSelectedNode,
   snapshot
 }: {
+  appSettings: AppSettings
   boards: BoardSummary[]
   busy: boolean
   displayState: DisplayState | null
@@ -218,7 +237,7 @@ function AdminApp({
   }
 
   return (
-    <main className="admin-shell theme-liquid-gunmetal" onClick={closeMenu}>
+    <main className="admin-shell theme-midnight-clear" onClick={closeMenu}>
       <aside className="side-rail">
         <h1 aria-label="Life Plan Lite" className="side-app-title">
           <span className="cap-word">
@@ -259,7 +278,7 @@ function AdminApp({
           </button>
         </div>
         <div className="side-actions">
-          <DisplayControls busy={busy} displayState={displayState} runAction={runAction} />
+          <DisplayControls appSettings={appSettings} busy={busy} displayState={displayState} runAction={runAction} />
           <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
             <ExternalLink size={18} />
             View Here
@@ -327,10 +346,12 @@ function AdminApp({
 }
 
 function DisplayControls({
+  appSettings,
   busy,
   displayState,
   runAction
 }: {
+  appSettings: AppSettings
   busy: boolean
   displayState: DisplayState | null
   runAction: RunAction
@@ -339,6 +360,24 @@ function DisplayControls({
 
   return (
     <div className="display-controls">
+      <label>
+        <span>Close confirmation</span>
+        <select
+          disabled={busy}
+          onChange={(event) =>
+            runAction(() =>
+              window.lpl.updateAppSettings({
+                closeConfirmationMode: event.target.value as CloseConfirmationMode
+              })
+            )
+          }
+          value={appSettings.closeConfirmationMode}
+        >
+          <option value="with_comments">Yes - with comments</option>
+          <option value="without_comments">Yes - without comments</option>
+          <option value="none">No confirmation</option>
+        </select>
+      </label>
       <label>
         <span>Display</span>
         <select
@@ -1516,6 +1555,7 @@ function BoardPreviewWidget({
 }
 
 function DisplayBoard({
+  appSettings,
   compact = false,
   editable = false,
   onAdmin,
@@ -1524,6 +1564,7 @@ function DisplayBoard({
   selectedListId,
   snapshot
 }: {
+  appSettings?: AppSettings
   compact?: boolean
   editable?: boolean
   onAdmin?: () => void | Promise<void>
@@ -1532,8 +1573,42 @@ function DisplayBoard({
   selectedListId?: string
   snapshot: BoardSnapshot
 }): ReactElement {
+  const [closeDialog, setCloseDialog] = useState<{ item: BoardItem; action: 'completed' | 'cancelled' } | null>(null)
+  const [closeComment, setCloseComment] = useState('')
+  const [closingItemId, setClosingItemId] = useState<string | null>(null)
+  const confirmationMode = appSettings?.closeConfirmationMode ?? 'with_comments'
+  const enableCloseActions = !compact && !editable && Boolean(appSettings)
+  const closeDialogTitle = closeDialog
+    ? (() => {
+        const list = snapshot.lists.find((entry) => entry.id === closeDialog.item.listId)
+        return list ? itemTitle(closeDialog.item, list) : closeDialog.item.displayCode
+      })()
+    : ''
+
+  async function submitClose(item: BoardItem, action: 'completed' | 'cancelled', comment: string | null): Promise<void> {
+    setClosingItemId(item.id)
+    try {
+      await window.lpl.closeItem({ itemId: item.id, action, comment })
+      setCloseDialog(null)
+      setCloseComment('')
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Unable to close the item right now.')
+    } finally {
+      setClosingItemId(null)
+    }
+  }
+
+  function requestClose(item: BoardItem, action: 'completed' | 'cancelled'): void {
+    if (confirmationMode === 'none') {
+      void submitClose(item, action, null)
+      return
+    }
+    setCloseComment('')
+    setCloseDialog({ item, action })
+  }
+
   return (
-    <section className={`theme-liquid-gunmetal ${compact ? 'display-board compact' : 'display-board'}`}>
+    <section className={`theme-midnight-clear ${compact ? 'display-board compact' : 'display-board'}`}>
       <div className="board-shell">
         <header className="display-top-band">
           <div className="display-title">
@@ -1563,12 +1638,36 @@ function DisplayBoard({
               key={list.id}
               list={list}
               onChange={onListChange}
+              onCloseItem={enableCloseActions ? requestClose : undefined}
               onSelect={onListSelect}
+              rowActionBusy={closingItemId !== null}
               selected={list.id === selectedListId}
             />
           ))}
         </div>
       </div>
+      {closeDialog && (
+        <CloseItemModal
+          action={closeDialog.action}
+          busy={closingItemId === closeDialog.item.id}
+          comments={closeComment}
+          itemTitle={closeDialogTitle}
+          mode={confirmationMode}
+          onCancel={() => {
+            if (closingItemId) return
+            setCloseDialog(null)
+            setCloseComment('')
+          }}
+          onCommentsChange={setCloseComment}
+          onConfirm={() =>
+            submitClose(
+              closeDialog.item,
+              closeDialog.action,
+              confirmationMode === 'with_comments' ? closeComment : null
+            )
+          }
+        />
+      )}
     </section>
   )
 }
@@ -1578,14 +1677,18 @@ function BoardListView({
   editable,
   list,
   onChange,
+  onCloseItem,
   onSelect,
+  rowActionBusy,
   selected
 }: {
   compact: boolean
   editable: boolean
   list: BoardList
   onChange?: (list: BoardList, grid: BoardList['grid']) => void
+  onCloseItem?: (item: BoardItem, action: 'completed' | 'cancelled') => void
   onSelect?: (listId: string) => void
+  rowActionBusy?: boolean
   selected?: boolean
 }): ReactElement {
   const columns = boardVisibleColumns(list)
@@ -1648,6 +1751,7 @@ function BoardListView({
                 <th key={column.id}>{column.name}</th>
               ))}
               {list.dueDateEnabled && <th>Deadline</th>}
+              {onCloseItem && <th className="row-actions-heading" />}
             </tr>
           </thead>
           <tbody>
@@ -1662,6 +1766,7 @@ function BoardListView({
                     <td key={column.id}>{formatGroupCell(row.group, column, list, index === 0)}</td>
                   ))}
                   {list.dueDateEnabled && <td />}
+                  {onCloseItem && <td />}
                 </tr>
               ) : (
                 <tr className={deadlineRowClass(row.item)} key={row.item.id}>
@@ -1673,6 +1778,36 @@ function BoardListView({
                     <td key={column.id}>{formatCellValue(row.item.values[column.id], column)}</td>
                   ))}
                   {list.dueDateEnabled && <td>{row.item.deadlineStatus}</td>}
+                  {onCloseItem && (
+                    <td className="row-actions-cell">
+                      <button
+                        aria-label={`Mark ${row.item.displayCode} completed`}
+                        className="row-action-button complete"
+                        disabled={rowActionBusy}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onCloseItem(row.item, 'completed')
+                        }}
+                        title="Mark completed"
+                        type="button"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        aria-label={`Cancel ${row.item.displayCode}`}
+                        className="row-action-button cancel"
+                        disabled={rowActionBusy}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onCloseItem(row.item, 'cancelled')
+                        }}
+                        title="Cancel task"
+                        type="button"
+                      >
+                        <X size={14} />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               )
             )}
@@ -1689,6 +1824,75 @@ function BoardListView({
           />
         ))}
     </article>
+  )
+}
+
+function CloseItemModal({
+  action,
+  busy,
+  comments,
+  itemTitle,
+  mode,
+  onCancel,
+  onCommentsChange,
+  onConfirm
+}: {
+  action: 'completed' | 'cancelled'
+  busy: boolean
+  comments: string
+  itemTitle: string
+  mode: CloseConfirmationMode
+  onCancel: () => void
+  onCommentsChange: (value: string) => void
+  onConfirm: () => void | Promise<void>
+}): ReactElement {
+  const message =
+    mode === 'without_comments'
+      ? action === 'completed'
+        ? 'You are about to mark this item as completed. Please confirm.'
+        : 'You are about to cancel this task before completion. Please confirm.'
+      : action === 'completed'
+        ? 'You are about to mark this item as completed. Do you want to log any comments?'
+        : 'You are about to cancel this task before completion. Do you want to log any comments?'
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel} role="presentation">
+      <div
+        aria-modal="true"
+        className="modal-card"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Close Item</p>
+            <h3>{itemTitle}</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <p>{message}</p>
+          {mode === 'with_comments' && (
+            <label className="modal-field">
+              <span>Comments</span>
+              <textarea
+                onChange={(event) => onCommentsChange(event.target.value)}
+                placeholder="Add an optional note for the closure log"
+                rows={4}
+                value={comments}
+              />
+            </label>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button className="icon-button" disabled={busy} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button className="primary-button" disabled={busy} onClick={() => void onConfirm()} type="button">
+            {action === 'completed' ? 'Mark Completed' : 'Cancel Task'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

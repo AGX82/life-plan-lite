@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  CloseItemInput,
   CreateColumnInput,
   CreateBoardInput,
   CreateGroupInput,
@@ -22,6 +23,8 @@ const api: LplApi = {
   closeApp: () => ipcRenderer.invoke('app:close'),
   requestAdminMode: () => ipcRenderer.invoke('app:requestAdminMode'),
   getDisplayState: () => ipcRenderer.invoke('display:state'),
+  getAppSettings: () => ipcRenderer.invoke('appSettings:get'),
+  updateAppSettings: (settings) => ipcRenderer.invoke('appSettings:update', settings),
   openDisplayWindow: () => ipcRenderer.invoke('display:open'),
   hideDisplayWindow: () => ipcRenderer.invoke('display:hide'),
   setDisplayTarget: (displayId: string) => ipcRenderer.invoke('display:setTarget', displayId),
@@ -29,6 +32,7 @@ const api: LplApi = {
   publishList: (listId: string) => ipcRenderer.invoke('items:publishList', listId),
   publishBoard: (boardId: string) => ipcRenderer.invoke('items:publishBoard', boardId),
   completeItem: (itemId: string) => ipcRenderer.invoke('items:complete', itemId),
+  closeItem: (input: CloseItemInput) => ipcRenderer.invoke('items:close', input),
   createItem: (input: CreateItemInput) => ipcRenderer.invoke('items:create', input),
   updateItem: (input: UpdateItemInput) => ipcRenderer.invoke('items:update', input),
   deleteItem: (itemId: string) => ipcRenderer.invoke('items:delete', itemId),

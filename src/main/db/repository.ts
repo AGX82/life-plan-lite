@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   AggregationMethod,
+  AppSettings,
   ArchiveRecord,
   BoardItem,
   BoardList,
@@ -8,6 +9,8 @@ import type {
   BoardSummary,
   ChoiceConfig,
   ChoiceOption,
+  CloseConfirmationMode,
+  CloseItemInput,
   ColumnRole,
   ColumnType,
   CreateBoardInput,
@@ -39,6 +42,14 @@ import type { DbClient } from './client'
 
 const MIN_LIST_GRID_WIDTH = 4
 const MIN_LIST_GRID_HEIGHT = 2
+const RESERVED_COLUMN_NAMES = new Set(
+  ['item id', 'item name', 'created at', 'created by', 'dependency', 'dependencies', 'close_comm'].map((name) =>
+    normalizeReservedColumnName(name)
+  )
+)
+const DEFAULT_APP_SETTINGS: AppSettings = {
+  closeConfirmationMode: 'with_comments'
+}
 
 type ListRow = {
   id: string
@@ -123,6 +134,10 @@ type BottomSlotRow = {
   aggregation_method: AggregationMethod
 }
 
+type SettingRow = {
+  value_json: string | null
+}
+
 function defaultChoiceConfig(name: string, type: ColumnType): ChoiceConfig | null {
   if (type !== 'choice') return null
   const priorityLabels = name.toLowerCase().includes('priority')
@@ -184,6 +199,14 @@ function recurrenceNeedsDays(mode: RecurrenceMode): boolean {
 
 function normalizeRecurrenceDays(days: number[] | undefined): number[] {
   return [...new Set((days ?? []).map((day) => Math.trunc(day)).filter((day) => day >= 0 && day <= 6))].sort((a, b) => a - b)
+}
+
+function normalizeReservedColumnName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
 }
 
 function isDateFieldValue(value: FieldValue | undefined): value is DateFieldValue {
@@ -347,6 +370,37 @@ export class LifePlanRepository {
     this.run('UPDATE display_configs SET target_display_id = ?, updated_at = ?', displayId, new Date().toISOString())
   }
 
+  getAppSettings(): AppSettings {
+    const row = this.client.database
+      .prepare("SELECT value_json FROM app_settings WHERE key = 'app_config'")
+      .get<SettingRow>()
+
+    if (!row?.value_json) return DEFAULT_APP_SETTINGS
+
+    try {
+      const parsed = JSON.parse(row.value_json) as { closeConfirmationMode?: CloseConfirmationMode }
+      return {
+        closeConfirmationMode: this.normalizeCloseConfirmationMode(parsed.closeConfirmationMode)
+      }
+    } catch {
+      return DEFAULT_APP_SETTINGS
+    }
+  }
+
+  updateAppSettings(settings: AppSettings): AppSettings {
+    const normalized: AppSettings = {
+      closeConfirmationMode: this.normalizeCloseConfirmationMode(settings.closeConfirmationMode)
+    }
+    this.run(
+      `INSERT INTO app_settings (key, value_json, updated_at)
+       VALUES ('app_config', ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      JSON.stringify(normalized),
+      new Date().toISOString()
+    )
+    return normalized
+  }
+
   setActiveBoard(boardId: string): BoardSnapshot {
     const now = new Date().toISOString()
     this.transaction(() => {
@@ -439,6 +493,10 @@ export class LifePlanRepository {
   }
 
   completeItem(itemId: string): BoardSnapshot {
+    return this.closeItem({ itemId, action: 'completed', comment: null })
+  }
+
+  closeItem(input: CloseItemInput): BoardSnapshot {
     const item = this.client.database
       .prepare(
         `SELECT i.id, i.item_number, l.id AS list_id, l.name AS list_name, l.code AS list_code, b.id AS board_id
@@ -447,17 +505,21 @@ export class LifePlanRepository {
          JOIN boards b ON b.id = l.board_id
          WHERE i.id = ?`
       )
-      .get<{ id: string; item_number: number; list_id: string; list_name: string; list_code: string; board_id: string }>(itemId)
+      .get<{ id: string; item_number: number; list_id: string; list_name: string; list_code: string; board_id: string }>(input.itemId)
 
     if (!item) throw new Error('Item not found.')
 
-    const values = this.getItemValues([itemId], 'published')[itemId] ?? {}
+    const action = input.action === 'cancelled' ? 'cancelled' : 'completed'
+    const draftValues = this.getItemValues([input.itemId], 'draft')[input.itemId] ?? {}
+    const publishedValues = this.getItemValues([input.itemId], 'published')[input.itemId] ?? {}
+    const values = Object.keys(draftValues).length > 0 ? draftValues : publishedValues
     const now = new Date().toISOString()
+    const comment = String(input.comment ?? '').trim()
 
     this.transaction(() => {
       this.run(
-        `INSERT INTO item_archives (id, item_id, board_id, list_id, list_name, item_code, values_json, closed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO item_archives (id, item_id, board_id, list_id, list_name, item_code, values_json, close_action, close_comment, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         randomUUID(),
         item.id,
         item.board_id,
@@ -465,18 +527,21 @@ export class LifePlanRepository {
         item.list_name,
         `${item.list_code}-T${String(item.item_number).padStart(2, '0')}`,
         JSON.stringify(values),
+        action,
+        comment,
         now
       )
       this.run(
         `UPDATE items
-         SET operational_state = 'completed', updated_at = ?
+         SET operational_state = ?, updated_at = ?
          WHERE id = ?`,
+        action,
         now,
-        itemId
+        input.itemId
       )
     })
 
-    return this.getActiveBoardSnapshot('admin')
+    return this.getBoardSnapshot(item.board_id, 'admin')
   }
 
   createItem(input: CreateItemInput): BoardSnapshot {
@@ -984,6 +1049,7 @@ export class LifePlanRepository {
   }
 
   createColumn(input: CreateColumnInput): BoardSnapshot {
+    this.assertColumnNameAllowed(input.name)
     const nextOrder = this.client.database
       .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM list_columns WHERE list_id = ?')
       .get<{ next_order: number }>(input.listId)?.next_order ?? 0
@@ -1012,10 +1078,12 @@ export class LifePlanRepository {
 
   updateColumn(input: UpdateColumnInput): BoardSnapshot {
     const existing = this.client.database
-      .prepare('SELECT display_format FROM list_columns WHERE id = ?')
-      .get<{ display_format: string | null }>(input.columnId)
+      .prepare('SELECT name, display_format FROM list_columns WHERE id = ?')
+      .get<{ name: string; display_format: string | null }>(input.columnId)
+    if (!existing) throw new Error('Column not found.')
     const existingFormat = this.readColumnDisplayFormat(existing?.display_format ?? null)
     const role = existingFormat.role
+    if (role !== 'deadline') this.assertColumnNameAllowed(input.name)
     const type = role === 'deadline' ? 'date' : input.type
     const dateDisplayFormat = role === 'deadline' ? 'datetime' : type === 'date' ? (input.dateDisplayFormat ?? existingFormat.dateDisplayFormat) : 'date'
     const recurrence = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrence ?? existingFormat.recurrence) : 'none'
@@ -1082,7 +1150,7 @@ export class LifePlanRepository {
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     return this.client.database
       .prepare(
-        `SELECT id, item_id, board_id, list_id, list_name, item_code, values_json, closed_at
+        `SELECT id, item_id, board_id, list_id, list_name, item_code, values_json, close_action, close_comment, closed_at
          FROM item_archives
          ${where}
          ORDER BY closed_at DESC`
@@ -1095,6 +1163,8 @@ export class LifePlanRepository {
         list_name: string
         item_code: string
         values_json: string
+        close_action: Exclude<OperationalState, 'active'>
+        close_comment: string | null
         closed_at: string
       }>(...params)
       .map((row) => ({
@@ -1105,7 +1175,9 @@ export class LifePlanRepository {
         listName: row.list_name,
         itemCode: row.item_code,
         values: JSON.parse(row.values_json),
-        closedAt: row.closed_at
+        closedAt: row.closed_at,
+        closeAction: row.close_action === 'cancelled' ? 'cancelled' : 'completed',
+        closeComment: row.close_comment ?? ''
       }))
   }
 
@@ -1619,6 +1691,11 @@ export class LifePlanRepository {
     return `${days} days`
   }
 
+  private normalizeCloseConfirmationMode(mode: CloseConfirmationMode | undefined): CloseConfirmationMode {
+    if (mode === 'without_comments' || mode === 'none') return mode
+    return 'with_comments'
+  }
+
   private compareItemsByColumn(
     first: BoardItem,
     second: BoardItem,
@@ -1947,6 +2024,14 @@ export class LifePlanRepository {
       now
     )
     return id
+  }
+
+  private assertColumnNameAllowed(name: string): void {
+    const normalized = normalizeReservedColumnName(name)
+    if (normalized.length === 0) return
+    if (RESERVED_COLUMN_NAMES.has(normalized)) {
+      throw new Error(`"${name.trim()}" is a reserved system field name and cannot be used.`)
+    }
   }
 
   private createSeedItem(

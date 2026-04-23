@@ -34,3 +34,18 @@ Intent:
 - Six-pixel structural corner radius.
 - Themed scrollbars and in-app context menus.
 - Deadline colors remain functional and are not part of the decorative theme palette.
+
+## Midnight Clear
+
+CSS class: `theme-midnight-clear`
+
+Status: saved active theme as of `v0.3.0`.
+
+Intent:
+
+- Very dark blue-black background with reduced saturation and a colder overall tone.
+- Near-transparent glass panels with just enough body to read as etched panes rather than outlines.
+- Darker list title bands and slightly brighter column-header bands to separate structure from content.
+- Cleaner admin editor presentation by removing the redundant middle wrapper shell.
+- Improved board readability from a distance through slightly larger list-item text.
+- Deadline colors remain functional and are not part of the decorative theme palette.

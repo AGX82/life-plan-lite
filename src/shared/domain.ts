@@ -4,7 +4,7 @@ export type ListSortDirection = 'manual' | 'asc' | 'desc'
 
 export type PublicationStatus = 'draft' | 'published' | 'dirty'
 
-export type OperationalState = 'active' | 'completed'
+export type OperationalState = 'active' | 'completed' | 'cancelled'
 
 export type AggregationMethod = 'sum' | 'count' | 'active_count' | 'completed_count' | 'sum_active'
 
@@ -155,6 +155,12 @@ export type DisplayState = {
   displays: DisplayInfo[]
 }
 
+export type CloseConfirmationMode = 'with_comments' | 'without_comments' | 'none'
+
+export type AppSettings = {
+  closeConfirmationMode: CloseConfirmationMode
+}
+
 export type AdminModeRequestResult = {
   switchInPlace: boolean
 }
@@ -180,6 +186,8 @@ export type ArchiveRecord = {
   itemCode: string
   values: Record<string, FieldValue>
   closedAt: string
+  closeAction: Exclude<OperationalState, 'active'>
+  closeComment: string
 }
 
 export type CreateItemInput = {
@@ -279,6 +287,12 @@ export type UpdateColumnInput = {
   showOnBoard?: boolean
 }
 
+export type CloseItemInput = {
+  itemId: string
+  action: Exclude<OperationalState, 'active'>
+  comment?: string | null
+}
+
 export type LplApi = {
   listBoards: () => Promise<BoardSummary[]>
   getActiveBoardSnapshot: (mode?: 'admin' | 'display') => Promise<BoardSnapshot>
@@ -287,6 +301,8 @@ export type LplApi = {
   closeApp: () => Promise<void>
   requestAdminMode: () => Promise<AdminModeRequestResult>
   getDisplayState: () => Promise<DisplayState>
+  getAppSettings: () => Promise<AppSettings>
+  updateAppSettings: (settings: AppSettings) => Promise<AppSettings>
   openDisplayWindow: () => Promise<DisplayState>
   hideDisplayWindow: () => Promise<DisplayState>
   setDisplayTarget: (displayId: string) => Promise<DisplayState>
@@ -294,6 +310,7 @@ export type LplApi = {
   publishList: (listId: string) => Promise<BoardSnapshot>
   publishBoard: (boardId: string) => Promise<BoardSnapshot>
   completeItem: (itemId: string) => Promise<BoardSnapshot>
+  closeItem: (input: CloseItemInput) => Promise<BoardSnapshot>
   createItem: (input: CreateItemInput) => Promise<BoardSnapshot>
   updateItem: (input: UpdateItemInput) => Promise<BoardSnapshot>
   deleteItem: (itemId: string) => Promise<BoardSnapshot>
