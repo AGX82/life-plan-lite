@@ -157,8 +157,11 @@ export type DisplayState = {
 
 export type CloseConfirmationMode = 'with_comments' | 'without_comments' | 'none'
 
+export type AppTheme = 'black_glass_blue' | 'liquid_gunmetal' | 'midnight_clear'
+
 export type AppSettings = {
   closeConfirmationMode: CloseConfirmationMode
+  theme: AppTheme
 }
 
 export type AdminModeRequestResult = {

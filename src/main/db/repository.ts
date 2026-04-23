@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   AggregationMethod,
+  AppTheme,
   AppSettings,
   ArchiveRecord,
   BoardItem,
@@ -48,7 +49,8 @@ const RESERVED_COLUMN_NAMES = new Set(
   )
 )
 const DEFAULT_APP_SETTINGS: AppSettings = {
-  closeConfirmationMode: 'with_comments'
+  closeConfirmationMode: 'with_comments',
+  theme: 'midnight_clear'
 }
 
 type ListRow = {
@@ -378,9 +380,10 @@ export class LifePlanRepository {
     if (!row?.value_json) return DEFAULT_APP_SETTINGS
 
     try {
-      const parsed = JSON.parse(row.value_json) as { closeConfirmationMode?: CloseConfirmationMode }
+      const parsed = JSON.parse(row.value_json) as { closeConfirmationMode?: CloseConfirmationMode; theme?: AppTheme }
       return {
-        closeConfirmationMode: this.normalizeCloseConfirmationMode(parsed.closeConfirmationMode)
+        closeConfirmationMode: this.normalizeCloseConfirmationMode(parsed.closeConfirmationMode),
+        theme: this.normalizeTheme(parsed.theme)
       }
     } catch {
       return DEFAULT_APP_SETTINGS
@@ -389,7 +392,8 @@ export class LifePlanRepository {
 
   updateAppSettings(settings: AppSettings): AppSettings {
     const normalized: AppSettings = {
-      closeConfirmationMode: this.normalizeCloseConfirmationMode(settings.closeConfirmationMode)
+      closeConfirmationMode: this.normalizeCloseConfirmationMode(settings.closeConfirmationMode),
+      theme: this.normalizeTheme(settings.theme)
     }
     this.run(
       `INSERT INTO app_settings (key, value_json, updated_at)
@@ -1694,6 +1698,11 @@ export class LifePlanRepository {
   private normalizeCloseConfirmationMode(mode: CloseConfirmationMode | undefined): CloseConfirmationMode {
     if (mode === 'without_comments' || mode === 'none') return mode
     return 'with_comments'
+  }
+
+  private normalizeTheme(theme: AppTheme | undefined): AppTheme {
+    if (theme === 'black_glass_blue' || theme === 'liquid_gunmetal') return theme
+    return 'midnight_clear'
   }
 
   private compareItemsByColumn(

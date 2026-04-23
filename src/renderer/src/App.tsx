@@ -11,6 +11,7 @@ import {
   Power,
   Save,
   Send,
+  Settings2,
   SquarePen,
   Trash2,
   X
@@ -19,6 +20,7 @@ import { FormEvent, PointerEvent, useEffect, useRef, useState } from 'react'
 import type { Dispatch, ReactElement, SetStateAction } from 'react'
 import type {
   AppSettings,
+  AppTheme,
   BoardItem,
   BoardList,
   BoardSnapshot,
@@ -73,6 +75,11 @@ const currencyOptions: Array<{ code: CurrencyCode; label: string }> = [
 ]
 const MIN_LIST_GRID_WIDTH = 4
 const MIN_LIST_GRID_HEIGHT = 2
+const themeOptions: Array<{ value: AppTheme; label: string; className: string }> = [
+  { value: 'midnight_clear', label: 'Midnight Clear', className: 'theme-midnight-clear' },
+  { value: 'liquid_gunmetal', label: 'Liquid Gunmetal', className: 'theme-liquid-gunmetal' },
+  { value: 'black_glass_blue', label: 'Black Glass Blue', className: 'theme-black-glass-blue' }
+]
 const weekdayLabels = [
   { short: 'S', long: 'Sun' },
   { short: 'M', long: 'Mon' },
@@ -98,7 +105,7 @@ export function App(): ReactElement {
   const [previewSnapshot, setPreviewSnapshot] = useState<BoardSnapshot | null>(null)
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [displayState, setDisplayState] = useState<DisplayState | null>(null)
-  const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments' })
+  const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments', theme: 'midnight_clear' })
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [busy, setBusy] = useState(false)
   const editingBoardId = useRef<string | null>(null)
@@ -172,10 +179,15 @@ export function App(): ReactElement {
     return <div className="loading">Loading Life Plan Lite...</div>
   }
 
+  const currentThemeClass = themeClassName(appSettings.theme)
+
   if (route === 'display') {
     return (
       <DisplayBoard
         appSettings={appSettings}
+        appThemeClass={currentThemeClass}
+        busy={busy}
+        runAction={runAction}
         snapshot={snapshot}
         onAdmin={async () => {
           const result = await window.lpl.requestAdminMode()
@@ -191,6 +203,7 @@ export function App(): ReactElement {
       busy={busy}
       displayState={displayState}
       appSettings={appSettings}
+      appThemeClass={currentThemeClass}
       previewSnapshot={previewSnapshot ?? snapshot}
       runAction={runAction}
       onSelectBoard={(boardId) => {
@@ -207,6 +220,7 @@ export function App(): ReactElement {
 
 function AdminApp({
   appSettings,
+  appThemeClass,
   boards,
   busy,
   displayState,
@@ -218,6 +232,7 @@ function AdminApp({
   snapshot
 }: {
   appSettings: AppSettings
+  appThemeClass: string
   boards: BoardSummary[]
   busy: boolean
   displayState: DisplayState | null
@@ -237,7 +252,7 @@ function AdminApp({
   }
 
   return (
-    <main className="admin-shell theme-midnight-clear" onClick={closeMenu}>
+    <main className={`admin-shell ${appThemeClass}`} onClick={closeMenu}>
       <aside className="side-rail">
         <h1 aria-label="Life Plan Lite" className="side-app-title">
           <span className="cap-word">
@@ -367,6 +382,7 @@ function DisplayControls({
           onChange={(event) =>
             runAction(() =>
               window.lpl.updateAppSettings({
+                ...appSettings,
                 closeConfirmationMode: event.target.value as CloseConfirmationMode
               })
             )
@@ -388,6 +404,27 @@ function DisplayControls({
           {displayState?.displays.map((display) => (
             <option key={display.id} value={display.id}>
               {display.label} {display.primary ? '(Primary)' : ''} - {display.bounds.width}x{display.bounds.height}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Theme</span>
+        <select
+          disabled={busy}
+          onChange={(event) =>
+            runAction(() =>
+              window.lpl.updateAppSettings({
+                ...appSettings,
+                theme: event.target.value as AppTheme
+              })
+            )
+          }
+          value={appSettings.theme}
+        >
+          {themeOptions.map((theme) => (
+            <option key={theme.value} value={theme.value}>
+              {theme.label}
             </option>
           ))}
         </select>
@@ -1556,34 +1593,53 @@ function BoardPreviewWidget({
 
 function DisplayBoard({
   appSettings,
+  appThemeClass,
+  busy = false,
   compact = false,
   editable = false,
   onAdmin,
   onListChange,
   onListSelect,
+  runAction,
   selectedListId,
   snapshot
 }: {
   appSettings?: AppSettings
+  appThemeClass?: string
+  busy?: boolean
   compact?: boolean
   editable?: boolean
   onAdmin?: () => void | Promise<void>
   onListChange?: (list: BoardList, grid: BoardList['grid']) => void
   onListSelect?: (listId: string) => void
+  runAction?: RunAction
   selectedListId?: string
   snapshot: BoardSnapshot
 }): ReactElement {
+  const allItems = snapshot.lists.flatMap((list) => list.items)
   const [closeDialog, setCloseDialog] = useState<{ item: BoardItem; action: 'completed' | 'cancelled' } | null>(null)
   const [closeComment, setCloseComment] = useState('')
   const [closingItemId, setClosingItemId] = useState<string | null>(null)
+  const [itemDialog, setItemDialog] = useState<
+    | { mode: 'create'; listId: string }
+    | { mode: 'edit'; listId: string; itemId: string }
+    | null
+  >(null)
+  const [listSettingsListId, setListSettingsListId] = useState<string | null>(null)
   const confirmationMode = appSettings?.closeConfirmationMode ?? 'with_comments'
-  const enableCloseActions = !compact && !editable && Boolean(appSettings)
+  const enableBoardInteraction = !compact && !editable && Boolean(appSettings && runAction)
+  const enableCloseActions = enableBoardInteraction
   const closeDialogTitle = closeDialog
     ? (() => {
         const list = snapshot.lists.find((entry) => entry.id === closeDialog.item.listId)
         return list ? itemTitle(closeDialog.item, list) : closeDialog.item.displayCode
       })()
     : ''
+  const dialogList = itemDialog ? snapshot.lists.find((list) => list.id === itemDialog.listId) ?? null : null
+  const dialogItem =
+    itemDialog?.mode === 'edit' && dialogList ? dialogList.items.find((item) => item.id === itemDialog.itemId) ?? null : null
+  const listSettingsList = listSettingsListId ? snapshot.lists.find((list) => list.id === listSettingsListId) ?? null : null
+  const showItemDialog = Boolean(itemDialog && dialogList && (itemDialog.mode === 'create' || dialogItem))
 
   async function submitClose(item: BoardItem, action: 'completed' | 'cancelled', comment: string | null): Promise<void> {
     setClosingItemId(item.id)
@@ -1608,7 +1664,7 @@ function DisplayBoard({
   }
 
   return (
-    <section className={`theme-midnight-clear ${compact ? 'display-board compact' : 'display-board'}`}>
+    <section className={`${appThemeClass ?? 'theme-midnight-clear'} ${compact ? 'display-board compact' : 'display-board'}`}>
       <div className="board-shell">
         <header className="display-top-band">
           <div className="display-title">
@@ -1637,8 +1693,11 @@ function DisplayBoard({
               editable={editable}
               key={list.id}
               list={list}
+              onAddItem={enableBoardInteraction ? (listId) => setItemDialog({ mode: 'create', listId }) : undefined}
               onChange={onListChange}
               onCloseItem={enableCloseActions ? requestClose : undefined}
+              onEditList={enableBoardInteraction ? (listId) => setListSettingsListId(listId) : undefined}
+              onOpenItem={enableBoardInteraction ? (listId, itemId) => setItemDialog({ mode: 'edit', listId, itemId }) : undefined}
               onSelect={onListSelect}
               rowActionBusy={closingItemId !== null}
               selected={list.id === selectedListId}
@@ -1668,16 +1727,42 @@ function DisplayBoard({
           }
         />
       )}
+      {enableBoardInteraction && showItemDialog && dialogList && itemDialog && runAction && (
+        <BoardItemModal
+          allItems={allItems}
+          busy={busy}
+          item={itemDialog.mode === 'edit' ? dialogItem : null}
+          list={dialogList}
+          mode={itemDialog.mode}
+          onClose={() => setItemDialog(null)}
+          runAction={runAction}
+        />
+      )}
+      {enableBoardInteraction && listSettingsList && runAction && (
+        <BoardListSettingsModal
+          list={listSettingsList}
+          onClose={() => setListSettingsListId(null)}
+          runAction={runAction}
+          snapshot={snapshot}
+        />
+      )}
     </section>
   )
+}
+
+function themeClassName(theme: AppTheme): string {
+  return themeOptions.find((entry) => entry.value === theme)?.className ?? 'theme-midnight-clear'
 }
 
 function BoardListView({
   compact,
   editable,
   list,
+  onAddItem,
   onChange,
   onCloseItem,
+  onEditList,
+  onOpenItem,
   onSelect,
   rowActionBusy,
   selected
@@ -1685,8 +1770,11 @@ function BoardListView({
   compact: boolean
   editable: boolean
   list: BoardList
+  onAddItem?: (listId: string) => void
   onChange?: (list: BoardList, grid: BoardList['grid']) => void
   onCloseItem?: (item: BoardItem, action: 'completed' | 'cancelled') => void
+  onEditList?: (listId: string) => void
+  onOpenItem?: (listId: string, itemId: string) => void
   onSelect?: (listId: string) => void
   rowActionBusy?: boolean
   selected?: boolean
@@ -1734,7 +1822,39 @@ function BoardListView({
       }}
     >
       <header onPointerDown={(event) => startDrag(event, 'move')}>
-        <div>
+        <div className="board-list-header-title">
+          {(onAddItem || onEditList) && (
+            <div className="board-list-toolbar">
+              {onAddItem && (
+                <button
+                  className="board-list-tool-button"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    onAddItem(list.id)
+                  }}
+                  title={`Add item to ${list.name}`}
+                  type="button"
+                >
+                  <Plus size={15} />
+                </button>
+              )}
+              {onEditList && (
+                <button
+                  className="board-list-tool-button"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    onEditList(list.id)
+                  }}
+                  title={`Edit ${list.name}`}
+                  type="button"
+                >
+                  <Settings2 size={15} />
+                </button>
+              )}
+            </div>
+          )}
           <h3>{list.name}</h3>
         </div>
         {editable ? <Grip size={16} /> : list.dueDateEnabled && <span className="due-chip">Deadline</span>}
@@ -1769,7 +1889,11 @@ function BoardListView({
                   {onCloseItem && <td />}
                 </tr>
               ) : (
-                <tr className={deadlineRowClass(row.item)} key={row.item.id}>
+                <tr
+                  className={`${deadlineRowClass(row.item) ?? ''} ${onOpenItem ? 'board-item-row clickable-row' : 'board-item-row'}`.trim()}
+                  key={row.item.id}
+                  onClick={() => onOpenItem?.(list.id, row.item.id)}
+                >
                   {list.showItemIdOnBoard && <td className="code-cell">{row.item.displayCode}</td>}
                   {list.showDependenciesOnBoard && <td>{row.item.dependencyCodes.join(', ') || '-'}</td>}
                   {list.showCreatedAtOnBoard && <td>{formatSystemDate(row.item.createdAt)}</td>}
@@ -1824,6 +1948,339 @@ function BoardListView({
           />
         ))}
     </article>
+  )
+}
+
+function BoardItemModal({
+  allItems,
+  busy,
+  item,
+  list,
+  mode,
+  onClose,
+  runAction
+}: {
+  allItems: BoardItem[]
+  busy: boolean
+  item: BoardItem | null
+  list: BoardList
+  mode: 'create' | 'edit'
+  onClose: () => void
+  runAction: RunAction
+}): ReactElement {
+  const editableColumns = visibleColumns(list)
+  const [values, setValues] = useState<FormValues>(() => (item ? valuesForItem(item, editableColumns) : blankValues(editableColumns)))
+  const [dependencies, setDependencies] = useState<string[]>(item?.dependencyItemIds ?? [])
+  const [groupId, setGroupId] = useState<string | null>(item?.groupId ?? null)
+
+  useEffect(() => {
+    setValues(item ? valuesForItem(item, editableColumns) : blankValues(editableColumns))
+    setDependencies(item?.dependencyItemIds ?? [])
+    setGroupId(item?.groupId ?? null)
+  }, [item?.id, list.id])
+
+  function setValue(column: ListColumn, value: FieldValue): void {
+    setValues((current) => ({ ...current, [column.id]: coerceInputValue(column, value) }))
+  }
+
+  async function submit(event: FormEvent): Promise<void> {
+    event.preventDefault()
+    const result = await runAction(async () => {
+      if (mode === 'edit' && item) {
+        await window.lpl.updateItem({ itemId: item.id, groupId, values, dependencyItemIds: dependencies })
+        return window.lpl.publishItem(item.id)
+      }
+
+      const created = await window.lpl.createItem({ listId: list.id, groupId, values, dependencyItemIds: dependencies })
+      if (!('lists' in created)) return created
+      const createdList = created.lists.find((candidate) => candidate.id === list.id)
+      const newest = newestItem(createdList)
+      return newest ? window.lpl.publishItem(newest.id) : created
+    })
+    if (result && 'lists' in result) onClose()
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        aria-modal="true"
+        className="modal-card modal-card-large"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <form onSubmit={(event) => void submit(event)}>
+          <div className="modal-header">
+            <div>
+              <p className="eyebrow">{mode === 'edit' ? 'Edit Item' : 'Quick Add Item'}</p>
+              <h3>{mode === 'edit' && item ? itemTitle(item, list) : list.name}</h3>
+            </div>
+          </div>
+          <div className="modal-body modal-body-form">
+            <div className="field-grid two">
+              <label>
+                <span>Group</span>
+                <select onChange={(event) => setGroupId(event.target.value || null)} value={groupId ?? ''}>
+                  <option value="">List root</option>
+                  {list.groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <ItemFields columns={editableColumns} setValue={setValue} values={values} />
+            <DependencyPicker allItems={allItems.filter((candidate) => candidate.id !== item?.id)} dependencies={dependencies} setDependencies={setDependencies} />
+          </div>
+          <div className="modal-actions">
+            <button className="icon-button" disabled={busy} onClick={onClose} type="button">
+              Cancel
+            </button>
+            <button className="primary-button" disabled={busy} type="submit">
+              <Save size={16} />
+              {mode === 'edit' ? 'Save & Publish' : 'Add & Publish'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function BoardListSettingsModal({
+  list,
+  onClose,
+  runAction,
+  snapshot
+}: {
+  list: BoardList
+  onClose: () => void
+  runAction: RunAction
+  snapshot: BoardSnapshot
+}): ReactElement {
+  const [name, setName] = useState(list.name)
+  const [displayEnabled, setDisplayEnabled] = useState(list.displayEnabled)
+  const [dueDateEnabled, setDueDateEnabled] = useState(list.dueDateEnabled)
+  const [deadlineMandatory, setDeadlineMandatory] = useState(list.deadlineMandatory)
+  const [sortColumnId, setSortColumnId] = useState<string | null>(list.sortColumnId)
+  const [sortDirection, setSortDirection] = useState<ListSortDirection>(list.sortDirection)
+  const [showItemIdOnBoard, setShowItemIdOnBoard] = useState(list.showItemIdOnBoard)
+  const [showDependenciesOnBoard, setShowDependenciesOnBoard] = useState(list.showDependenciesOnBoard)
+  const [showCreatedAtOnBoard, setShowCreatedAtOnBoard] = useState(list.showCreatedAtOnBoard)
+  const [showCreatedByOnBoard, setShowCreatedByOnBoard] = useState(list.showCreatedByOnBoard)
+  const [newColumnName, setNewColumnName] = useState('')
+  const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
+  const sortColumn = sortColumnId ? visibleColumns(list).find((column) => column.id === sortColumnId) : null
+
+  useEffect(() => {
+    setName(list.name)
+    setDisplayEnabled(list.displayEnabled)
+    setDueDateEnabled(list.dueDateEnabled)
+    setDeadlineMandatory(list.deadlineMandatory)
+    setSortColumnId(list.sortColumnId)
+    setSortDirection(list.sortDirection)
+    setShowItemIdOnBoard(list.showItemIdOnBoard)
+    setShowDependenciesOnBoard(list.showDependenciesOnBoard)
+    setShowCreatedAtOnBoard(list.showCreatedAtOnBoard)
+    setShowCreatedByOnBoard(list.showCreatedByOnBoard)
+  }, [
+    list.deadlineMandatory,
+    list.displayEnabled,
+    list.dueDateEnabled,
+    list.id,
+    list.name,
+    list.showCreatedAtOnBoard,
+    list.showCreatedByOnBoard,
+    list.showDependenciesOnBoard,
+    list.showItemIdOnBoard,
+    list.sortColumnId,
+    list.sortDirection
+  ])
+
+  async function submit(event: FormEvent): Promise<void> {
+    event.preventDefault()
+    const placement = displayEnabled
+      ? placeListForDisplay(snapshot.lists, list.id, validDisplayGrid(list.grid) ? list.grid : { x: 1, y: 1, w: MIN_LIST_GRID_WIDTH, h: MIN_LIST_GRID_HEIGHT })
+      : { grid: { x: 0, y: 0, w: 0, h: 0 }, moved: [] }
+
+    if (displayEnabled && !placement) {
+      window.alert('This list cannot be shown because the board has no available 4 x 2 slot. Hide another list or resize the layout first.')
+      return
+    }
+
+    const nextGrid = placement?.grid ?? { x: 0, y: 0, w: 0, h: 0 }
+    const result = await runAction(async () => {
+      for (const moved of placement?.moved ?? []) {
+        await window.lpl.updateList({ ...listInput(moved.list), grid: moved.grid })
+      }
+      return window.lpl.updateList({
+        listId: list.id,
+        name,
+        grid: nextGrid,
+        dueDateEnabled,
+        dueDateColumnId: list.dueDateColumnId,
+        deadlineMandatory,
+        sortColumnId,
+        sortDirection: sortColumnId ? sortDirection : 'manual',
+        displayEnabled,
+        showItemIdOnBoard,
+        showDependenciesOnBoard,
+        showCreatedAtOnBoard,
+        showCreatedByOnBoard
+      })
+    })
+    if (result && 'lists' in result) onClose()
+  }
+
+  function addColumn(): void {
+    if (!newColumnName.trim()) return
+    runAction(() => window.lpl.createColumn({ listId: list.id, name: newColumnName, type: newColumnType }))
+    setNewColumnName('')
+    setNewColumnType('text')
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        aria-modal="true"
+        className="modal-card modal-card-wide"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <form onSubmit={(event) => void submit(event)}>
+          <div className="modal-header">
+            <div>
+              <p className="eyebrow">List Settings</p>
+              <h3>{list.name}</h3>
+            </div>
+          </div>
+          <div className="modal-body modal-body-form">
+            <section className="modal-section">
+              <div className="field-grid two">
+                <label>
+                  <span>List name</span>
+                  <input onChange={(event) => setName(event.target.value)} required value={name} />
+                </label>
+                <label className="toggle-field">
+                  <input checked={displayEnabled} onChange={(event) => setDisplayEnabled(event.target.checked)} type="checkbox" />
+                  <span>Show list on board</span>
+                </label>
+                <label className="toggle-field">
+                  <input
+                    checked={dueDateEnabled}
+                    onChange={(event) => {
+                      setDueDateEnabled(event.target.checked)
+                      if (!event.target.checked) setDeadlineMandatory(false)
+                    }}
+                    type="checkbox"
+                  />
+                  <span>List has deadline</span>
+                </label>
+                <label className="toggle-field">
+                  <input
+                    checked={deadlineMandatory}
+                    disabled={!dueDateEnabled}
+                    onChange={(event) => setDeadlineMandatory(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>Deadline mandatory</span>
+                </label>
+                <label>
+                  <span>Sort by</span>
+                  <select
+                    onChange={(event) => {
+                      const nextColumnId = event.target.value || null
+                      setSortColumnId(nextColumnId)
+                      const nextColumn = visibleColumns(list).find((column) => column.id === nextColumnId)
+                      setSortDirection(nextColumn ? defaultSortDirection(nextColumn) : 'manual')
+                    }}
+                    value={sortColumnId ?? ''}
+                  >
+                    <option value="">Manual order</option>
+                    {visibleColumns(list).map((column) => (
+                      <option key={column.id} value={column.id}>
+                        {column.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Sort order</span>
+                  <select
+                    disabled={!sortColumn}
+                    onChange={(event) => setSortDirection(event.target.value as ListSortDirection)}
+                    value={sortColumn ? sortDirection : 'manual'}
+                  >
+                    <option value="manual">Manual</option>
+                    {sortColumn &&
+                      sortDirectionOptions(sortColumn).map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+            </section>
+            <section className="modal-section">
+              <EditorHeading eyebrow="Display" title="Board Columns" />
+              <div className="column-list">
+                <SystemColumnRow
+                  name="Item ID"
+                  onToggle={setShowItemIdOnBoard}
+                  showOnBoard={showItemIdOnBoard}
+                  typeLabel="system"
+                />
+                <SystemColumnRow
+                  name="Dependencies"
+                  onToggle={setShowDependenciesOnBoard}
+                  showOnBoard={showDependenciesOnBoard}
+                  typeLabel="system"
+                />
+                <SystemColumnRow
+                  name="Created At"
+                  onToggle={setShowCreatedAtOnBoard}
+                  showOnBoard={showCreatedAtOnBoard}
+                  typeLabel="system"
+                />
+                <SystemColumnRow
+                  name="Created By"
+                  onToggle={setShowCreatedByOnBoard}
+                  showOnBoard={showCreatedByOnBoard}
+                  typeLabel="system"
+                />
+                {visibleColumns(list).map((column) => (
+                  <ColumnRow column={column} key={column.id} list={list} runAction={runAction} />
+                ))}
+              </div>
+              <div className="add-column-row">
+                <input onChange={(event) => setNewColumnName(event.target.value)} placeholder="New column" value={newColumnName} />
+                <select onChange={(event) => setNewColumnType(event.target.value as ColumnType)} value={newColumnType}>
+                  {columnTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <button className="icon-button" onClick={addColumn} type="button">
+                  <Plus size={16} />
+                  Add Field
+                </button>
+              </div>
+            </section>
+          </div>
+          <div className="modal-actions">
+            <button className="icon-button" onClick={onClose} type="button">
+              Cancel
+            </button>
+            <button className="primary-button" type="submit">
+              <Save size={16} />
+              Save List
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   )
 }
 

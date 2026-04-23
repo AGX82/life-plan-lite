@@ -1,5 +1,14 @@
 # Life Plan Lite Release Notes
 
+## v0.3.1 - Board interaction and theme switching
+
+- Added live theme switching in admin, with `Midnight Clear`, `Liquid Gunmetal`, and `Black Glass Blue`.
+- Extended board view with direct item interaction: click rows to edit, quick-add items from the `+` header action, and open list settings from the gear action.
+- Made board-side item actions save directly back into the visible board flow, including save-and-publish behavior for quick edits and new items.
+- Added board-side list settings modal for practical list behavior and field management without leaving display mode.
+- Fixed modal overflow so long dialogs scroll cleanly inside the viewport.
+- Removed redundant editor container styling across themes and improved theme consistency for controls and modal surfaces.
+
 ## v0.3.0 - Midnight Clear and board close actions
 
 - Added board-row close controls with green complete and red cancel actions.
