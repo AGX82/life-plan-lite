@@ -28,6 +28,8 @@ export function migrate(client: DbClient): void {
       board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       code TEXT NOT NULL,
+      list_type TEXT NOT NULL DEFAULT 'standard',
+      list_config TEXT,
       sort_order INTEGER NOT NULL,
       grid_x INTEGER NOT NULL,
       grid_y INTEGER NOT NULL,
@@ -140,6 +142,22 @@ export function migrate(client: DbClient): void {
       UNIQUE(board_id, slot_index)
     );
 
+    CREATE TABLE IF NOT EXISTS board_widgets (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      widget_type TEXT NOT NULL CHECK(widget_type IN ('clock', 'weather', 'word_of_day', 'world_clocks', 'countdown')),
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      grid_x INTEGER NOT NULL,
+      grid_y INTEGER NOT NULL,
+      grid_w INTEGER NOT NULL,
+      grid_h INTEGER NOT NULL,
+      display_enabled INTEGER NOT NULL DEFAULT 1,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS display_configs (
       id TEXT PRIMARY KEY,
       active_board_id TEXT REFERENCES boards(id) ON DELETE SET NULL,
@@ -159,6 +177,8 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'boards', 'owner', "TEXT NOT NULL DEFAULT ''")
   rebuildListColumnsForRichTypesIfNeeded(client)
   addColumnIfMissing(client, 'lists', 'deadline_mandatory', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(client, 'lists', 'list_type', "TEXT NOT NULL DEFAULT 'standard'")
+  addColumnIfMissing(client, 'lists', 'list_config', 'TEXT')
   addColumnIfMissing(client, 'lists', 'sort_column_id', 'TEXT')
   addColumnIfMissing(client, 'lists', 'sort_direction', "TEXT NOT NULL DEFAULT 'manual'")
   addColumnIfMissing(client, 'lists', 'display_enabled', 'INTEGER NOT NULL DEFAULT 1')
@@ -172,12 +192,48 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'items', 'created_by', "TEXT NOT NULL DEFAULT 'admin'")
   addColumnIfMissing(client, 'item_archives', 'close_action', "TEXT NOT NULL DEFAULT 'completed'")
   addColumnIfMissing(client, 'item_archives', 'close_comment', "TEXT NOT NULL DEFAULT ''")
+  rebuildBoardWidgetsForNewTypesIfNeeded(client)
   client.database.exec(`
     UPDATE list_columns
     SET name = 'Deadline',
         display_format = '{"role":"deadline","dateDisplayFormat":"datetime"}'
     WHERE id IN (SELECT due_date_column_id FROM lists WHERE due_date_column_id IS NOT NULL)
       AND (display_format IS NULL OR display_format = '');
+  `)
+}
+
+function rebuildBoardWidgetsForNewTypesIfNeeded(client: DbClient): void {
+  const table = client.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'").get<{ sql: string }>()
+  if (!table?.sql || table.sql.includes("'countdown'")) return
+
+  client.database.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    CREATE TABLE board_widgets_new (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      widget_type TEXT NOT NULL CHECK(widget_type IN ('clock', 'weather', 'word_of_day', 'world_clocks', 'countdown')),
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      grid_x INTEGER NOT NULL,
+      grid_y INTEGER NOT NULL,
+      grid_w INTEGER NOT NULL,
+      grid_h INTEGER NOT NULL,
+      display_enabled INTEGER NOT NULL DEFAULT 1,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    INSERT INTO board_widgets_new
+      (id, board_id, widget_type, name, sort_order, grid_x, grid_y, grid_w, grid_h, display_enabled, config_json, created_at, updated_at)
+    SELECT id, board_id, widget_type, name, sort_order, grid_x, grid_y, grid_w, grid_h, display_enabled, config_json, created_at, updated_at
+    FROM board_widgets;
+
+    DROP TABLE board_widgets;
+    ALTER TABLE board_widgets_new RENAME TO board_widgets;
+
+    PRAGMA foreign_keys = ON;
   `)
 }
 

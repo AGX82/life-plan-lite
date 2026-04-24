@@ -1,5 +1,14 @@
 # Life Plan Lite Release Notes
 
+## v0.3.2 - Admin workspace refinement and portable packaging
+
+- Restructured admin mode into a clearer two-column workspace with a stacked right-side editor and live layout area.
+- Moved application settings into a dedicated right-side panel beside the live layout preview.
+- Tightened live layout geometry so the admin preview respects the board's 16 x 8 ratio more faithfully.
+- Added widgets, day-summary controls, birthday calendar behavior, and broader repository-side rule enforcement in the current working baseline.
+- Added a repeatable Windows portable packaging step via `npm run dist:win`.
+- Added a `npm run dist:win:data` flow that stages the current local SQLite database into the package for standalone testing on another machine.
+
 ## v0.3.1 - Board interaction and theme switching
 
 - Added live theme switching in admin, with `Midnight Clear`, `Liquid Gunmetal`, and `Black Glass Blue`.

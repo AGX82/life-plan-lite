@@ -5,6 +5,7 @@ export type ListSortDirection = 'manual' | 'asc' | 'desc'
 export type PublicationStatus = 'draft' | 'published' | 'dirty'
 
 export type OperationalState = 'active' | 'completed' | 'cancelled'
+export type ArchiveValueScope = 'visible' | 'draft' | 'published'
 
 export type AggregationMethod = 'sum' | 'count' | 'active_count' | 'completed_count' | 'sum_active'
 
@@ -15,6 +16,42 @@ export type DateDisplayFormat = 'date' | 'datetime' | 'time'
 export type RecurrenceMode = 'none' | 'daily' | 'weekly' | 'biweekly' | 'custom_weekdays'
 
 export type CurrencyCode = 'RON' | 'EUR' | 'USD' | 'GBP' | 'CNY' | 'JPY' | 'CAD' | 'AUD' | 'CHF' | 'PLN'
+export type WidgetType = 'clock' | 'weather' | 'word_of_day' | 'world_clocks' | 'countdown'
+export type ListTemplateType = 'standard' | 'birthday_calendar'
+export type BirthdayBoardView = 'this_week' | 'this_month' | 'next_10_days' | 'next_2_months' | 'all'
+
+export type ListTemplateConfig = {
+  birthday?: {
+    boardView: BirthdayBoardView
+  }
+}
+
+export type WorldClockLocation = {
+  id: string
+  label: string
+  timeZone: string
+}
+
+export type BoardWidgetConfig = {
+  clock?: {
+    showSeconds: boolean
+  }
+  weather?: {
+    temperatureUnit: 'celsius' | 'fahrenheit'
+  }
+  wordOfDay?: {
+    accent: string
+  }
+  worldClocks?: {
+    locations: WorldClockLocation[]
+    showSeconds: boolean
+    style: 'digital' | 'analogue'
+  }
+  countdown?: {
+    targetAt: string
+    label: string
+  }
+}
 
 export type GroupSummaryMethod = 'sum' | 'max' | 'avg' | 'count'
 
@@ -75,6 +112,8 @@ export type BoardList = {
   boardId: string
   name: string
   code: string
+  templateType: ListTemplateType
+  templateConfig: ListTemplateConfig
   order: number
   grid: {
     x: number
@@ -95,6 +134,22 @@ export type BoardList = {
   columns: ListColumn[]
   groups: ItemGroup[]
   items: BoardItem[]
+}
+
+export type BoardWidget = {
+  id: string
+  boardId: string
+  type: WidgetType
+  name: string
+  order: number
+  displayEnabled: boolean
+  grid: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  config: BoardWidgetConfig
 }
 
 export type ItemGroup = {
@@ -175,6 +230,7 @@ export type BoardSnapshot = {
   owner: string
   active: boolean
   lists: BoardList[]
+  widgets: BoardWidget[]
   summarySlots: SummarySlot[]
   mode: 'admin' | 'display'
   generatedAt: string
@@ -221,6 +277,7 @@ export type CreateBoardInput = {
 export type CreateListInput = {
   boardId: string
   name: string
+  templateType?: ListTemplateType
 }
 
 export type MoveListInput = {
@@ -245,6 +302,8 @@ export type UpdateGroupInput = {
 export type UpdateListInput = {
   listId: string
   name: string
+  templateType?: ListTemplateType
+  templateConfig?: ListTemplateConfig
   grid: {
     x: number
     y: number
@@ -275,6 +334,26 @@ export type CreateColumnInput = {
   showOnBoard?: boolean
 }
 
+export type CreateWidgetInput = {
+  boardId: string
+  type: WidgetType
+  name: string
+}
+
+export type UpdateWidgetInput = {
+  widgetId: string
+  type: WidgetType
+  name: string
+  displayEnabled: boolean
+  grid: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  config: BoardWidgetConfig
+}
+
 export type UpdateColumnInput = {
   columnId: string
   name: string
@@ -294,6 +373,7 @@ export type CloseItemInput = {
   itemId: string
   action: Exclude<OperationalState, 'active'>
   comment?: string | null
+  archiveScope?: ArchiveValueScope
 }
 
 export type LplApi = {
@@ -330,6 +410,9 @@ export type LplApi = {
   createColumn: (input: CreateColumnInput) => Promise<BoardSnapshot>
   updateColumn: (input: UpdateColumnInput) => Promise<BoardSnapshot>
   deleteColumn: (columnId: string) => Promise<BoardSnapshot>
+  createWidget: (input: CreateWidgetInput) => Promise<BoardSnapshot>
+  updateWidget: (input: UpdateWidgetInput) => Promise<BoardSnapshot>
+  deleteWidget: (widgetId: string) => Promise<BoardSnapshot>
   listArchive: (filters?: { listId?: string; closedAfter?: string; closedBefore?: string }) => Promise<ArchiveRecord[]>
   openExternalUrl: (url: string) => Promise<void>
   onDataChanged: (callback: () => void) => () => void

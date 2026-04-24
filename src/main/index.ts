@@ -11,6 +11,7 @@ import type {
   CreateGroupInput,
   CreateItemInput,
   CreateListInput,
+  CreateWidgetInput,
   DisplayInfo,
   DisplayState,
   MoveListInput,
@@ -18,7 +19,8 @@ import type {
   UpdateColumnInput,
   UpdateGroupInput,
   UpdateItemInput,
-  UpdateListInput
+  UpdateListInput,
+  UpdateWidgetInput
 } from '../shared/domain'
 
 let adminWindow: BrowserWindow | null = null
@@ -267,6 +269,9 @@ function registerIpc(): void {
   ipcMain.handle('columns:create', (_event, input: CreateColumnInput) => handleMutation(repository.createColumn.bind(repository))(input))
   ipcMain.handle('columns:update', (_event, input: UpdateColumnInput) => handleMutation(repository.updateColumn.bind(repository))(input))
   ipcMain.handle('columns:delete', (_event, columnId: string) => handleMutation(repository.deleteColumn.bind(repository))(columnId))
+  ipcMain.handle('widgets:create', (_event, input: CreateWidgetInput) => handleMutation(repository.createWidget.bind(repository))(input))
+  ipcMain.handle('widgets:update', (_event, input: UpdateWidgetInput) => handleMutation(repository.updateWidget.bind(repository))(input))
+  ipcMain.handle('widgets:delete', (_event, widgetId: string) => handleMutation(repository.deleteWidget.bind(repository))(widgetId))
   ipcMain.handle('archive:list', (_event, filters) => repository.listArchive(filters))
   ipcMain.handle('app:openExternalUrl', async (_event, url: string) => {
     const parsed = new URL(url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`)

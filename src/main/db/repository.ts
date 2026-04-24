@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   AggregationMethod,
+  ArchiveValueScope,
   AppTheme,
   AppSettings,
   ArchiveRecord,
@@ -8,6 +9,8 @@ import type {
   BoardList,
   BoardSnapshot,
   BoardSummary,
+  BoardWidget,
+  BoardWidgetConfig,
   ChoiceConfig,
   ChoiceOption,
   CloseConfirmationMode,
@@ -20,12 +23,15 @@ import type {
   CreateGroupInput,
   CreateItemInput,
   CreateListInput,
+  CreateWidgetInput,
   DateFieldValue,
   DateDisplayFormat,
   FieldValue,
   GroupSummaryConfig,
   GroupSummaryMethod,
   ItemGroup,
+  ListTemplateConfig,
+  ListTemplateType,
   ListColumn,
   ListSortDirection,
   OperationalState,
@@ -37,17 +43,23 @@ import type {
   UpdateColumnInput,
   UpdateGroupInput,
   UpdateListInput,
-  UpdateItemInput
+  UpdateItemInput,
+  UpdateWidgetInput,
+  WidgetType,
+  WorldClockLocation
 } from '../../shared/domain'
 import type { DbClient } from './client'
 
 const MIN_LIST_GRID_WIDTH = 4
 const MIN_LIST_GRID_HEIGHT = 2
+const MIN_WIDGET_GRID_WIDTH = 2
+const MIN_WIDGET_GRID_HEIGHT = 2
 const RESERVED_COLUMN_NAMES = new Set(
   ['item id', 'item name', 'created at', 'created by', 'dependency', 'dependencies', 'close_comm'].map((name) =>
     normalizeReservedColumnName(name)
   )
 )
+const BIRTHDAY_PROTECTED_COLUMN_NAMES = new Set(['person name', 'birthday', 'birth year'].map((name) => normalizeReservedColumnName(name)))
 const DEFAULT_APP_SETTINGS: AppSettings = {
   closeConfirmationMode: 'with_comments',
   theme: 'midnight_clear'
@@ -58,6 +70,8 @@ type ListRow = {
   board_id: string
   name: string
   code: string
+  list_type: ListTemplateType
+  list_config: string | null
   sort_order: number
   grid_x: number
   grid_y: number
@@ -140,6 +154,20 @@ type SettingRow = {
   value_json: string | null
 }
 
+type WidgetRow = {
+  id: string
+  board_id: string
+  widget_type: WidgetType
+  name: string
+  sort_order: number
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+  display_enabled: number
+  config_json: string | null
+}
+
 function defaultChoiceConfig(name: string, type: ColumnType): ChoiceConfig | null {
   if (type !== 'choice') return null
   const priorityLabels = name.toLowerCase().includes('priority')
@@ -201,6 +229,37 @@ function recurrenceNeedsDays(mode: RecurrenceMode): boolean {
 
 function normalizeRecurrenceDays(days: number[] | undefined): number[] {
   return [...new Set((days ?? []).map((day) => Math.trunc(day)).filter((day) => day >= 0 && day <= 6))].sort((a, b) => a - b)
+}
+
+function normalizeWidgetType(type: WidgetType | undefined): WidgetType {
+  if (type === 'weather' || type === 'word_of_day' || type === 'world_clocks' || type === 'countdown') return type
+  return 'clock'
+}
+
+function normalizeListTemplateType(type: ListTemplateType | undefined): ListTemplateType {
+  return type === 'birthday_calendar' ? 'birthday_calendar' : 'standard'
+}
+
+function defaultWorldClockLocations(): WorldClockLocation[] {
+  return [
+    { id: randomUUID(), label: 'New York', timeZone: 'America/New_York' },
+    { id: randomUUID(), label: 'London', timeZone: 'Europe/London' },
+    { id: randomUUID(), label: 'Bucharest', timeZone: 'Europe/Bucharest' },
+    { id: randomUUID(), label: 'Tokyo', timeZone: 'Asia/Tokyo' }
+  ]
+}
+
+function defaultWidgetConfig(type: WidgetType): BoardWidgetConfig {
+  if (type === 'weather') return { weather: { temperatureUnit: 'celsius' } }
+  if (type === 'word_of_day') return { wordOfDay: { accent: 'calm' } }
+  if (type === 'world_clocks') return { worldClocks: { locations: defaultWorldClockLocations(), showSeconds: false, style: 'digital' } }
+  if (type === 'countdown') return { countdown: { targetAt: '', label: 'Next milestone' } }
+  return { clock: { showSeconds: true } }
+}
+
+function defaultListTemplateConfig(type: ListTemplateType): ListTemplateConfig {
+  if (type === 'birthday_calendar') return { birthday: { boardView: 'this_month' } }
+  return {}
 }
 
 function normalizeReservedColumnName(name: string): string {
@@ -445,6 +504,7 @@ export class LifePlanRepository {
     }
 
     const lists = this.getBoardLists(board.id, mode)
+    const widgets = this.getBoardWidgets(board.id, mode, lists)
 
     return {
       id: board.id,
@@ -453,6 +513,7 @@ export class LifePlanRepository {
       owner: board.owner,
       active: board.is_active === 1,
       lists,
+      widgets,
       summarySlots: this.getSummarySlots(board.id, lists),
       mode,
       generatedAt: new Date().toISOString()
@@ -503,20 +564,20 @@ export class LifePlanRepository {
   closeItem(input: CloseItemInput): BoardSnapshot {
     const item = this.client.database
       .prepare(
-        `SELECT i.id, i.item_number, l.id AS list_id, l.name AS list_name, l.code AS list_code, b.id AS board_id
+        `SELECT i.id, i.item_number, i.publication_status, l.id AS list_id, l.name AS list_name, l.code AS list_code, b.id AS board_id
          FROM items i
          JOIN lists l ON l.id = i.list_id
          JOIN boards b ON b.id = l.board_id
          WHERE i.id = ?`
       )
-      .get<{ id: string; item_number: number; list_id: string; list_name: string; list_code: string; board_id: string }>(input.itemId)
+      .get<{ id: string; item_number: number; publication_status: PublicationStatus; list_id: string; list_name: string; list_code: string; board_id: string }>(
+        input.itemId
+      )
 
     if (!item) throw new Error('Item not found.')
 
     const action = input.action === 'cancelled' ? 'cancelled' : 'completed'
-    const draftValues = this.getItemValues([input.itemId], 'draft')[input.itemId] ?? {}
-    const publishedValues = this.getItemValues([input.itemId], 'published')[input.itemId] ?? {}
-    const values = Object.keys(draftValues).length > 0 ? draftValues : publishedValues
+    const values = this.archiveValuesForItem(input.itemId, item.publication_status, input.archiveScope)
     const now = new Date().toISOString()
     const comment = String(input.comment ?? '').trim()
 
@@ -558,6 +619,7 @@ export class LifePlanRepository {
     const itemId = randomUUID()
     const now = new Date().toISOString()
     const groupId = this.validGroupId(input.listId, input.groupId ?? null)
+    const values = this.validateItemValues(input.listId, input.values)
 
     this.transaction(() => {
       this.run(
@@ -572,9 +634,9 @@ export class LifePlanRepository {
         now,
         now
       )
-      this.upsertValues(itemId, input.values, 'draft')
-      this.replaceDependencies(itemId, input.dependencyItemIds)
-    })
+        this.upsertValues(itemId, values, 'draft')
+        this.replaceDependencies(itemId, input.dependencyItemIds)
+      })
 
     const boardId = this.client.database.prepare('SELECT board_id FROM lists WHERE id = ?').get<{ board_id: string }>(input.listId)?.board_id
     return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
@@ -589,6 +651,7 @@ export class LifePlanRepository {
     const nextStatus: PublicationStatus = item.publication_status === 'draft' ? 'draft' : 'dirty'
     const now = new Date().toISOString()
     const groupId = this.validGroupId(item.list_id, input.groupId === undefined ? item.group_id : input.groupId)
+    const values = this.validateItemValues(item.list_id, input.values, input.itemId)
 
     this.transaction(() => {
       this.run(
@@ -602,7 +665,7 @@ export class LifePlanRepository {
         now,
         input.itemId
       )
-      this.upsertValues(input.itemId, input.values, 'draft')
+      this.upsertValues(input.itemId, values, 'draft')
       this.replaceDependencies(input.itemId, input.dependencyItemIds)
     })
 
@@ -669,16 +732,19 @@ export class LifePlanRepository {
     const listId = randomUUID()
     const now = new Date().toISOString()
     const code = `L${String(next?.next_code ?? 1).padStart(2, '0')}`
+    const templateType = normalizeListTemplateType(input.templateType)
 
     this.transaction(() => {
       this.run(
         `INSERT INTO lists
-           (id, board_id, name, code, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, 1, 0, 0, ?, ?)`,
+           (id, board_id, name, code, list_type, list_config, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, 1, 0, 0, ?, ?)`,
         listId,
         input.boardId,
         input.name.trim() || 'New List',
         code,
+        templateType,
+        JSON.stringify(defaultListTemplateConfig(templateType)),
         next?.next_order ?? 0,
         0,
         0,
@@ -688,7 +754,11 @@ export class LifePlanRepository {
         now,
         now
       )
-      this.createSeedColumn(listId, 'Item Name', 'text', 0, true, 120, false, true)
+      if (templateType === 'birthday_calendar') {
+        this.createBirthdayCalendarTemplate(listId)
+      } else {
+        this.createSeedColumn(listId, 'Item Name', 'text', 0, true, 120, false, true)
+      }
     })
 
     return this.getBoardSnapshot(input.boardId, 'admin')
@@ -696,19 +766,34 @@ export class LifePlanRepository {
 
   updateList(input: UpdateListInput): BoardSnapshot {
     const list = this.client.database
-      .prepare('SELECT board_id FROM lists WHERE id = ?')
-      .get<{ board_id: string }>(input.listId)
+      .prepare('SELECT board_id, list_type, list_config FROM lists WHERE id = ?')
+      .get<{ board_id: string; list_type: ListTemplateType; list_config: string | null }>(input.listId)
     if (!list) throw new Error('List not found.')
+    if (input.templateType && normalizeListTemplateType(input.templateType) !== normalizeListTemplateType(list.list_type)) {
+      throw new Error('Changing a list template type after creation is not supported.')
+    }
 
     const dueDateColumnId = input.dueDateEnabled ? this.ensureDeadlineColumn(input.listId, input.deadlineMandatory) : null
     const now = new Date().toISOString()
+    const grid = input.displayEnabled
+      ? {
+          x: this.clamp(input.grid.x, 1, 16),
+          y: this.clamp(input.grid.y, 1, 8),
+          w: this.clamp(input.grid.w, MIN_LIST_GRID_WIDTH, 16),
+          h: this.clamp(input.grid.h, MIN_LIST_GRID_HEIGHT, 8)
+        }
+      : { x: 0, y: 0, w: 0, h: 0 }
+
+    if (input.displayEnabled) this.assertListGridPlacement(list.board_id, input.listId, grid)
 
     this.run(
       `UPDATE lists
        SET name = ?,
-           grid_x = ?,
-           grid_y = ?,
-           grid_w = ?,
+            list_type = ?,
+            list_config = ?,
+            grid_x = ?,
+            grid_y = ?,
+            grid_w = ?,
            grid_h = ?,
            due_date_enabled = ?,
            due_date_column_id = ?,
@@ -723,10 +808,12 @@ export class LifePlanRepository {
            updated_at = ?
        WHERE id = ?`,
       input.name.trim() || 'Untitled List',
-      input.displayEnabled ? this.clamp(input.grid.x, 1, 16) : 0,
-      input.displayEnabled ? this.clamp(input.grid.y, 1, 8) : 0,
-      input.displayEnabled ? this.clamp(input.grid.w, MIN_LIST_GRID_WIDTH, 16) : 0,
-      input.displayEnabled ? this.clamp(input.grid.h, MIN_LIST_GRID_HEIGHT, 8) : 0,
+      normalizeListTemplateType(list.list_type),
+      JSON.stringify(input.templateConfig ?? this.readListTemplateConfig(list.list_type, list.list_config)),
+      grid.x,
+      grid.y,
+      grid.w,
+      grid.h,
       input.dueDateEnabled ? 1 : 0,
       dueDateColumnId,
       input.dueDateEnabled && input.deadlineMandatory ? 1 : 0,
@@ -845,13 +932,15 @@ export class LifePlanRepository {
   copyListToBoard(input: MoveListInput): BoardSnapshot {
     const sourceList = this.client.database
       .prepare(
-        `SELECT id, name, due_date_enabled, due_date_column_id, deadline_mandatory, sort_column_id, sort_direction, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, grid_w, grid_h
+        `SELECT id, name, list_type, list_config, due_date_enabled, due_date_column_id, deadline_mandatory, sort_column_id, sort_direction, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, grid_w, grid_h
          FROM lists
          WHERE id = ?`
       )
       .get<{
         id: string
         name: string
+        list_type: ListTemplateType
+        list_config: string | null
         due_date_enabled: number
         due_date_column_id: string | null
         deadline_mandatory: number
@@ -877,12 +966,14 @@ export class LifePlanRepository {
     this.transaction(() => {
       this.run(
         `INSERT INTO lists
-           (id, board_id, name, code, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, deadline_mandatory, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, board_id, name, code, list_type, list_config, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, deadline_mandatory, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         newListId,
         input.targetBoardId,
         `${sourceList.name} Copy`,
         next.code,
+        normalizeListTemplateType(sourceList.list_type),
+        sourceList.list_config,
         next.order,
         0,
         0,
@@ -1053,14 +1144,15 @@ export class LifePlanRepository {
   }
 
   createColumn(input: CreateColumnInput): BoardSnapshot {
-    this.assertColumnNameAllowed(input.name)
+    const resolvedName = input.name.trim() || 'New Column'
+    this.assertColumnNameAllowed(input.listId, resolvedName)
     const nextOrder = this.client.database
       .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM list_columns WHERE list_id = ?')
       .get<{ next_order: number }>(input.listId)?.next_order ?? 0
 
     this.createSeedColumn(
       input.listId,
-      input.name.trim() || 'New Column',
+      resolvedName,
       input.type,
       nextOrder,
       false,
@@ -1069,7 +1161,7 @@ export class LifePlanRepository {
       false,
       this.writeColumnDisplayFormat(
         null,
-        input.type === 'choice' ? (input.choiceConfig ?? defaultChoiceConfig(input.name.trim() || 'New Column', input.type)) : null,
+        input.type === 'choice' ? (input.choiceConfig ?? defaultChoiceConfig(resolvedName, input.type)) : null,
         input.type === 'date' ? (input.dateDisplayFormat ?? 'date') : 'date',
         input.type === 'date' ? (input.recurrence ?? 'none') : 'none',
         input.type === 'date' ? (input.recurrenceDays ?? []) : [],
@@ -1082,12 +1174,21 @@ export class LifePlanRepository {
 
   updateColumn(input: UpdateColumnInput): BoardSnapshot {
     const existing = this.client.database
-      .prepare('SELECT name, display_format FROM list_columns WHERE id = ?')
-      .get<{ name: string; display_format: string | null }>(input.columnId)
+      .prepare(
+        `SELECT c.name, c.display_format, c.list_id, l.list_type
+         FROM list_columns c
+         JOIN lists l ON l.id = c.list_id
+         WHERE c.id = ?`
+      )
+      .get<{ name: string; display_format: string | null; list_id: string; list_type: ListTemplateType }>(input.columnId)
     if (!existing) throw new Error('Column not found.')
     const existingFormat = this.readColumnDisplayFormat(existing?.display_format ?? null)
     const role = existingFormat.role
-    if (role !== 'deadline') this.assertColumnNameAllowed(input.name)
+    if (this.isProtectedBirthdayColumn(existing.list_type, existing.name)) {
+      throw new Error(`"${existing.name}" is a protected Birthday Calendar field and cannot be changed.`)
+    }
+    const resolvedName = role === 'deadline' ? 'Deadline' : input.name.trim() || 'Untitled Column'
+    if (role !== 'deadline') this.assertColumnNameAllowed(existing.list_id, resolvedName, input.columnId)
     const type = role === 'deadline' ? 'date' : input.type
     const dateDisplayFormat = role === 'deadline' ? 'datetime' : type === 'date' ? (input.dateDisplayFormat ?? existingFormat.dateDisplayFormat) : 'date'
     const recurrence = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrence ?? existingFormat.recurrence) : 'none'
@@ -1105,14 +1206,14 @@ export class LifePlanRepository {
            display_format = ?,
            updated_at = ?
        WHERE id = ?`,
-      role === 'deadline' ? 'Deadline' : input.name.trim() || 'Untitled Column',
+      resolvedName,
       type,
       input.required ? 1 : 0,
       input.maxLength,
       input.summaryEligible ? 1 : 0,
       this.writeColumnDisplayFormat(
         role,
-        type === 'choice' ? (input.choiceConfig ?? defaultChoiceConfig(input.name, type)) : null,
+        type === 'choice' ? (input.choiceConfig ?? defaultChoiceConfig(resolvedName, type)) : null,
         dateDisplayFormat,
         recurrence,
         recurrenceDays,
@@ -1126,12 +1227,93 @@ export class LifePlanRepository {
   }
 
   deleteColumn(columnId: string): BoardSnapshot {
+    const existing = this.client.database
+      .prepare(
+        `SELECT c.list_id, c.name, l.list_type
+         FROM list_columns c
+         JOIN lists l ON l.id = c.list_id
+         WHERE c.id = ?`
+      )
+      .get<{ list_id: string; name: string; list_type: ListTemplateType }>(columnId)
+    if (existing && this.isProtectedBirthdayColumn(existing.list_type, existing.name)) {
+      throw new Error(`"${existing.name}" is a protected Birthday Calendar field and cannot be deleted.`)
+    }
     this.transaction(() => {
       this.run('UPDATE lists SET due_date_column_id = NULL, due_date_enabled = 0 WHERE due_date_column_id = ?', columnId)
       this.run("UPDATE lists SET sort_column_id = NULL, sort_direction = 'manual' WHERE sort_column_id = ?", columnId)
       this.run('DELETE FROM list_columns WHERE id = ?', columnId)
     })
     return this.getActiveBoardSnapshot('admin')
+  }
+
+  createWidget(input: CreateWidgetInput): BoardSnapshot {
+    const type = normalizeWidgetType(input.type)
+    const now = new Date().toISOString()
+    const next = this.client.database
+      .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM board_widgets WHERE board_id = ?')
+      .get<{ next_order: number }>(input.boardId)
+    const grid = this.findOpenWidgetSlot(input.boardId)
+    const displayEnabled = Boolean(grid)
+    this.run(
+      `INSERT INTO board_widgets
+         (id, board_id, widget_type, name, sort_order, grid_x, grid_y, grid_w, grid_h, display_enabled, config_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      randomUUID(),
+      input.boardId,
+      type,
+      (input.name ?? '').trim() || this.defaultWidgetName(type),
+      next?.next_order ?? 0,
+      displayEnabled ? grid?.x ?? 0 : 0,
+      displayEnabled ? grid?.y ?? 0 : 0,
+      displayEnabled ? grid?.w ?? 0 : 0,
+      displayEnabled ? grid?.h ?? 0 : 0,
+      displayEnabled ? 1 : 0,
+      JSON.stringify(this.normalizeWidgetConfig(type, undefined)),
+      now,
+      now
+    )
+    return this.getBoardSnapshot(input.boardId, 'admin')
+  }
+
+  updateWidget(input: UpdateWidgetInput): BoardSnapshot {
+    const existing = this.client.database
+      .prepare('SELECT board_id, widget_type FROM board_widgets WHERE id = ?')
+      .get<{ board_id: string; widget_type: WidgetType }>(input.widgetId)
+    if (!existing) throw new Error('Widget not found.')
+
+    const type = normalizeWidgetType(input.type)
+    const grid = this.normalizeWidgetGrid(input.grid)
+    if (input.displayEnabled) this.assertWidgetGridPlacement(existing.board_id, input.widgetId, grid)
+    this.run(
+      `UPDATE board_widgets
+       SET widget_type = ?,
+           name = ?,
+           display_enabled = ?,
+           grid_x = ?,
+           grid_y = ?,
+           grid_w = ?,
+           grid_h = ?,
+           config_json = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      type,
+      input.name.trim() || this.defaultWidgetName(type),
+      input.displayEnabled ? 1 : 0,
+      input.displayEnabled ? grid.x : 0,
+      input.displayEnabled ? grid.y : 0,
+      input.displayEnabled ? grid.w : 0,
+      input.displayEnabled ? grid.h : 0,
+      JSON.stringify(this.normalizeWidgetConfig(type, input.config)),
+      new Date().toISOString(),
+      input.widgetId
+    )
+    return this.getBoardSnapshot(existing.board_id, 'admin')
+  }
+
+  deleteWidget(widgetId: string): BoardSnapshot {
+    const existing = this.client.database.prepare('SELECT board_id FROM board_widgets WHERE id = ?').get<{ board_id: string }>(widgetId)
+    this.run('DELETE FROM board_widgets WHERE id = ?', widgetId)
+    return existing ? this.getBoardSnapshot(existing.board_id, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   listArchive(filters: { listId?: string; closedAfter?: string; closedBefore?: string } = {}): ArchiveRecord[] {
@@ -1188,7 +1370,7 @@ export class LifePlanRepository {
   private getBoardLists(boardId: string, mode: 'admin' | 'display'): BoardList[] {
     const listRows = this.client.database
       .prepare(
-        `SELECT id, board_id, name, code, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, due_date_column_id,
+        `SELECT id, board_id, name, code, list_type, list_config, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, due_date_column_id,
                 deadline_mandatory,
                 sort_column_id, sort_direction, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board
          FROM lists
@@ -1207,6 +1389,8 @@ export class LifePlanRepository {
       boardId: row.board_id,
       name: row.name,
       code: row.code,
+      templateType: normalizeListTemplateType(row.list_type),
+      templateConfig: this.readListTemplateConfig(row.list_type, row.list_config),
       order: row.sort_order,
       grid: {
         x: row.grid_x,
@@ -1231,6 +1415,35 @@ export class LifePlanRepository {
     return mode === 'display' ? this.displayableLists(lists) : lists
   }
 
+  private getBoardWidgets(boardId: string, mode: 'admin' | 'display', placedLists: BoardList[]): BoardWidget[] {
+    const rows = this.client.database
+      .prepare(
+        `SELECT id, board_id, widget_type, name, sort_order, grid_x, grid_y, grid_w, grid_h, display_enabled, config_json
+         FROM board_widgets
+         WHERE board_id = ?
+         ORDER BY sort_order`
+      )
+      .all<WidgetRow>(boardId)
+
+    const widgets = rows.map((row) => ({
+      id: row.id,
+      boardId: row.board_id,
+      type: normalizeWidgetType(row.widget_type),
+      name: row.name,
+      order: row.sort_order,
+      displayEnabled: row.display_enabled === 1,
+      grid: {
+        x: row.grid_x,
+        y: row.grid_y,
+        w: row.grid_w,
+        h: row.grid_h
+      },
+      config: this.readWidgetConfig(row.widget_type, row.config_json)
+    }))
+
+    return mode === 'display' ? this.displayableWidgets(widgets, placedLists) : widgets
+  }
+
   private displayableLists(lists: BoardList[]): BoardList[] {
     const placed: BoardList[] = []
     for (const list of lists.filter((candidate) => candidate.displayEnabled)) {
@@ -1238,6 +1451,19 @@ export class LifePlanRepository {
       if (list.grid.x < 1 || list.grid.y < 1 || list.grid.x + list.grid.w > 17 || list.grid.y + list.grid.h > 9) continue
       if (placed.some((candidate) => this.gridsOverlap(candidate.grid, list.grid))) continue
       placed.push(list)
+    }
+    return placed
+  }
+
+  private displayableWidgets(widgets: BoardWidget[], lists: BoardList[]): BoardWidget[] {
+    const occupied = lists.map((list) => list.grid)
+    const placed: BoardWidget[] = []
+    for (const widget of widgets.filter((candidate) => candidate.displayEnabled)) {
+      if (widget.grid.w < MIN_WIDGET_GRID_WIDTH || widget.grid.h < MIN_WIDGET_GRID_HEIGHT) continue
+      if (widget.grid.x < 1 || widget.grid.y < 1 || widget.grid.x + widget.grid.w > 17 || widget.grid.y + widget.grid.h > 9) continue
+      if (occupied.some((candidate) => this.gridsOverlap(candidate, widget.grid))) continue
+      if (placed.some((candidate) => this.gridsOverlap(candidate.grid, widget.grid))) continue
+      placed.push(widget)
     }
     return placed
   }
@@ -1972,6 +2198,103 @@ export class LifePlanRepository {
     return method === 'max' || method === 'avg' || method === 'count' ? method : 'sum'
   }
 
+  private readWidgetConfig(type: WidgetType, json: string | null): BoardWidgetConfig {
+    const fallback = defaultWidgetConfig(normalizeWidgetType(type))
+    if (!json) return fallback
+    try {
+      return this.normalizeWidgetConfig(type, JSON.parse(json) as BoardWidgetConfig)
+    } catch {
+      return fallback
+    }
+  }
+
+  private normalizeWidgetConfig(type: WidgetType, config: BoardWidgetConfig | undefined): BoardWidgetConfig {
+    const normalizedType = normalizeWidgetType(type)
+    if (normalizedType === 'weather') {
+      return {
+        weather: {
+          temperatureUnit: config?.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
+        }
+      }
+    }
+    if (normalizedType === 'word_of_day') {
+      return {
+        wordOfDay: {
+          accent: typeof config?.wordOfDay?.accent === 'string' && config.wordOfDay.accent.trim() ? config.wordOfDay.accent.trim() : 'calm'
+        }
+      }
+    }
+    if (normalizedType === 'world_clocks') {
+      const rawLocations = config?.worldClocks?.locations ?? defaultWorldClockLocations()
+      const locations = rawLocations
+        .filter((location) => location.label.trim() && location.timeZone.trim())
+        .slice(0, 4)
+        .map((location) => ({
+          id: location.id || randomUUID(),
+          label: location.label.trim(),
+          timeZone: location.timeZone.trim()
+        }))
+      return {
+        worldClocks: {
+          locations: locations.length > 0 ? locations : defaultWorldClockLocations(),
+          showSeconds: Boolean(config?.worldClocks?.showSeconds),
+          style: config?.worldClocks?.style === 'analogue' ? 'analogue' : 'digital'
+        }
+      }
+    }
+    if (normalizedType === 'countdown') {
+      return {
+        countdown: {
+          targetAt: typeof config?.countdown?.targetAt === 'string' ? config.countdown.targetAt : '',
+          label: typeof config?.countdown?.label === 'string' && config.countdown.label.trim() ? config.countdown.label.trim() : 'Next milestone'
+        }
+      }
+    }
+    return {
+      clock: {
+        showSeconds: config?.clock?.showSeconds !== false
+      }
+    }
+  }
+
+  private readListTemplateConfig(type: ListTemplateType | undefined, json: string | null): ListTemplateConfig {
+    const normalizedType = normalizeListTemplateType(type)
+    const fallback = defaultListTemplateConfig(normalizedType)
+    if (normalizedType !== 'birthday_calendar' || !json) return fallback
+    try {
+      const parsed = JSON.parse(json) as { birthday?: { boardView?: string } }
+      const boardView = parsed.birthday?.boardView
+      return {
+        birthday: {
+          boardView:
+            boardView === 'this_week' ||
+            boardView === 'this_month' ||
+            boardView === 'next_10_days' ||
+            boardView === 'next_2_months' ||
+            boardView === 'all'
+              ? boardView
+              : 'this_month'
+        }
+      }
+    } catch {
+      return fallback
+    }
+  }
+
+  private createBirthdayCalendarTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Person Name', 'text', 0, true, 160, false, true)
+    this.createSeedColumn(listId, 'Birthday', 'date', 1, true, null, false, true, this.writeColumnDisplayFormat(null, null, 'date'))
+    this.createSeedColumn(listId, 'Birth Year', 'integer', 2, false, null, false, true)
+  }
+
+  private defaultWidgetName(type: WidgetType): string {
+    if (type === 'weather') return 'Weather'
+    if (type === 'word_of_day') return 'Word of the Day'
+    if (type === 'world_clocks') return 'World Clocks'
+    if (type === 'countdown') return 'Countdown'
+    return 'Clock'
+  }
+
   private createSeedList(
     boardId: string,
     name: string,
@@ -2035,12 +2358,146 @@ export class LifePlanRepository {
     return id
   }
 
-  private assertColumnNameAllowed(name: string): void {
+  private assertColumnNameAllowed(listId: string, name: string, ignoreColumnId?: string): void {
     const normalized = normalizeReservedColumnName(name)
     if (normalized.length === 0) return
     if (RESERVED_COLUMN_NAMES.has(normalized)) {
       throw new Error(`"${name.trim()}" is a reserved system field name and cannot be used.`)
     }
+    const rows = this.client.database
+      .prepare(`SELECT id, name FROM list_columns WHERE list_id = ?${ignoreColumnId ? ' AND id <> ?' : ''}`)
+      .all<{ id: string; name: string }>(...(ignoreColumnId ? [listId, ignoreColumnId] : [listId]))
+    if (rows.some((row) => normalizeReservedColumnName(row.name) === normalized)) {
+      throw new Error(`"${name.trim()}" already exists in this list. Column names must be unique within a list.`)
+    }
+  }
+
+  private isProtectedBirthdayColumn(listType: ListTemplateType, name: string): boolean {
+    return normalizeListTemplateType(listType) === 'birthday_calendar' && BIRTHDAY_PROTECTED_COLUMN_NAMES.has(normalizeReservedColumnName(name))
+  }
+
+  private validateItemValues(listId: string, incomingValues: Record<string, FieldValue>, itemId?: string): Record<string, FieldValue> {
+    const columns = this.getColumnsByList([listId])[listId] ?? []
+    const allowedColumnIds = new Set(columns.map((column) => column.id))
+    const unknownColumnId = Object.keys(incomingValues).find((columnId) => !allowedColumnIds.has(columnId))
+    if (unknownColumnId) throw new Error('One or more submitted fields are not valid for this list.')
+
+    const existingValues =
+      itemId === undefined
+        ? {}
+        : {
+            ...(this.getItemValues([itemId], 'published')[itemId] ?? {}),
+            ...(this.getItemValues([itemId], 'draft')[itemId] ?? {})
+          }
+    const mergedValues: Record<string, FieldValue> = { ...existingValues, ...incomingValues }
+
+    for (const column of columns) {
+      const value = mergedValues[column.id]
+      if (column.required && this.isMissingFieldValue(value)) {
+        throw new Error(`"${column.name}" is required.`)
+      }
+      if (!this.isMissingFieldValue(value)) this.assertFieldValueFitsColumn(column, value)
+    }
+
+    return incomingValues
+  }
+
+  private isMissingFieldValue(value: FieldValue | undefined): boolean {
+    if (value === null || value === undefined) return true
+    if (typeof value === 'string') return value.trim().length === 0
+    if (Array.isArray(value)) return value.length === 0
+    if (isDateFieldValue(value)) return value.value.trim().length === 0
+    return false
+  }
+
+  private assertFieldValueFitsColumn(column: ListColumn, value: FieldValue): void {
+    if (value === null || value === undefined) return
+
+    if (column.type === 'integer') {
+      const numeric = Number(value)
+      if (!Number.isInteger(numeric)) throw new Error(`"${column.name}" must be a whole number.`)
+      return
+    }
+    if (column.type === 'decimal' || column.type === 'currency') {
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric)) throw new Error(`"${column.name}" must be a valid number.`)
+      return
+    }
+    if (column.type === 'boolean') {
+      if (typeof value !== 'boolean') throw new Error(`"${column.name}" must be true or false.`)
+      return
+    }
+    if (column.type === 'choice') {
+      const selected = Array.isArray(value) ? value.map(String) : [String(value)]
+      const options = new Set((column.choiceConfig?.options ?? []).flatMap((option) => [option.id, option.label]))
+      if (selected.some((entry) => !options.has(entry))) throw new Error(`"${column.name}" contains an invalid choice value.`)
+      return
+    }
+    if (column.type === 'date') {
+      const dateValue = isDateFieldValue(value) ? value.value : String(value)
+      if (!dateValue.trim()) throw new Error(`"${column.name}" must contain a valid date or time value.`)
+      return
+    }
+    if (typeof value !== 'string') throw new Error(`"${column.name}" must be text.`)
+  }
+
+  private archiveValuesForItem(itemId: string, publicationStatus: PublicationStatus, scope: ArchiveValueScope | undefined): Record<string, FieldValue> {
+    const normalizedScope: ArchiveValueScope = scope === 'draft' || scope === 'published' ? scope : 'visible'
+    const draftValues = this.getItemValues([itemId], 'draft')[itemId] ?? {}
+    const publishedValues = this.getItemValues([itemId], 'published')[itemId] ?? {}
+
+    if (normalizedScope === 'draft') return Object.keys(draftValues).length > 0 ? draftValues : publishedValues
+    if (normalizedScope === 'published') return Object.keys(publishedValues).length > 0 ? publishedValues : draftValues
+    if (publicationStatus === 'draft') return Object.keys(draftValues).length > 0 ? draftValues : publishedValues
+    return Object.keys(publishedValues).length > 0 ? publishedValues : draftValues
+  }
+
+  private assertListGridPlacement(boardId: string, currentListId: string, grid: BoardList['grid']): void {
+    const listRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM lists
+         WHERE board_id = ?
+           AND display_enabled = 1
+           AND id <> ?`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId, currentListId)
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const overlaps = [...listRows, ...widgetRows]
+      .map((row) => ({ x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }))
+      .some((candidate) => this.gridsOverlap(candidate, grid))
+    if (overlaps) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+  }
+
+  private assertWidgetGridPlacement(boardId: string, currentWidgetId: string, grid: BoardWidget['grid']): void {
+    const listRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM lists
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1
+           AND id <> ?`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId, currentWidgetId)
+    const overlaps = [...listRows, ...widgetRows]
+      .map((row) => ({ x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }))
+      .some((candidate) => this.gridsOverlap(candidate, grid))
+    if (overlaps) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
   }
 
   private createSeedItem(
@@ -2169,7 +2626,7 @@ export class LifePlanRepository {
   }
 
   private findOpenListSlot(boardId: string): BoardList['grid'] | null {
-    const rows = this.client.database
+    const listRows = this.client.database
       .prepare(
         `SELECT grid_x, grid_y, grid_w, grid_h
          FROM lists
@@ -2178,7 +2635,15 @@ export class LifePlanRepository {
          ORDER BY sort_order`
       )
       .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
-    const occupied = rows
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const occupied = [...listRows, ...widgetRows]
       .map((row) => ({ x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }))
       .filter((grid) => grid.x >= 1 && grid.y >= 1 && grid.w >= MIN_LIST_GRID_WIDTH && grid.h >= MIN_LIST_GRID_HEIGHT)
 
@@ -2190,6 +2655,45 @@ export class LifePlanRepository {
     }
 
     return null
+  }
+
+  private findOpenWidgetSlot(boardId: string): BoardWidget['grid'] | null {
+    const listRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM lists
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const occupied = [...listRows, ...widgetRows]
+      .map((row) => ({ x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }))
+      .filter((grid) => grid.x >= 1 && grid.y >= 1 && grid.w >= 1 && grid.h >= 1)
+
+    for (let y = 1; y <= 9 - MIN_WIDGET_GRID_HEIGHT; y += 1) {
+      for (let x = 1; x <= 17 - MIN_WIDGET_GRID_WIDTH; x += 1) {
+        const candidate = { x, y, w: MIN_WIDGET_GRID_WIDTH, h: MIN_WIDGET_GRID_HEIGHT }
+        if (!occupied.some((grid) => this.gridsOverlap(grid, candidate))) return candidate
+      }
+    }
+
+    return null
+  }
+
+  private normalizeWidgetGrid(grid: BoardWidget['grid']): BoardWidget['grid'] {
+    const w = this.clamp(grid.w, MIN_WIDGET_GRID_WIDTH, 16)
+    const h = this.clamp(grid.h, MIN_WIDGET_GRID_HEIGHT, 8)
+    const x = this.clamp(grid.x, 1, 17 - w)
+    const y = this.clamp(grid.y, 1, 9 - h)
+    return { x, y, w, h }
   }
 
   private gridsOverlap(a: BoardList['grid'], b: BoardList['grid']): boolean {

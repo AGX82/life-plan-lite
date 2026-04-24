@@ -6,13 +6,15 @@ import type {
   CreateGroupInput,
   CreateItemInput,
   CreateListInput,
+  CreateWidgetInput,
   LplApi,
   MoveListInput,
   UpdateBoardInput,
   UpdateColumnInput,
   UpdateGroupInput,
   UpdateItemInput,
-  UpdateListInput
+  UpdateListInput,
+  UpdateWidgetInput
 } from '../shared/domain'
 
 const api: LplApi = {
@@ -49,6 +51,9 @@ const api: LplApi = {
   createColumn: (input: CreateColumnInput) => ipcRenderer.invoke('columns:create', input),
   updateColumn: (input: UpdateColumnInput) => ipcRenderer.invoke('columns:update', input),
   deleteColumn: (columnId: string) => ipcRenderer.invoke('columns:delete', columnId),
+  createWidget: (input: CreateWidgetInput) => ipcRenderer.invoke('widgets:create', input),
+  updateWidget: (input: UpdateWidgetInput) => ipcRenderer.invoke('widgets:update', input),
+  deleteWidget: (widgetId: string) => ipcRenderer.invoke('widgets:delete', widgetId),
   listArchive: (filters) => ipcRenderer.invoke('archive:list', filters),
   openExternalUrl: (url: string) => ipcRenderer.invoke('app:openExternalUrl', url),
   onDataChanged: (callback) => {
