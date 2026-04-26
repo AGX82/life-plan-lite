@@ -7,7 +7,7 @@ export type PublicationStatus = 'draft' | 'published' | 'dirty'
 export type OperationalState = 'active' | 'completed' | 'cancelled'
 export type ArchiveValueScope = 'visible' | 'draft' | 'published'
 
-export type AggregationMethod = 'sum' | 'count' | 'active_count' | 'completed_count' | 'sum_active'
+export type AggregationMethod = 'sum' | 'count' | 'active_count' | 'completed_count' | 'sum_active' | 'next_due'
 
 export type ColumnRole = 'deadline'
 
@@ -17,7 +17,14 @@ export type RecurrenceMode = 'none' | 'daily' | 'weekly' | 'biweekly' | 'custom_
 
 export type CurrencyCode = 'RON' | 'EUR' | 'USD' | 'GBP' | 'CNY' | 'JPY' | 'CAD' | 'AUD' | 'CHF' | 'PLN'
 export type WidgetType = 'clock' | 'weather' | 'word_of_day' | 'world_clocks' | 'countdown'
-export type ListTemplateType = 'standard' | 'birthday_calendar'
+export type ListTemplateType =
+  | 'custom'
+  | 'todo'
+  | 'shopping_list'
+  | 'wishlist'
+  | 'health'
+  | 'trips_events'
+  | 'birthday_calendar'
 export type BirthdayBoardView = 'this_week' | 'this_month' | 'next_10_days' | 'next_2_months' | 'all'
 
 export type ListTemplateConfig = {
@@ -88,7 +95,8 @@ export type ListColumn = {
   order: number
   required: boolean
   maxLength: number | null
-  summaryEligible: boolean
+  listSummaryEligible: boolean
+  boardSummaryEligible: boolean
   system: boolean
   role: ColumnRole | null
   choiceConfig: ChoiceConfig | null
@@ -192,6 +200,17 @@ export type SummarySlot = {
   value: string
 }
 
+export type UpdateSummarySlotsInput = {
+  boardId: string
+  slots: Array<{
+    slotIndex: number
+    label: string
+    sourceListId: string | null
+    sourceColumnId: string | null
+    aggregationMethod: AggregationMethod
+  }>
+}
+
 export type DisplayInfo = {
   id: string
   label: string
@@ -268,10 +287,20 @@ export type UpdateBoardInput = {
   name: string
   description: string
   owner: string
+  summarySlots?: UpdateSummarySlotsInput['slots']
 }
 
 export type CreateBoardInput = {
   name: string
+}
+
+export type DeleteBoardInput = {
+  boardId: string
+  keepBoardId?: string | null
+}
+
+export type DuplicateBoardInput = {
+  boardId: string
 }
 
 export type CreateListInput = {
@@ -322,6 +351,16 @@ export type UpdateListInput = {
   showCreatedByOnBoard: boolean
 }
 
+export type UpdateListGridInput = {
+  listId: string
+  grid: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+}
+
 export type CreateColumnInput = {
   listId: string
   name: string
@@ -354,13 +393,29 @@ export type UpdateWidgetInput = {
   config: BoardWidgetConfig
 }
 
+export type UpdateWidgetGridInput = {
+  widgetId: string
+  grid: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+}
+
+export type UpdateBoardLayoutsInput = {
+  lists: UpdateListGridInput[]
+  widgets: UpdateWidgetGridInput[]
+}
+
 export type UpdateColumnInput = {
   columnId: string
   name: string
   type: ColumnType
   required: boolean
   maxLength: number | null
-  summaryEligible: boolean
+  listSummaryEligible: boolean
+  boardSummaryEligible: boolean
   choiceConfig?: ChoiceConfig | null
   dateDisplayFormat?: DateDisplayFormat
   recurrence?: RecurrenceMode
@@ -399,8 +454,13 @@ export type LplApi = {
   deleteItem: (itemId: string) => Promise<BoardSnapshot>
   createBoard: (input: CreateBoardInput) => Promise<BoardSnapshot>
   updateBoard: (input: UpdateBoardInput) => Promise<BoardSnapshot>
+  updateSummarySlots: (input: UpdateSummarySlotsInput) => Promise<BoardSnapshot>
+  deleteBoard: (input: DeleteBoardInput) => Promise<BoardSnapshot>
+  duplicateBoard: (input: DuplicateBoardInput) => Promise<BoardSnapshot>
   createList: (input: CreateListInput) => Promise<BoardSnapshot>
   updateList: (input: UpdateListInput) => Promise<BoardSnapshot>
+  updateListLayouts: (input: UpdateListGridInput[]) => Promise<BoardSnapshot>
+  updateBoardLayouts: (input: UpdateBoardLayoutsInput) => Promise<BoardSnapshot>
   deleteList: (listId: string) => Promise<BoardSnapshot>
   moveListToBoard: (input: MoveListInput) => Promise<BoardSnapshot>
   copyListToBoard: (input: MoveListInput) => Promise<BoardSnapshot>
@@ -412,6 +472,7 @@ export type LplApi = {
   deleteColumn: (columnId: string) => Promise<BoardSnapshot>
   createWidget: (input: CreateWidgetInput) => Promise<BoardSnapshot>
   updateWidget: (input: UpdateWidgetInput) => Promise<BoardSnapshot>
+  updateWidgetLayouts: (input: UpdateWidgetGridInput[]) => Promise<BoardSnapshot>
   deleteWidget: (widgetId: string) => Promise<BoardSnapshot>
   listArchive: (filters?: { listId?: string; closedAfter?: string; closedBefore?: string }) => Promise<ArchiveRecord[]>
   openExternalUrl: (url: string) => Promise<void>

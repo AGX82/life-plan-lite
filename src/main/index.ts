@@ -15,11 +15,15 @@ import type {
   DisplayInfo,
   DisplayState,
   MoveListInput,
+  UpdateSummarySlotsInput,
+  UpdateBoardLayoutsInput,
   UpdateBoardInput,
   UpdateColumnInput,
   UpdateGroupInput,
   UpdateItemInput,
+  UpdateListGridInput,
   UpdateListInput,
+  UpdateWidgetGridInput,
   UpdateWidgetInput
 } from '../shared/domain'
 
@@ -227,6 +231,9 @@ function registerIpc(): void {
     repository.getBoardSnapshot(boardId, mode)
   )
   ipcMain.handle('boards:setActive', (_event, boardId: string) => handleMutation(repository.setActiveBoard.bind(repository))(boardId))
+  ipcMain.handle('boards:updateSummarySlots', (_event, input: UpdateSummarySlotsInput) =>
+    handleMutation(repository.updateSummarySlots.bind(repository))(input)
+  )
   ipcMain.handle('app:close', () => {
     allowDisplayClose = true
     app.quit()
@@ -258,8 +265,16 @@ function registerIpc(): void {
   ipcMain.handle('items:delete', (_event, itemId: string) => handleMutation(repository.deleteItem.bind(repository))(itemId))
   ipcMain.handle('boards:create', (_event, input: CreateBoardInput) => handleMutation(repository.createBoard.bind(repository))(input))
   ipcMain.handle('boards:update', (_event, input: UpdateBoardInput) => handleMutation(repository.updateBoard.bind(repository))(input))
+  ipcMain.handle('boards:delete', (_event, input) => handleMutation(repository.deleteBoard.bind(repository))(input))
+  ipcMain.handle('boards:duplicate', (_event, input) => handleMutation(repository.duplicateBoard.bind(repository))(input))
+  ipcMain.handle('board:updateLayouts', (_event, input: UpdateBoardLayoutsInput) =>
+    handleMutation(repository.updateBoardLayouts.bind(repository))(input)
+  )
   ipcMain.handle('lists:create', (_event, input: CreateListInput) => handleMutation(repository.createList.bind(repository))(input))
   ipcMain.handle('lists:update', (_event, input: UpdateListInput) => handleMutation(repository.updateList.bind(repository))(input))
+  ipcMain.handle('lists:updateLayouts', (_event, input: UpdateListGridInput[]) =>
+    handleMutation(repository.updateListLayouts.bind(repository))(input)
+  )
   ipcMain.handle('lists:delete', (_event, listId: string) => handleMutation(repository.deleteList.bind(repository))(listId))
   ipcMain.handle('lists:moveToBoard', (_event, input: MoveListInput) => handleMutation(repository.moveListToBoard.bind(repository))(input))
   ipcMain.handle('lists:copyToBoard', (_event, input: MoveListInput) => handleMutation(repository.copyListToBoard.bind(repository))(input))
@@ -271,6 +286,9 @@ function registerIpc(): void {
   ipcMain.handle('columns:delete', (_event, columnId: string) => handleMutation(repository.deleteColumn.bind(repository))(columnId))
   ipcMain.handle('widgets:create', (_event, input: CreateWidgetInput) => handleMutation(repository.createWidget.bind(repository))(input))
   ipcMain.handle('widgets:update', (_event, input: UpdateWidgetInput) => handleMutation(repository.updateWidget.bind(repository))(input))
+  ipcMain.handle('widgets:updateLayouts', (_event, input: UpdateWidgetGridInput[]) =>
+    handleMutation(repository.updateWidgetLayouts.bind(repository))(input)
+  )
   ipcMain.handle('widgets:delete', (_event, widgetId: string) => handleMutation(repository.deleteWidget.bind(repository))(widgetId))
   ipcMain.handle('archive:list', (_event, filters) => repository.listArchive(filters))
   ipcMain.handle('app:openExternalUrl', async (_event, url: string) => {

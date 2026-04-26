@@ -7,7 +7,7 @@ Local-first desktop board application based on the attached BRD.
 - Electron desktop shell with separate Admin and Display routes.
 - React renderer with board-shaped grid display and admin controls.
 - SQLite-oriented local persistence using Node's built-in `node:sqlite` API.
-- Seeded default board, lists, typed columns, draft/published item state, dependencies, archive records, and four bottom summary slots.
+- Seeded default board, lists, typed columns, draft/published item state, dependencies, archive records, and five board summary slots.
 
 ## Commands
 

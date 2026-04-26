@@ -28,7 +28,7 @@ export function migrate(client: DbClient): void {
       board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       code TEXT NOT NULL,
-      list_type TEXT NOT NULL DEFAULT 'standard',
+      list_type TEXT NOT NULL DEFAULT 'custom',
       list_config TEXT,
       sort_order INTEGER NOT NULL,
       grid_x INTEGER NOT NULL,
@@ -72,6 +72,8 @@ export function migrate(client: DbClient): void {
       is_required INTEGER NOT NULL DEFAULT 0,
       max_length INTEGER,
       is_summary_eligible INTEGER NOT NULL DEFAULT 0,
+      is_list_summary_eligible INTEGER NOT NULL DEFAULT 0,
+      is_board_summary_eligible INTEGER NOT NULL DEFAULT 0,
       display_format TEXT,
       is_system INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -132,11 +134,11 @@ export function migrate(client: DbClient): void {
     CREATE TABLE IF NOT EXISTS bottom_bar_widget_configs (
       id TEXT PRIMARY KEY,
       board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 3),
+      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 4),
       label TEXT NOT NULL,
       source_list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
       source_column_id TEXT REFERENCES list_columns(id) ON DELETE SET NULL,
-      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active')),
+      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active', 'next_due')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(board_id, slot_index)
@@ -177,8 +179,9 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'boards', 'owner', "TEXT NOT NULL DEFAULT ''")
   rebuildListColumnsForRichTypesIfNeeded(client)
   addColumnIfMissing(client, 'lists', 'deadline_mandatory', 'INTEGER NOT NULL DEFAULT 0')
-  addColumnIfMissing(client, 'lists', 'list_type', "TEXT NOT NULL DEFAULT 'standard'")
+  addColumnIfMissing(client, 'lists', 'list_type', "TEXT NOT NULL DEFAULT 'custom'")
   addColumnIfMissing(client, 'lists', 'list_config', 'TEXT')
+  client.database.exec("UPDATE lists SET list_type = 'custom' WHERE list_type = 'standard';")
   addColumnIfMissing(client, 'lists', 'sort_column_id', 'TEXT')
   addColumnIfMissing(client, 'lists', 'sort_direction', "TEXT NOT NULL DEFAULT 'manual'")
   addColumnIfMissing(client, 'lists', 'display_enabled', 'INTEGER NOT NULL DEFAULT 1')
@@ -187,12 +190,24 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'lists', 'show_created_at_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'lists', 'show_created_by_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'item_groups', 'display_config', 'TEXT')
+  addColumnIfMissing(client, 'list_columns', 'is_list_summary_eligible', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(client, 'list_columns', 'is_board_summary_eligible', 'INTEGER NOT NULL DEFAULT 0')
+  client.database.exec(`
+    UPDATE list_columns
+    SET is_list_summary_eligible = is_summary_eligible
+    WHERE is_summary_eligible = 1 AND is_list_summary_eligible = 0;
+
+    UPDATE list_columns
+    SET is_board_summary_eligible = is_summary_eligible
+    WHERE is_summary_eligible = 1 AND is_board_summary_eligible = 0;
+  `)
   rebuildItemsForCloseActionsIfNeeded(client)
   addColumnIfMissing(client, 'items', 'group_id', 'TEXT REFERENCES item_groups(id) ON DELETE SET NULL')
   addColumnIfMissing(client, 'items', 'created_by', "TEXT NOT NULL DEFAULT 'admin'")
   addColumnIfMissing(client, 'item_archives', 'close_action', "TEXT NOT NULL DEFAULT 'completed'")
   addColumnIfMissing(client, 'item_archives', 'close_comment', "TEXT NOT NULL DEFAULT ''")
   rebuildBoardWidgetsForNewTypesIfNeeded(client)
+  rebuildBottomBarSlotsForFiveIfNeeded(client)
   client.database.exec(`
     UPDATE list_columns
     SET name = 'Deadline',
@@ -237,6 +252,40 @@ function rebuildBoardWidgetsForNewTypesIfNeeded(client: DbClient): void {
   `)
 }
 
+function rebuildBottomBarSlotsForFiveIfNeeded(client: DbClient): void {
+  const table = client.database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bottom_bar_widget_configs'")
+    .get<{ sql: string }>()
+  if (table?.sql?.includes('BETWEEN 0 AND 4') && table.sql.includes("'next_due'")) return
+
+  client.database.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    CREATE TABLE bottom_bar_widget_configs_new (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 4),
+      label TEXT NOT NULL,
+      source_list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
+      source_column_id TEXT REFERENCES list_columns(id) ON DELETE SET NULL,
+      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active', 'next_due')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(board_id, slot_index)
+    );
+
+    INSERT INTO bottom_bar_widget_configs_new
+      (id, board_id, slot_index, label, source_list_id, source_column_id, aggregation_method, created_at, updated_at)
+    SELECT id, board_id, slot_index, label, source_list_id, source_column_id, aggregation_method, created_at, updated_at
+    FROM bottom_bar_widget_configs;
+
+    DROP TABLE bottom_bar_widget_configs;
+    ALTER TABLE bottom_bar_widget_configs_new RENAME TO bottom_bar_widget_configs;
+
+    PRAGMA foreign_keys = ON;
+  `)
+}
+
 function addColumnIfMissing(client: DbClient, table: string, column: string, definition: string): void {
   const columns = client.database.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>()
   if (!columns.some((row) => row.name === column)) {
@@ -262,6 +311,8 @@ function rebuildListColumnsForRichTypesIfNeeded(client: DbClient): void {
       is_required INTEGER NOT NULL DEFAULT 0,
       max_length INTEGER,
       is_summary_eligible INTEGER NOT NULL DEFAULT 0,
+      is_list_summary_eligible INTEGER NOT NULL DEFAULT 0,
+      is_board_summary_eligible INTEGER NOT NULL DEFAULT 0,
       display_format TEXT,
       is_system INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -269,8 +320,8 @@ function rebuildListColumnsForRichTypesIfNeeded(client: DbClient): void {
     );
 
     INSERT INTO list_columns_new
-      (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, display_format, is_system, created_at, updated_at)
-    SELECT id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, display_format, is_system, created_at, updated_at
+      (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, display_format, is_system, created_at, updated_at)
+    SELECT id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_summary_eligible, is_summary_eligible, display_format, is_system, created_at, updated_at
     FROM list_columns;
 
     DROP TABLE list_columns;

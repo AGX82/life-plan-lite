@@ -19,6 +19,8 @@ import type {
   ColumnType,
   CreateBoardInput,
   CreateColumnInput,
+  DeleteBoardInput,
+  DuplicateBoardInput,
   CurrencyCode,
   CreateGroupInput,
   CreateItemInput,
@@ -39,6 +41,7 @@ import type {
   RecurrenceMode,
   SummarySlot,
   MoveListInput,
+  UpdateSummarySlotsInput,
   UpdateBoardInput,
   UpdateColumnInput,
   UpdateGroupInput,
@@ -54,16 +57,24 @@ const MIN_LIST_GRID_WIDTH = 4
 const MIN_LIST_GRID_HEIGHT = 2
 const MIN_WIDGET_GRID_WIDTH = 2
 const MIN_WIDGET_GRID_HEIGHT = 2
+const MAX_LIST_SUMMARY_COLUMNS = 2
+const MAX_BOARD_SUMMARY_COLUMNS = 5
 const RESERVED_COLUMN_NAMES = new Set(
   ['item id', 'item name', 'created at', 'created by', 'dependency', 'dependencies', 'close_comm'].map((name) =>
     normalizeReservedColumnName(name)
   )
 )
-const BIRTHDAY_PROTECTED_COLUMN_NAMES = new Set(['person name', 'birthday', 'birth year'].map((name) => normalizeReservedColumnName(name)))
+const BIRTHDAY_PROTECTED_COLUMN_NAMES = new Set(['name', 'person name', 'birthday', 'year of birth', 'birth year'].map((name) => normalizeReservedColumnName(name)))
 const DEFAULT_APP_SETTINGS: AppSettings = {
   closeConfirmationMode: 'with_comments',
   theme: 'midnight_clear'
 }
+
+const DEFAULT_PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
+const WISHMETER_OPTIONS = ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Asking for a friend...']
+const SUMMARY_COUNT_TEXT_COLUMNS = new Set(['item name', 'task', 'product', 'entry', 'title', 'name'].map((name) => normalizeReservedColumnName(name)))
+const SUMMARY_DATE_COLUMNS = new Set(['deadline', 'needed by', 'appointment date', 'birthday', 'start'].map((name) => normalizeReservedColumnName(name)))
+const NON_SUMMARY_NUMERIC_COLUMNS = new Set(['year of birth', 'birth year', '% done'].map((name) => normalizeReservedColumnName(name)))
 
 type ListRow = {
   id: string
@@ -98,6 +109,8 @@ type ColumnRow = {
   is_required: number
   max_length: number | null
   is_summary_eligible: number
+  is_list_summary_eligible: number
+  is_board_summary_eligible: number
   is_system: number
   display_format: string | null
 }
@@ -236,8 +249,19 @@ function normalizeWidgetType(type: WidgetType | undefined): WidgetType {
   return 'clock'
 }
 
-function normalizeListTemplateType(type: ListTemplateType | undefined): ListTemplateType {
-  return type === 'birthday_calendar' ? 'birthday_calendar' : 'standard'
+function normalizeListTemplateType(type: string | undefined): ListTemplateType {
+  if (
+    type === 'todo' ||
+    type === 'shopping_list' ||
+    type === 'wishlist' ||
+    type === 'health' ||
+    type === 'trips_events' ||
+    type === 'birthday_calendar' ||
+    type === 'custom'
+  ) {
+    return type
+  }
+  return 'custom'
 }
 
 function defaultWorldClockLocations(): WorldClockLocation[] {
@@ -260,6 +284,18 @@ function defaultWidgetConfig(type: WidgetType): BoardWidgetConfig {
 function defaultListTemplateConfig(type: ListTemplateType): ListTemplateConfig {
   if (type === 'birthday_calendar') return { birthday: { boardView: 'this_month' } }
   return {}
+}
+
+function choiceConfigFromLabels(labels: string[]): ChoiceConfig {
+  return {
+    selection: 'single',
+    ranked: true,
+    options: labels.map((label, index) => ({
+      id: normalizeReservedColumnName(label).replace(/\s+/g, '-'),
+      label,
+      rank: index + 1
+    }))
+  }
 }
 
 function normalizeReservedColumnName(name: string): string {
@@ -318,7 +354,7 @@ export class LifePlanRepository {
       const shopping = this.createSeedList(boardId, 'Shopping List', 'L02', 1, { x: 9, y: 1, w: 8, h: 4 }, false)
       const house = this.createSeedList(boardId, 'House Setup', 'L03', 2, { x: 1, y: 5, w: 16, h: 3 }, true)
 
-      const todoName = this.createSeedColumn(todo, 'Item Name', 'text', 0, true, 120, false, true)
+      const todoName = this.createSeedColumn(todo, 'Item Name', 'text', 0, true, 120, false, false, true)
       const todoDue = this.createSeedColumn(
         todo,
         'Deadline',
@@ -326,18 +362,19 @@ export class LifePlanRepository {
         1,
         false,
         null,
+        true,
         false,
         true,
         JSON.stringify({ role: 'deadline', dateDisplayFormat: 'datetime' })
       )
-      const todoEffort = this.createSeedColumn(todo, 'Effort', 'decimal', 2, false, null, true, false)
+      const todoEffort = this.createSeedColumn(todo, 'Effort', 'decimal', 2, false, null, false, false, false)
       this.setDueDateColumn(todo, todoDue)
 
-      const shoppingName = this.createSeedColumn(shopping, 'Item Name', 'text', 0, true, 120, false, true)
-      const shoppingPrice = this.createSeedColumn(shopping, 'Price', 'currency', 1, false, null, true, false)
-      const shoppingBought = this.createSeedColumn(shopping, 'Bought', 'boolean', 2, false, null, false, false)
+      const shoppingName = this.createSeedColumn(shopping, 'Item Name', 'text', 0, true, 120, false, false, true)
+      const shoppingPrice = this.createSeedColumn(shopping, 'Price', 'currency', 1, false, null, false, false, false)
+      const shoppingBought = this.createSeedColumn(shopping, 'Bought', 'boolean', 2, false, null, false, false, false)
 
-      const houseName = this.createSeedColumn(house, 'Item Name', 'text', 0, true, 120, false, true)
+      const houseName = this.createSeedColumn(house, 'Item Name', 'text', 0, true, 120, false, false, true)
       const houseDue = this.createSeedColumn(
         house,
         'Deadline',
@@ -345,11 +382,12 @@ export class LifePlanRepository {
         1,
         false,
         null,
+        true,
         false,
         true,
         JSON.stringify({ role: 'deadline', dateDisplayFormat: 'datetime' })
       )
-      const houseBudget = this.createSeedColumn(house, 'Budget', 'currency', 2, false, null, true, false)
+      const houseBudget = this.createSeedColumn(house, 'Budget', 'currency', 2, false, null, false, false, false)
       this.setDueDateColumn(house, houseDue)
 
       const moveIn = this.createSeedItem(house, 1, 'published', {
@@ -404,6 +442,7 @@ export class LifePlanRepository {
       this.createSeedSummary(boardId, 1, 'Cart Total', shopping, shoppingPrice, 'sum')
       this.createSeedSummary(boardId, 2, 'House Budget', house, houseBudget, 'sum_active')
       this.createSeedSummary(boardId, 3, 'Archived', null, null, 'completed_count')
+      this.createSeedSummary(boardId, 4, 'Slot 5', null, null, 'count')
     })
   }
 
@@ -521,11 +560,15 @@ export class LifePlanRepository {
   }
 
   publishItem(itemId: string): BoardSnapshot {
+    const boardId = this.client.database
+      .prepare('SELECT l.board_id FROM items i JOIN lists l ON l.id = i.list_id WHERE i.id = ?')
+      .get<{ board_id: string }>(itemId)?.board_id
     this.transaction(() => this.publishItems([itemId]))
-    return this.getActiveBoardSnapshot('admin')
+    return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   publishList(listId: string): BoardSnapshot {
+    const boardId = this.client.database.prepare('SELECT board_id FROM lists WHERE id = ?').get<{ board_id: string }>(listId)?.board_id
     const ids = this.client.database
       .prepare(
         `SELECT id FROM items
@@ -537,7 +580,7 @@ export class LifePlanRepository {
       .map((row) => row.id)
 
     this.transaction(() => this.publishItems(ids))
-    return this.getActiveBoardSnapshot('admin')
+    return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   publishBoard(boardId: string): BoardSnapshot {
@@ -554,7 +597,7 @@ export class LifePlanRepository {
       .map((row) => row.id)
 
     this.transaction(() => this.publishItems(ids))
-    return this.getActiveBoardSnapshot('admin')
+    return this.getBoardSnapshot(boardId, 'admin')
   }
 
   completeItem(itemId: string): BoardSnapshot {
@@ -676,11 +719,14 @@ export class LifePlanRepository {
   }
 
   deleteItem(itemId: string): BoardSnapshot {
+    const boardId = this.client.database
+      .prepare('SELECT l.board_id FROM items i JOIN lists l ON l.id = i.list_id WHERE i.id = ?')
+      .get<{ board_id: string }>(itemId)?.board_id
     this.transaction(() => {
       this.run('DELETE FROM dependencies WHERE source_item_id = ? OR target_item_id = ?', itemId, itemId)
       this.run('DELETE FROM items WHERE id = ?', itemId)
     })
-    return this.getActiveBoardSnapshot('admin')
+    return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   createBoard(input: CreateBoardInput): BoardSnapshot {
@@ -702,21 +748,458 @@ export class LifePlanRepository {
       this.createSeedSummary(boardId, 1, 'Slot 2', null, null, 'count')
       this.createSeedSummary(boardId, 2, 'Slot 3', null, null, 'count')
       this.createSeedSummary(boardId, 3, 'Slot 4', null, null, 'count')
+      this.createSeedSummary(boardId, 4, 'Slot 5', null, null, 'count')
     })
 
     return this.getBoardSnapshot(boardId, 'admin')
   }
 
   updateBoard(input: UpdateBoardInput): BoardSnapshot {
-    this.run(
-      'UPDATE boards SET name = ?, description = ?, owner = ?, updated_at = ? WHERE id = ?',
-      input.name.trim() || 'Untitled Board',
-      input.description,
-      input.owner,
-      new Date().toISOString(),
-      input.boardId
-    )
+    const summarySlots = input.summarySlots ? this.resolveSummarySlots(input.boardId, input.summarySlots) : null
+    this.transaction(() => {
+      this.run(
+        'UPDATE boards SET name = ?, description = ?, owner = ?, updated_at = ? WHERE id = ?',
+        input.name.trim() || 'Untitled Board',
+        input.description,
+        input.owner,
+        new Date().toISOString(),
+        input.boardId
+      )
+      if (summarySlots) {
+        this.run('DELETE FROM bottom_bar_widget_configs WHERE board_id = ?', input.boardId)
+        for (const slot of summarySlots) {
+          this.createSeedSummary(input.boardId, slot.slotIndex, slot.label, slot.sourceListId, slot.sourceColumnId, slot.aggregationMethod)
+        }
+      }
+    })
     return this.getBoardSnapshot(input.boardId, 'admin')
+  }
+
+  duplicateBoard(input: DuplicateBoardInput): BoardSnapshot {
+    const sourceBoard = this.client.database
+      .prepare('SELECT id, user_id, name, description, owner FROM boards WHERE id = ?')
+      .get<{ id: string; user_id: string; name: string; description: string; owner: string }>(input.boardId)
+    if (!sourceBoard) throw new Error('Board not found.')
+
+    const now = new Date().toISOString()
+    const newBoardId = randomUUID()
+    const listMap = new Map<string, string>()
+    const columnMap = new Map<string, string>()
+    const groupMap = new Map<string, string>()
+    const itemMap = new Map<string, string>()
+
+    this.transaction(() => {
+      this.run(
+        `INSERT INTO boards (id, user_id, name, description, owner, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+        newBoardId,
+        sourceBoard.user_id,
+        `Copy of ${sourceBoard.name}`,
+        sourceBoard.description,
+        sourceBoard.owner,
+        now,
+        now
+      )
+
+      const lists = this.client.database
+        .prepare(
+          `SELECT id, name, code, list_type, list_config, sort_order, grid_x, grid_y, grid_w, grid_h,
+                  due_date_enabled, due_date_column_id, deadline_mandatory, sort_column_id, sort_direction,
+                  display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board
+           FROM lists
+           WHERE board_id = ?
+           ORDER BY sort_order`
+        )
+        .all<
+          ListRow & {
+            sort_column_id: string | null
+          }
+        >(input.boardId)
+
+      for (const list of lists) {
+        const newListId = randomUUID()
+        listMap.set(list.id, newListId)
+        this.run(
+          `INSERT INTO lists
+             (id, board_id, name, code, list_type, list_config, sort_order, grid_x, grid_y, grid_w, grid_h, due_date_enabled, due_date_column_id, deadline_mandatory, sort_column_id, sort_direction, display_enabled, show_item_id_on_board, show_dependencies_on_board, show_created_at_on_board, show_created_by_on_board, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          newListId,
+          newBoardId,
+          list.name,
+          list.code,
+          normalizeListTemplateType(list.list_type),
+          list.list_config,
+          list.sort_order,
+          list.grid_x,
+          list.grid_y,
+          list.grid_w,
+          list.grid_h,
+          list.due_date_enabled,
+          list.deadline_mandatory,
+          list.sort_direction,
+          list.display_enabled,
+          list.show_item_id_on_board,
+          list.show_dependencies_on_board,
+          list.show_created_at_on_board,
+          list.show_created_by_on_board,
+          now,
+          now
+        )
+      }
+
+      const listIds = lists.map((list) => list.id)
+      if (listIds.length > 0) {
+        const columns = this.client.database
+          .prepare(
+            `SELECT id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, display_format, is_system
+             FROM list_columns
+             WHERE list_id IN (${this.placeholders(listIds)})
+             ORDER BY list_id, sort_order`
+          )
+          .all<ColumnRow>(...listIds)
+
+        for (const column of columns) {
+          const newColumnId = randomUUID()
+          columnMap.set(column.id, newColumnId)
+          const newListId = listMap.get(column.list_id)
+          if (!newListId) continue
+          this.run(
+            `INSERT INTO list_columns
+               (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, display_format, is_system, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            newColumnId,
+            newListId,
+            column.name,
+            column.column_type,
+            column.sort_order,
+            column.is_required,
+            column.max_length,
+            column.is_summary_eligible,
+            column.is_list_summary_eligible,
+            column.is_board_summary_eligible,
+            column.display_format,
+            column.is_system,
+            now,
+            now
+          )
+        }
+
+        for (const list of lists) {
+          const newListId = listMap.get(list.id)
+          if (!newListId) continue
+          const newDueDateColumnId = list.due_date_column_id ? columnMap.get(list.due_date_column_id) ?? null : null
+          const newSortColumnId = list.sort_column_id ? columnMap.get(list.sort_column_id) ?? null : null
+          this.run(
+            `UPDATE lists
+             SET due_date_column_id = ?,
+                 sort_column_id = ?
+             WHERE id = ?`,
+            newDueDateColumnId,
+            newSortColumnId,
+            newListId
+          )
+        }
+
+        const groups = this.client.database
+          .prepare(
+            `SELECT id, list_id, parent_group_id, name, code, sort_order, display_config
+             FROM item_groups
+             WHERE list_id IN (${this.placeholders(listIds)})
+             ORDER BY list_id, sort_order`
+          )
+          .all<GroupRow>(...listIds)
+
+        for (const group of groups) {
+          groupMap.set(group.id, randomUUID())
+        }
+
+        for (const group of groups) {
+          const newGroupId = groupMap.get(group.id)
+          const newListId = listMap.get(group.list_id)
+          if (!newGroupId || !newListId) continue
+          const groupDisplay = this.readGroupDisplayConfig(group.display_config)
+          const remappedSummaries = groupDisplay.summaries
+            .map((summary) => ({
+              columnId: columnMap.get(summary.columnId) ?? '',
+              method: summary.method
+            }))
+            .filter((summary) => summary.columnId.length > 0)
+
+          this.run(
+            `INSERT INTO item_groups (id, list_id, parent_group_id, name, code, sort_order, display_config, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            newGroupId,
+            newListId,
+            group.parent_group_id ? (groupMap.get(group.parent_group_id) ?? null) : null,
+            group.name,
+            group.code,
+            group.sort_order,
+            this.writeGroupDisplayConfig(groupDisplay.showIdOnBoard, remappedSummaries),
+            now,
+            now
+          )
+        }
+
+        const items = this.client.database
+          .prepare(
+            `SELECT id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, published_at
+             FROM items
+             WHERE list_id IN (${this.placeholders(listIds)})
+             ORDER BY list_id, item_order`
+          )
+          .all<
+            ItemRow & {
+              published_at: string | null
+            }
+          >(...listIds)
+
+        for (const item of items) {
+          const newItemId = randomUUID()
+          itemMap.set(item.id, newItemId)
+          const newListId = listMap.get(item.list_id)
+          if (!newListId) continue
+          this.run(
+            `INSERT INTO items
+               (id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            newItemId,
+            newListId,
+            item.group_id ? (groupMap.get(item.group_id) ?? null) : null,
+            item.item_number,
+            item.item_order,
+            item.publication_status,
+            item.operational_state,
+            item.created_by,
+            item.created_at,
+            now,
+            item.published_at
+          )
+        }
+
+        const itemIds = items.map((item) => item.id)
+        if (itemIds.length > 0) {
+          const values = this.client.database
+            .prepare(
+              `SELECT item_id, column_id, version_scope, value_text, value_number, value_date, value_boolean, value_json
+               FROM item_field_values
+               WHERE item_id IN (${this.placeholders(itemIds)})`
+            )
+            .all<
+              ValueRow & {
+                version_scope: 'draft' | 'published'
+              }
+            >(...itemIds)
+
+          for (const value of values) {
+            const newItemId = itemMap.get(value.item_id)
+            const newColumnId = columnMap.get(value.column_id)
+            if (!newItemId || !newColumnId) continue
+            this.run(
+              `INSERT INTO item_field_values
+                 (id, item_id, column_id, version_scope, value_text, value_number, value_date, value_boolean, value_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              randomUUID(),
+              newItemId,
+              newColumnId,
+              value.version_scope,
+              value.value_text,
+              value.value_number,
+              value.value_date,
+              value.value_boolean,
+              value.value_json,
+              now
+            )
+          }
+
+          const dependencies = this.client.database
+            .prepare(
+              `SELECT source_item_id, target_item_id, dependency_type
+               FROM dependencies
+               WHERE source_item_id IN (${this.placeholders(itemIds)})
+                 AND target_item_id IN (${this.placeholders(itemIds)})`
+            )
+            .all<{ source_item_id: string; target_item_id: string; dependency_type: string }>(
+              ...itemIds,
+              ...itemIds
+            )
+
+          for (const dependency of dependencies) {
+            const newSourceId = itemMap.get(dependency.source_item_id)
+            const newTargetId = itemMap.get(dependency.target_item_id)
+            if (!newSourceId || !newTargetId) continue
+            this.run(
+              `INSERT INTO dependencies (id, source_item_id, target_item_id, dependency_type, created_at)
+               VALUES (?, ?, ?, ?, ?)`,
+              randomUUID(),
+              newSourceId,
+              newTargetId,
+              dependency.dependency_type,
+              now
+            )
+          }
+        }
+      }
+
+      const widgets = this.client.database
+        .prepare(
+          `SELECT widget_type, name, sort_order, grid_x, grid_y, grid_w, grid_h, display_enabled, config_json
+           FROM board_widgets
+           WHERE board_id = ?
+           ORDER BY sort_order`
+        )
+        .all<WidgetRow>(input.boardId)
+
+      for (const widget of widgets) {
+        this.run(
+          `INSERT INTO board_widgets
+             (id, board_id, widget_type, name, sort_order, grid_x, grid_y, grid_w, grid_h, display_enabled, config_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          randomUUID(),
+          newBoardId,
+          widget.widget_type,
+          widget.name,
+          widget.sort_order,
+          widget.grid_x,
+          widget.grid_y,
+          widget.grid_w,
+          widget.grid_h,
+          widget.display_enabled,
+          widget.config_json,
+          now,
+          now
+        )
+      }
+
+      const summarySlots = this.client.database
+        .prepare(
+          `SELECT slot_index, label, source_list_id, source_column_id, aggregation_method
+           FROM bottom_bar_widget_configs
+           WHERE board_id = ?
+           ORDER BY slot_index`
+        )
+        .all<BottomSlotRow>(input.boardId)
+
+      if (summarySlots.length === 0) {
+        this.createSeedSummary(newBoardId, 0, 'Slot 1', null, null, 'count')
+        this.createSeedSummary(newBoardId, 1, 'Slot 2', null, null, 'count')
+        this.createSeedSummary(newBoardId, 2, 'Slot 3', null, null, 'count')
+        this.createSeedSummary(newBoardId, 3, 'Slot 4', null, null, 'count')
+        this.createSeedSummary(newBoardId, 4, 'Slot 5', null, null, 'count')
+      } else {
+        for (const slot of summarySlots) {
+          this.run(
+            `INSERT INTO bottom_bar_widget_configs
+               (id, board_id, slot_index, label, source_list_id, source_column_id, aggregation_method, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            randomUUID(),
+            newBoardId,
+            slot.slot_index,
+            slot.label,
+            slot.source_list_id ? (listMap.get(slot.source_list_id) ?? null) : null,
+            slot.source_column_id ? (columnMap.get(slot.source_column_id) ?? null) : null,
+            slot.aggregation_method,
+            now,
+            now
+          )
+        }
+      }
+    })
+
+    return this.getBoardSnapshot(newBoardId, 'admin')
+  }
+
+  deleteBoard(input: DeleteBoardInput): BoardSnapshot {
+    const board = this.client.database
+      .prepare('SELECT id, user_id, name, is_active FROM boards WHERE id = ?')
+      .get<{ id: string; user_id: string; name: string; is_active: number }>(input.boardId)
+    if (!board) throw new Error('Board not found.')
+
+    const now = new Date().toISOString()
+    const keepBoardId = input.keepBoardId && input.keepBoardId !== input.boardId ? input.keepBoardId : null
+    const activeItems = this.client.database
+      .prepare(
+        `SELECT i.id, i.item_number, i.publication_status, l.id AS list_id, l.name AS list_name, l.code AS list_code
+         FROM items i
+         JOIN lists l ON l.id = i.list_id
+         WHERE l.board_id = ?
+           AND i.operational_state = 'active'`
+      )
+      .all<{
+        id: string
+        item_number: number
+        publication_status: PublicationStatus
+        list_id: string
+        list_name: string
+        list_code: string
+      }>(input.boardId)
+
+    let returnBoardId = keepBoardId
+
+    this.transaction(() => {
+      for (const item of activeItems) {
+        const values = this.archiveValuesForItem(item.id, item.publication_status, 'draft')
+        this.run(
+          `INSERT INTO item_archives (id, item_id, board_id, list_id, list_name, item_code, values_json, close_action, close_comment, closed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          randomUUID(),
+          item.id,
+          input.boardId,
+          item.list_id,
+          item.list_name,
+          `${item.list_code}-T${String(item.item_number).padStart(2, '0')}`,
+          JSON.stringify(values),
+          'cancelled',
+          `cancelled as board deleted - boardID: ${input.boardId}`,
+          now
+        )
+        this.run(`UPDATE items SET operational_state = 'cancelled', updated_at = ? WHERE id = ?`, now, item.id)
+      }
+
+      this.run('DELETE FROM boards WHERE id = ?', input.boardId)
+
+      const remainingBoards = this.client.database
+        .prepare('SELECT id, is_active FROM boards ORDER BY is_active DESC, name')
+        .all<{ id: string; is_active: number }>()
+
+      if (remainingBoards.length === 0) {
+        const replacementId = randomUUID()
+        this.run(
+          `INSERT INTO boards (id, user_id, name, description, owner, is_active, created_at, updated_at)
+           VALUES (?, ?, ?, '', '', 1, ?, ?)`,
+          replacementId,
+          board.user_id,
+          'New Board',
+          now,
+          now
+        )
+        this.createSeedSummary(replacementId, 0, 'Slot 1', null, null, 'count')
+        this.createSeedSummary(replacementId, 1, 'Slot 2', null, null, 'count')
+        this.createSeedSummary(replacementId, 2, 'Slot 3', null, null, 'count')
+        this.createSeedSummary(replacementId, 3, 'Slot 4', null, null, 'count')
+        this.createSeedSummary(replacementId, 4, 'Slot 5', null, null, 'count')
+        this.run('UPDATE display_configs SET active_board_id = ?, updated_at = ?', replacementId, now)
+        returnBoardId = replacementId
+        return
+      }
+
+      if (board.is_active === 1) {
+        const nextActiveBoardId =
+          (keepBoardId && remainingBoards.some((candidate) => candidate.id === keepBoardId) ? keepBoardId : remainingBoards[0]?.id) ??
+          remainingBoards[0].id
+        this.run('UPDATE boards SET is_active = 0, updated_at = ?', now)
+        this.run('UPDATE boards SET is_active = 1, updated_at = ? WHERE id = ?', now, nextActiveBoardId)
+        this.run('UPDATE display_configs SET active_board_id = ?, updated_at = ?', nextActiveBoardId, now)
+        returnBoardId = nextActiveBoardId
+        return
+      }
+
+      if (!returnBoardId || !remainingBoards.some((candidate) => candidate.id === returnBoardId)) {
+        const activeBoardId = remainingBoards.find((candidate) => candidate.is_active === 1)?.id ?? remainingBoards[0].id
+        returnBoardId = activeBoardId
+      }
+    })
+
+    return this.getBoardSnapshot(returnBoardId ?? this.getActiveBoardSnapshot('admin').id, 'admin')
   }
 
   createList(input: CreateListInput): BoardSnapshot {
@@ -754,11 +1237,7 @@ export class LifePlanRepository {
         now,
         now
       )
-      if (templateType === 'birthday_calendar') {
-        this.createBirthdayCalendarTemplate(listId)
-      } else {
-        this.createSeedColumn(listId, 'Item Name', 'text', 0, true, 120, false, true)
-      }
+      this.createTemplateList(listId, templateType)
     })
 
     return this.getBoardSnapshot(input.boardId, 'admin')
@@ -769,11 +1248,13 @@ export class LifePlanRepository {
       .prepare('SELECT board_id, list_type, list_config FROM lists WHERE id = ?')
       .get<{ board_id: string; list_type: ListTemplateType; list_config: string | null }>(input.listId)
     if (!list) throw new Error('List not found.')
-    if (input.templateType && normalizeListTemplateType(input.templateType) !== normalizeListTemplateType(list.list_type)) {
-      throw new Error('Changing a list template type after creation is not supported.')
+    const currentTemplateType = normalizeListTemplateType(list.list_type)
+    const nextTemplateType = normalizeListTemplateType(input.templateType ?? list.list_type)
+    const templateChanged = nextTemplateType !== currentTemplateType
+    if (templateChanged && !this.canRetemplateList(input.listId, currentTemplateType)) {
+      throw new Error('List type can only be changed while the list is still new and empty.')
     }
 
-    const dueDateColumnId = input.dueDateEnabled ? this.ensureDeadlineColumn(input.listId, input.deadlineMandatory) : null
     const now = new Date().toISOString()
     const grid = input.displayEnabled
       ? {
@@ -786,54 +1267,210 @@ export class LifePlanRepository {
 
     if (input.displayEnabled) this.assertListGridPlacement(list.board_id, input.listId, grid)
 
-    this.run(
-      `UPDATE lists
-       SET name = ?,
-            list_type = ?,
-            list_config = ?,
-            grid_x = ?,
-            grid_y = ?,
-            grid_w = ?,
-           grid_h = ?,
-           due_date_enabled = ?,
-           due_date_column_id = ?,
-           deadline_mandatory = ?,
-           sort_column_id = ?,
-           sort_direction = ?,
-           display_enabled = ?,
-           show_item_id_on_board = ?,
-           show_dependencies_on_board = ?,
-           show_created_at_on_board = ?,
-           show_created_by_on_board = ?,
-           updated_at = ?
-       WHERE id = ?`,
-      input.name.trim() || 'Untitled List',
-      normalizeListTemplateType(list.list_type),
-      JSON.stringify(input.templateConfig ?? this.readListTemplateConfig(list.list_type, list.list_config)),
-      grid.x,
-      grid.y,
-      grid.w,
-      grid.h,
-      input.dueDateEnabled ? 1 : 0,
-      dueDateColumnId,
-      input.dueDateEnabled && input.deadlineMandatory ? 1 : 0,
-      input.sortDirection === 'manual' ? null : input.sortColumnId,
-      input.sortColumnId ? input.sortDirection : 'manual',
-      input.displayEnabled ? 1 : 0,
-      input.showItemIdOnBoard ? 1 : 0,
-      input.showDependenciesOnBoard ? 1 : 0,
-      input.showCreatedAtOnBoard ? 1 : 0,
-      input.showCreatedByOnBoard ? 1 : 0,
-      now,
-      input.listId
-    )
+    this.transaction(() => {
+      if (templateChanged) {
+        this.retemplateList(input.listId, nextTemplateType)
+      }
+      const dueDateColumnId = input.dueDateEnabled ? this.ensureDeadlineColumn(input.listId, input.deadlineMandatory) : null
+      this.run(
+        `UPDATE lists
+         SET name = ?,
+              list_type = ?,
+              list_config = ?,
+              grid_x = ?,
+              grid_y = ?,
+              grid_w = ?,
+              grid_h = ?,
+              due_date_enabled = ?,
+              due_date_column_id = ?,
+              deadline_mandatory = ?,
+              sort_column_id = ?,
+              sort_direction = ?,
+              display_enabled = ?,
+              show_item_id_on_board = ?,
+              show_dependencies_on_board = ?,
+              show_created_at_on_board = ?,
+              show_created_by_on_board = ?,
+              updated_at = ?
+         WHERE id = ?`,
+        input.name.trim() || 'Untitled List',
+        nextTemplateType,
+        JSON.stringify(input.templateConfig ?? this.readListTemplateConfig(nextTemplateType, templateChanged ? JSON.stringify(defaultListTemplateConfig(nextTemplateType)) : list.list_config)),
+        grid.x,
+        grid.y,
+        grid.w,
+        grid.h,
+        input.dueDateEnabled ? 1 : 0,
+        dueDateColumnId,
+        input.dueDateEnabled && input.deadlineMandatory ? 1 : 0,
+        input.sortDirection === 'manual' ? null : input.sortColumnId,
+        input.sortColumnId ? input.sortDirection : 'manual',
+        input.displayEnabled ? 1 : 0,
+        input.showItemIdOnBoard ? 1 : 0,
+        input.showDependenciesOnBoard ? 1 : 0,
+        input.showCreatedAtOnBoard ? 1 : 0,
+        input.showCreatedByOnBoard ? 1 : 0,
+        now,
+        input.listId
+      )
+    })
 
     return this.getBoardSnapshot(list.board_id, 'admin')
   }
 
+  updateSummarySlots(input: UpdateSummarySlotsInput): BoardSnapshot {
+    const slots = this.resolveSummarySlots(input.boardId, input.slots)
+
+    this.transaction(() => {
+      this.run('DELETE FROM bottom_bar_widget_configs WHERE board_id = ?', input.boardId)
+      for (const slot of slots) {
+        this.createSeedSummary(input.boardId, slot.slotIndex, slot.label, slot.sourceListId, slot.sourceColumnId, slot.aggregationMethod)
+      }
+    })
+
+    return this.getBoardSnapshot(input.boardId, 'admin')
+  }
+
+  updateListLayouts(input: { listId: string; grid: BoardList['grid'] }[]): BoardSnapshot {
+    if (input.length === 0) throw new Error('No list layout updates were provided.')
+
+    const uniqueIds = new Set(input.map((entry) => entry.listId))
+    if (uniqueIds.size !== input.length) throw new Error('Duplicate list layout updates are not allowed.')
+
+    const listRows = input.map((entry) => {
+      const row = this.client.database
+        .prepare('SELECT id, board_id FROM lists WHERE id = ?')
+        .get<{ id: string; board_id: string }>(entry.listId)
+      if (!row) throw new Error('List not found.')
+      return row
+    })
+
+    const boardId = listRows[0].board_id
+    if (listRows.some((row) => row.board_id !== boardId)) {
+      throw new Error('All updated lists must belong to the same board.')
+    }
+
+    const normalized = input.map((entry) => ({
+      listId: entry.listId,
+      grid: {
+        x: this.clamp(entry.grid.x, 1, 16),
+        y: this.clamp(entry.grid.y, 1, 8),
+        w: this.clamp(entry.grid.w, MIN_LIST_GRID_WIDTH, 16),
+        h: this.clamp(entry.grid.h, MIN_LIST_GRID_HEIGHT, 8)
+      }
+    }))
+
+    this.assertListGridPlacementBatch(boardId, normalized)
+
+    this.transaction(() => {
+      const now = new Date().toISOString()
+      for (const entry of normalized) {
+        this.run(
+          `UPDATE lists
+           SET grid_x = ?, grid_y = ?, grid_w = ?, grid_h = ?, display_enabled = 1, updated_at = ?
+           WHERE id = ?`,
+          entry.grid.x,
+          entry.grid.y,
+          entry.grid.w,
+          entry.grid.h,
+          now,
+          entry.listId
+        )
+      }
+    })
+
+    return this.getBoardSnapshot(boardId, 'admin')
+  }
+
+  updateBoardLayouts(input: { lists: { listId: string; grid: BoardList['grid'] }[]; widgets: { widgetId: string; grid: BoardWidget['grid'] }[] }): BoardSnapshot {
+    if (input.lists.length === 0 && input.widgets.length === 0) throw new Error('No board layout updates were provided.')
+
+    const listIds = new Set(input.lists.map((entry) => entry.listId))
+    if (listIds.size !== input.lists.length) throw new Error('Duplicate list layout updates are not allowed.')
+    const widgetIds = new Set(input.widgets.map((entry) => entry.widgetId))
+    if (widgetIds.size !== input.widgets.length) throw new Error('Duplicate widget layout updates are not allowed.')
+
+    const listRows = input.lists.map((entry) => {
+      const row = this.client.database
+        .prepare('SELECT id, board_id FROM lists WHERE id = ?')
+        .get<{ id: string; board_id: string }>(entry.listId)
+      if (!row) throw new Error('List not found.')
+      return row
+    })
+
+    const widgetRows = input.widgets.map((entry) => {
+      const row = this.client.database
+        .prepare('SELECT id, board_id, widget_type, config_json FROM board_widgets WHERE id = ?')
+        .get<{ id: string; board_id: string; widget_type: WidgetType; config_json: string | null }>(entry.widgetId)
+      if (!row) throw new Error('Widget not found.')
+      return row
+    })
+
+    const boardId = listRows[0]?.board_id ?? widgetRows[0]?.board_id
+    if (!boardId) throw new Error('No board found for layout updates.')
+    if (listRows.some((row) => row.board_id !== boardId) || widgetRows.some((row) => row.board_id !== boardId)) {
+      throw new Error('All updated elements must belong to the same board.')
+    }
+
+    const normalizedLists = input.lists.map((entry) => ({
+      listId: entry.listId,
+      grid: {
+        x: this.clamp(entry.grid.x, 1, 16),
+        y: this.clamp(entry.grid.y, 1, 8),
+        w: this.clamp(entry.grid.w, MIN_LIST_GRID_WIDTH, 16),
+        h: this.clamp(entry.grid.h, MIN_LIST_GRID_HEIGHT, 8)
+      }
+    }))
+
+    const normalizedWidgets = input.widgets.map((entry) => {
+      const row = widgetRows.find((candidate) => candidate.id === entry.widgetId)
+      const type = normalizeWidgetType(row?.widget_type)
+      const config = this.normalizeWidgetConfig(type, row ? this.readWidgetConfig(type, row.config_json) : undefined)
+      return {
+        widgetId: entry.widgetId,
+        grid: this.normalizeWidgetGrid(entry.grid, type, config)
+      }
+    })
+
+    this.assertBoardLayoutPlacementBatch(boardId, normalizedLists, normalizedWidgets)
+
+    this.transaction(() => {
+      const now = new Date().toISOString()
+      for (const entry of normalizedLists) {
+        this.run(
+          `UPDATE lists
+           SET grid_x = ?, grid_y = ?, grid_w = ?, grid_h = ?, display_enabled = 1, updated_at = ?
+           WHERE id = ?`,
+          entry.grid.x,
+          entry.grid.y,
+          entry.grid.w,
+          entry.grid.h,
+          now,
+          entry.listId
+        )
+      }
+      for (const entry of normalizedWidgets) {
+        this.run(
+          `UPDATE board_widgets
+           SET grid_x = ?, grid_y = ?, grid_w = ?, grid_h = ?, display_enabled = 1, updated_at = ?
+           WHERE id = ?`,
+          entry.grid.x,
+          entry.grid.y,
+          entry.grid.w,
+          entry.grid.h,
+          now,
+          entry.widgetId
+        )
+      }
+    })
+
+    return this.getBoardSnapshot(boardId, 'admin')
+  }
+
   deleteList(listId: string): BoardSnapshot {
+    const boardId = this.client.database.prepare('SELECT board_id FROM lists WHERE id = ?').get<{ board_id: string }>(listId)?.board_id
     this.run('DELETE FROM lists WHERE id = ?', listId)
-    return this.getActiveBoardSnapshot('admin')
+    return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   createGroup(input: CreateGroupInput): BoardSnapshot {
@@ -926,7 +1563,7 @@ export class LifePlanRepository {
       new Date().toISOString(),
       input.listId
     )
-    return this.getActiveBoardSnapshot('admin')
+    return this.getBoardSnapshot(input.targetBoardId, 'admin')
   }
 
   copyListToBoard(input: MoveListInput): BoardSnapshot {
@@ -992,7 +1629,7 @@ export class LifePlanRepository {
 
       const columns = this.client.database
         .prepare(
-          `SELECT id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_system, display_format
+          `SELECT id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, is_system, display_format
            FROM list_columns
            WHERE list_id = ?
            ORDER BY sort_order`
@@ -1003,8 +1640,8 @@ export class LifePlanRepository {
         columnMap.set(column.id, newColumnId)
         this.run(
           `INSERT INTO list_columns
-             (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, display_format, is_system, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, display_format, is_system, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newColumnId,
           newListId,
           column.name,
@@ -1013,6 +1650,8 @@ export class LifePlanRepository {
           column.is_required,
           column.max_length,
           column.is_summary_eligible,
+          column.is_list_summary_eligible,
+          column.is_board_summary_eligible,
           column.display_format,
           column.is_system,
           now,
@@ -1140,12 +1779,20 @@ export class LifePlanRepository {
       }
     })
 
-    return this.getActiveBoardSnapshot('admin')
+    return this.getBoardSnapshot(input.targetBoardId, 'admin')
   }
 
   createColumn(input: CreateColumnInput): BoardSnapshot {
     const resolvedName = input.name.trim() || 'New Column'
     this.assertColumnNameAllowed(input.listId, resolvedName)
+    const summarySelection = this.resolveColumnSummaryEligibility(
+      input.listId,
+      resolvedName,
+      input.type,
+      null,
+      false,
+      false
+    )
     const nextOrder = this.client.database
       .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM list_columns WHERE list_id = ?')
       .get<{ next_order: number }>(input.listId)?.next_order ?? 0
@@ -1157,7 +1804,8 @@ export class LifePlanRepository {
       nextOrder,
       false,
       null,
-      true,
+      summarySelection.list,
+      summarySelection.board,
       false,
       this.writeColumnDisplayFormat(
         null,
@@ -1169,18 +1817,19 @@ export class LifePlanRepository {
         input.showOnBoard ?? true
       )
     )
-    return this.getActiveBoardSnapshot('admin')
+    const boardId = this.client.database.prepare('SELECT board_id FROM lists WHERE id = ?').get<{ board_id: string }>(input.listId)?.board_id
+    return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   updateColumn(input: UpdateColumnInput): BoardSnapshot {
     const existing = this.client.database
       .prepare(
-        `SELECT c.name, c.display_format, c.list_id, l.list_type
-         FROM list_columns c
-         JOIN lists l ON l.id = c.list_id
-         WHERE c.id = ?`
+          `SELECT c.name, c.display_format, c.list_id, l.board_id, l.list_type
+          FROM list_columns c
+          JOIN lists l ON l.id = c.list_id
+          WHERE c.id = ?`
       )
-      .get<{ name: string; display_format: string | null; list_id: string; list_type: ListTemplateType }>(input.columnId)
+      .get<{ name: string; display_format: string | null; list_id: string; board_id: string; list_type: ListTemplateType }>(input.columnId)
     if (!existing) throw new Error('Column not found.')
     const existingFormat = this.readColumnDisplayFormat(existing?.display_format ?? null)
     const role = existingFormat.role
@@ -1195,6 +1844,15 @@ export class LifePlanRepository {
     const recurrenceDays = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrenceDays ?? existingFormat.recurrenceDays) : []
     const currencyCode = type === 'currency' ? normalizeCurrencyCode(input.currencyCode ?? existingFormat.currencyCode) : 'USD'
     const showOnBoard = input.showOnBoard ?? existingFormat.showOnBoard
+    const summarySelection = this.resolveColumnSummaryEligibility(
+      existing.list_id,
+      resolvedName,
+      type,
+      role,
+      input.listSummaryEligible,
+      input.boardSummaryEligible,
+      input.columnId
+    )
 
     this.run(
       `UPDATE list_columns
@@ -1203,14 +1861,18 @@ export class LifePlanRepository {
            is_required = ?,
            max_length = ?,
            is_summary_eligible = ?,
+           is_list_summary_eligible = ?,
+           is_board_summary_eligible = ?,
            display_format = ?,
            updated_at = ?
-       WHERE id = ?`,
+        WHERE id = ?`,
       resolvedName,
       type,
       input.required ? 1 : 0,
       input.maxLength,
-      input.summaryEligible ? 1 : 0,
+      summarySelection.list || summarySelection.board ? 1 : 0,
+      summarySelection.list ? 1 : 0,
+      summarySelection.board ? 1 : 0,
       this.writeColumnDisplayFormat(
         role,
         type === 'choice' ? (input.choiceConfig ?? defaultChoiceConfig(resolvedName, type)) : null,
@@ -1223,18 +1885,18 @@ export class LifePlanRepository {
       new Date().toISOString(),
       input.columnId
     )
-    return this.getActiveBoardSnapshot('admin')
+    return this.getBoardSnapshot(existing.board_id, 'admin')
   }
 
   deleteColumn(columnId: string): BoardSnapshot {
     const existing = this.client.database
       .prepare(
-        `SELECT c.list_id, c.name, l.list_type
+        `SELECT c.list_id, c.name, l.board_id, l.list_type
          FROM list_columns c
          JOIN lists l ON l.id = c.list_id
          WHERE c.id = ?`
       )
-      .get<{ list_id: string; name: string; list_type: ListTemplateType }>(columnId)
+      .get<{ list_id: string; name: string; board_id: string; list_type: ListTemplateType }>(columnId)
     if (existing && this.isProtectedBirthdayColumn(existing.list_type, existing.name)) {
       throw new Error(`"${existing.name}" is a protected Birthday Calendar field and cannot be deleted.`)
     }
@@ -1243,16 +1905,17 @@ export class LifePlanRepository {
       this.run("UPDATE lists SET sort_column_id = NULL, sort_direction = 'manual' WHERE sort_column_id = ?", columnId)
       this.run('DELETE FROM list_columns WHERE id = ?', columnId)
     })
-    return this.getActiveBoardSnapshot('admin')
+    return existing?.board_id ? this.getBoardSnapshot(existing.board_id, 'admin') : this.getActiveBoardSnapshot('admin')
   }
 
   createWidget(input: CreateWidgetInput): BoardSnapshot {
     const type = normalizeWidgetType(input.type)
+    const config = this.normalizeWidgetConfig(type, undefined)
     const now = new Date().toISOString()
     const next = this.client.database
       .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM board_widgets WHERE board_id = ?')
       .get<{ next_order: number }>(input.boardId)
-    const grid = this.findOpenWidgetSlot(input.boardId)
+    const grid = this.findOpenWidgetSlot(input.boardId, type, config)
     const displayEnabled = Boolean(grid)
     this.run(
       `INSERT INTO board_widgets
@@ -1268,7 +1931,7 @@ export class LifePlanRepository {
       displayEnabled ? grid?.w ?? 0 : 0,
       displayEnabled ? grid?.h ?? 0 : 0,
       displayEnabled ? 1 : 0,
-      JSON.stringify(this.normalizeWidgetConfig(type, undefined)),
+      JSON.stringify(config),
       now,
       now
     )
@@ -1282,7 +1945,14 @@ export class LifePlanRepository {
     if (!existing) throw new Error('Widget not found.')
 
     const type = normalizeWidgetType(input.type)
-    const grid = this.normalizeWidgetGrid(input.grid)
+    const config = this.normalizeWidgetConfig(type, input.config)
+    const requestedGrid = input.grid
+    const needsAutoPlacement =
+      input.displayEnabled &&
+      (requestedGrid.x < 1 || requestedGrid.y < 1 || requestedGrid.w < 1 || requestedGrid.h < 1)
+    const grid = needsAutoPlacement
+      ? this.findOpenWidgetSlot(existing.board_id, type, config) ?? this.normalizeWidgetGrid(input.grid, type, config)
+      : this.normalizeWidgetGrid(input.grid, type, config)
     if (input.displayEnabled) this.assertWidgetGridPlacement(existing.board_id, input.widgetId, grid)
     this.run(
       `UPDATE board_widgets
@@ -1303,11 +1973,62 @@ export class LifePlanRepository {
       input.displayEnabled ? grid.y : 0,
       input.displayEnabled ? grid.w : 0,
       input.displayEnabled ? grid.h : 0,
-      JSON.stringify(this.normalizeWidgetConfig(type, input.config)),
+      JSON.stringify(config),
       new Date().toISOString(),
       input.widgetId
     )
     return this.getBoardSnapshot(existing.board_id, 'admin')
+  }
+
+  updateWidgetLayouts(input: { widgetId: string; grid: BoardWidget['grid'] }[]): BoardSnapshot {
+    if (input.length === 0) throw new Error('No widget layout updates were provided.')
+
+    const uniqueIds = new Set(input.map((entry) => entry.widgetId))
+    if (uniqueIds.size !== input.length) throw new Error('Duplicate widget layout updates are not allowed.')
+
+    const widgetRows = input.map((entry) => {
+      const row = this.client.database
+        .prepare('SELECT id, board_id, widget_type, config_json FROM board_widgets WHERE id = ?')
+        .get<{ id: string; board_id: string; widget_type: WidgetType; config_json: string | null }>(entry.widgetId)
+      if (!row) throw new Error('Widget not found.')
+      return row
+    })
+
+    const boardId = widgetRows[0].board_id
+    if (widgetRows.some((row) => row.board_id !== boardId)) {
+      throw new Error('All updated widgets must belong to the same board.')
+    }
+
+    const normalized = input.map((entry) => {
+      const row = widgetRows.find((candidate) => candidate.id === entry.widgetId)
+      const type = normalizeWidgetType(row?.widget_type)
+      const config = this.normalizeWidgetConfig(type, row ? this.readWidgetConfig(type, row.config_json) : undefined)
+      return {
+        widgetId: entry.widgetId,
+        grid: this.normalizeWidgetGrid(entry.grid, type, config)
+      }
+    })
+
+    this.assertWidgetGridPlacementBatch(boardId, normalized)
+
+    this.transaction(() => {
+      const now = new Date().toISOString()
+      for (const entry of normalized) {
+        this.run(
+          `UPDATE board_widgets
+           SET grid_x = ?, grid_y = ?, grid_w = ?, grid_h = ?, display_enabled = 1, updated_at = ?
+           WHERE id = ?`,
+          entry.grid.x,
+          entry.grid.y,
+          entry.grid.w,
+          entry.grid.h,
+          now,
+          entry.widgetId
+        )
+      }
+    })
+
+    return this.getBoardSnapshot(boardId, 'admin')
   }
 
   deleteWidget(widgetId: string): BoardSnapshot {
@@ -1502,7 +2223,7 @@ export class LifePlanRepository {
 
     const rows = this.client.database
       .prepare(
-        `SELECT id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_system, display_format
+        `SELECT id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, is_system, display_format
          FROM list_columns
          WHERE list_id IN (${this.placeholders(listIds)})
          ORDER BY sort_order`
@@ -1520,7 +2241,8 @@ export class LifePlanRepository {
         order: row.sort_order,
         required: row.is_required === 1,
         maxLength: row.max_length,
-        summaryEligible: row.is_summary_eligible === 1,
+        listSummaryEligible: row.is_list_summary_eligible === 1,
+        boardSummaryEligible: row.is_board_summary_eligible === 1,
         system: row.is_system === 1,
         role: displayFormat.role,
         choiceConfig: displayFormat.choiceConfig,
@@ -1563,7 +2285,11 @@ export class LifePlanRepository {
     const listConfig = this.getListConfig(listIds)
 
     const byList = rows.reduce<Record<string, BoardItem[]>>((acc, row) => {
-      const activeValues = values[row.id] ?? publishedFallback[row.id] ?? {}
+      const activeValues = this.applyTemplateComputedValues(
+        listConfig[row.list_id]?.templateType,
+        columnsByList[row.list_id] ?? [],
+        values[row.id] ?? publishedFallback[row.id] ?? {}
+      )
       const displayCode = `${listConfig[row.list_id]?.code ?? 'L??'}-T${String(row.item_number).padStart(2, '0')}`
       const deadline = this.deadlineInfo(activeValues, listConfig[row.list_id])
 
@@ -1656,6 +2382,7 @@ export class LifePlanRepository {
     string,
     {
       code: string
+      templateType: ListTemplateType
       dueDateEnabled: boolean
       dueDateColumnId: string | null
       deadlineMandatory: boolean
@@ -1667,13 +2394,14 @@ export class LifePlanRepository {
 
     return this.client.database
       .prepare(
-        `SELECT id, code, due_date_enabled, due_date_column_id, deadline_mandatory, sort_column_id, sort_direction
+        `SELECT id, code, list_type, due_date_enabled, due_date_column_id, deadline_mandatory, sort_column_id, sort_direction
          FROM lists
          WHERE id IN (${this.placeholders(listIds)})`
       )
       .all<{
         id: string
         code: string
+        list_type: ListTemplateType
         due_date_enabled: number
         due_date_column_id: string | null
         deadline_mandatory: number
@@ -1683,11 +2411,12 @@ export class LifePlanRepository {
       .reduce<
         Record<
           string,
-          {
-            code: string
-            dueDateEnabled: boolean
-            dueDateColumnId: string | null
-            deadlineMandatory: boolean
+            {
+              code: string
+              templateType: ListTemplateType
+              dueDateEnabled: boolean
+              dueDateColumnId: string | null
+              deadlineMandatory: boolean
             sortColumnId: string | null
             sortDirection: ListSortDirection
           }
@@ -1695,6 +2424,7 @@ export class LifePlanRepository {
       >((acc, row) => {
         acc[row.id] = {
           code: row.code,
+          templateType: normalizeListTemplateType(row.list_type),
           dueDateEnabled: row.due_date_enabled === 1,
           dueDateColumnId: row.due_date_column_id,
           deadlineMandatory: row.deadline_mandatory === 1,
@@ -1716,7 +2446,7 @@ export class LifePlanRepository {
       .all<BottomSlotRow>(boardId)
 
     const bySlot = new Map(rows.map((row) => [row.slot_index, row]))
-    return [0, 1, 2, 3].map((slotIndex) => {
+    return [0, 1, 2, 3, 4].map((slotIndex) => {
       const row = bySlot.get(slotIndex)
       if (!row) {
         return {
@@ -1757,6 +2487,22 @@ export class LifePlanRepository {
 
     if (!list) return '0'
 
+    if (slot.aggregation_method === 'next_due') {
+      if (!slot.source_column_id) return 'No due date'
+      const datedItems = list.items
+        .map((item) => {
+          const raw = dateFieldString(item.values[slot.source_column_id ?? ''])
+          const date = raw ? this.deadlineDate(raw) : null
+          return date ? { item, date } : null
+        })
+        .filter((entry): entry is { item: BoardItem; date: Date } => entry !== null)
+        .sort((left, right) => left.date.getTime() - right.date.getTime())
+      if (datedItems.length === 0) return 'No due date'
+      const overdueCount = datedItems.filter((entry) => entry.item.isOverdue).length
+      if (overdueCount > 0) return `${overdueCount} overdue`
+      return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(datedItems[0].date)
+    }
+
     const total = list.items.reduce((sum, item) => {
       if (!slot.source_column_id) return sum
       const value = item.values[slot.source_column_id]
@@ -1767,6 +2513,43 @@ export class LifePlanRepository {
     return column?.type === 'currency'
       ? new Intl.NumberFormat(undefined, { style: 'currency', currency: column.currencyCode }).format(total)
       : String(total)
+  }
+
+  private resolveSummarySlots(boardId: string, providedSlots: UpdateSummarySlotsInput['slots']): Array<{
+    slotIndex: number
+    label: string
+    sourceListId: string | null
+    sourceColumnId: string | null
+    aggregationMethod: AggregationMethod
+  }> {
+    const board = this.client.database.prepare('SELECT id FROM boards WHERE id = ?').get<{ id: string }>(boardId)
+    if (!board) throw new Error('Board not found.')
+
+    const lists = this.getBoardSnapshot(boardId, 'admin').lists
+    const listsById = new Map(lists.map((list) => [list.id, list]))
+    return [0, 1, 2, 3, 4].map((slotIndex) => {
+      const provided = providedSlots.find((slot) => slot.slotIndex === slotIndex)
+      const label = provided?.label?.trim() || `Slot ${slotIndex + 1}`
+      const sourceListId = provided?.sourceListId ?? null
+      let sourceColumnId = provided?.sourceColumnId ?? null
+      let aggregationMethod = provided?.aggregationMethod ?? 'count'
+
+      if (!sourceListId) {
+        sourceColumnId = null
+        if (!['active_count', 'completed_count', 'count'].includes(aggregationMethod)) aggregationMethod = 'count'
+        return { slotIndex, label, sourceListId: null, sourceColumnId: null, aggregationMethod }
+      }
+
+      const list = listsById.get(sourceListId)
+      if (!list) throw new Error('Summary slot references an invalid list.')
+      if (!sourceColumnId) throw new Error('Summary slot needs a field selection.')
+      const column = list.columns.find((candidate) => candidate.id === sourceColumnId)
+      if (!column || !column.boardSummaryEligible) {
+        throw new Error('Summary slot references an invalid or unsupported field.')
+      }
+      aggregationMethod = this.inferBoardSummaryAggregation(column)
+      return { slotIndex, label, sourceListId, sourceColumnId, aggregationMethod }
+    })
   }
 
   private publishItems(itemIds: string[]): void {
@@ -2048,31 +2831,47 @@ export class LifePlanRepository {
 
   private ensureDeadlineColumn(listId: string, mandatory: boolean): string {
     const linked = this.client.database
-      .prepare('SELECT due_date_column_id FROM lists WHERE id = ?')
-      .get<{ due_date_column_id: string | null }>(listId)
-    const existing = linked?.due_date_column_id
-      ? { id: linked.due_date_column_id }
+      .prepare(
+        `SELECT c.id, c.name, c.display_format
+         FROM lists l
+         JOIN list_columns c ON c.id = l.due_date_column_id
+         WHERE l.id = ?`
+      )
+      .get<{ id: string; name: string; display_format: string | null }>(listId)
+    const existing = linked
+      ? linked
       : this.client.database
       .prepare(
-        `SELECT id
+        `SELECT id, name, display_format
          FROM list_columns
          WHERE list_id = ?
            AND display_format LIKE '%"role":"deadline"%'
          ORDER BY sort_order
          LIMIT 1`
       )
-      .get<{ id: string }>(listId)
+      .get<{ id: string; name: string; display_format: string | null }>(listId)
     if (existing) {
+      const existingFormat = this.readColumnDisplayFormat(existing.display_format)
+      const role = existingFormat.role === 'deadline' ? 'deadline' : null
       this.run(
         `UPDATE list_columns
-         SET name = 'Deadline',
-             column_type = 'date',
-             is_required = ?,
-             display_format = ?,
-             updated_at = ?
-        WHERE id = ?`,
+         SET name = ?,
+              column_type = 'date',
+              is_required = ?,
+              display_format = ?,
+              updated_at = ?
+         WHERE id = ?`,
+        role === 'deadline' ? 'Deadline' : existing.name,
         mandatory ? 1 : 0,
-        this.writeColumnDisplayFormat('deadline', null, 'datetime', 'none', [], undefined, true),
+        this.writeColumnDisplayFormat(
+          role,
+          null,
+          role === 'deadline' ? 'datetime' : existingFormat.dateDisplayFormat,
+          role === 'deadline' ? 'none' : existingFormat.recurrence,
+          role === 'deadline' ? [] : existingFormat.recurrenceDays,
+          undefined,
+          existingFormat.showOnBoard
+        ),
         new Date().toISOString(),
         existing.id
       )
@@ -2089,7 +2888,8 @@ export class LifePlanRepository {
       nextOrder,
       mandatory,
       null,
-      false,
+      true,
+      true,
       true,
       this.writeColumnDisplayFormat('deadline', null, 'datetime', 'none', [], undefined, true)
     )
@@ -2281,10 +3081,190 @@ export class LifePlanRepository {
     }
   }
 
+  private createTemplateList(listId: string, templateType: ListTemplateType): void {
+    const normalizedType = normalizeListTemplateType(templateType)
+    if (normalizedType === 'todo') return this.createTodoTemplate(listId)
+    if (normalizedType === 'shopping_list') return this.createShoppingListTemplate(listId)
+    if (normalizedType === 'wishlist') return this.createWishlistTemplate(listId)
+    if (normalizedType === 'health') return this.createHealthTemplate(listId)
+    if (normalizedType === 'trips_events') return this.createTripsEventsTemplate(listId)
+    if (normalizedType === 'birthday_calendar') return this.createBirthdayCalendarTemplate(listId)
+    this.createCustomListTemplate(listId)
+  }
+
   private createBirthdayCalendarTemplate(listId: string): void {
-    this.createSeedColumn(listId, 'Person Name', 'text', 0, true, 160, false, true)
-    this.createSeedColumn(listId, 'Birthday', 'date', 1, true, null, false, true, this.writeColumnDisplayFormat(null, null, 'date'))
-    this.createSeedColumn(listId, 'Birth Year', 'integer', 2, false, null, false, true)
+    this.createSeedColumn(listId, 'Name', 'text', 0, true, 160, false, false, true)
+    this.createSeedColumn(listId, 'Birthday', 'date', 1, true, null, false, false, true, this.writeColumnDisplayFormat(null, null, 'date'))
+    this.createSeedColumn(listId, 'Year of Birth', 'integer', 2, false, null, false, false, true)
+    this.createSeedColumn(listId, 'Location', 'text', 3, false, 120, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+  }
+
+  private createCustomListTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Item Name', 'text', 0, true, 120, false, false, true)
+  }
+
+  private createTodoTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Task', 'text', 0, true, 160, false, false, true)
+    this.createSeedColumn(listId, 'Details', 'text', 1, false, 500, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    const deadlineId = this.createSeedColumn(
+      listId,
+      'Deadline',
+      'date',
+      2,
+      false,
+      null,
+        false,
+        true,
+        true,
+      this.writeColumnDisplayFormat('deadline', null, 'datetime', 'none', [], undefined, true)
+    )
+    this.createSeedColumn(
+      listId,
+      'Priority',
+      'choice',
+      3,
+      false,
+      null,
+      false,
+      false,
+      false,
+      this.writeColumnDisplayFormat(null, choiceConfigFromLabels(DEFAULT_PRIORITY_OPTIONS), 'date', 'none', [], undefined, true)
+    )
+    this.createSeedColumn(listId, 'People', 'text', 4, false, 160, false, false, false)
+    this.createSeedColumn(listId, 'Location', 'text', 5, false, 160, false, false, false)
+    this.createSeedColumn(listId, 'Effort', 'decimal', 6, false, null, false, false, false)
+    this.createSeedColumn(listId, '% Done', 'integer', 7, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(listId, 'Comments', 'text', 8, false, 500, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.run(
+      `UPDATE lists
+       SET due_date_enabled = 1,
+           due_date_column_id = ?,
+           deadline_mandatory = 0,
+           updated_at = ?
+       WHERE id = ?`,
+      deadlineId,
+      new Date().toISOString(),
+      listId
+    )
+  }
+
+  private createShoppingListTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Product', 'text', 0, true, 160, false, false, true)
+    this.createSeedColumn(listId, 'Pieces', 'integer', 1, false, null, false, false, false)
+    this.createSeedColumn(listId, 'Store', 'text', 2, false, 120, false, false, false)
+    const neededById = this.createSeedColumn(
+      listId,
+      'Needed By',
+      'date',
+      3,
+      false,
+      null,
+        false,
+        true,
+        false,
+      this.writeColumnDisplayFormat(null, null, 'datetime', 'none', [], undefined, true)
+    )
+    this.createSeedColumn(listId, 'Price / pc', 'currency', 4, false, null, false, false, false)
+    this.createSeedColumn(listId, 'Cost', 'currency', 5, false, null, false, false, false)
+    this.createSeedColumn(listId, 'Link', 'hyperlink', 6, false, null, false, false, false)
+    this.run(
+      `UPDATE lists
+       SET due_date_enabled = 1,
+           due_date_column_id = ?,
+           deadline_mandatory = 0,
+           updated_at = ?
+       WHERE id = ?`,
+      neededById,
+      new Date().toISOString(),
+      listId
+    )
+  }
+
+  private createWishlistTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Product', 'text', 0, true, 160, false, false, true)
+    this.createSeedColumn(listId, 'Description', 'text', 1, false, 500, false, false, false)
+    this.createSeedColumn(listId, 'Link', 'hyperlink', 2, false, null, false, false, true)
+    this.createSeedColumn(
+      listId,
+      'Wishmeter',
+      'choice',
+      3,
+      false,
+      null,
+      false,
+      false,
+      false,
+      this.writeColumnDisplayFormat(null, choiceConfigFromLabels(WISHMETER_OPTIONS), 'date', 'none', [], undefined, true)
+    )
+  }
+
+  private createHealthTemplate(listId: string): void {
+    this.createSeedGroup(listId, 'Upcoming Check-ups', 0)
+    this.createSeedGroup(listId, 'Recurring Appointments', 1)
+    this.createSeedGroup(listId, 'Scheduled Investigations', 2)
+    this.createSeedGroup(listId, 'Treatment Plan', 3)
+    this.createSeedColumn(listId, 'Entry', 'text', 0, true, 160, false, false, true)
+    const appointmentId = this.createSeedColumn(
+      listId,
+      'Appointment Date',
+      'date',
+      1,
+      false,
+      null,
+        false,
+        true,
+        false,
+      this.writeColumnDisplayFormat(null, null, 'datetime', 'none', [], undefined, true)
+    )
+    this.createSeedColumn(
+      listId,
+      'Recurrence',
+      'date',
+      2,
+      false,
+      null,
+      false,
+      false,
+      false,
+      this.writeColumnDisplayFormat(null, null, 'time', 'daily', [], undefined, true)
+    )
+    this.createSeedColumn(listId, 'Frequency', 'text', 3, false, 120, false, false, false)
+    this.createSeedColumn(listId, 'Details', 'text', 4, false, 500, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.run(
+      `UPDATE lists
+       SET due_date_enabled = 1,
+           due_date_column_id = ?,
+           deadline_mandatory = 0,
+           updated_at = ?
+       WHERE id = ?`,
+      appointmentId,
+      new Date().toISOString(),
+      listId
+    )
+  }
+
+  private createTripsEventsTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Title', 'text', 0, true, 160, false, false, true)
+    this.createSeedColumn(listId, 'Type', 'text', 1, false, 120, false, false, false)
+    this.createSeedColumn(listId, 'Start', 'date', 2, false, null, false, true, false, this.writeColumnDisplayFormat(null, null, 'datetime', 'none', [], undefined, true))
+    this.createSeedColumn(listId, 'End', 'date', 3, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'datetime', 'none', [], undefined, true))
+    this.createSeedColumn(listId, 'Topic / Theme', 'text', 4, false, 160, false, false, false)
+    this.createSeedColumn(listId, 'Location', 'text', 5, false, 160, false, false, false)
+  }
+
+  private retemplateList(listId: string, templateType: ListTemplateType): void {
+    this.run('DELETE FROM list_columns WHERE list_id = ?', listId)
+    this.run(
+      `UPDATE lists
+       SET due_date_enabled = 0,
+           due_date_column_id = NULL,
+           deadline_mandatory = 0,
+           sort_column_id = NULL,
+           sort_direction = 'manual'
+       WHERE id = ?`,
+      listId
+    )
+    this.createTemplateList(listId, templateType)
   }
 
   private defaultWidgetName(type: WidgetType): string {
@@ -2332,7 +3312,8 @@ export class LifePlanRepository {
     order: number,
     required: boolean,
     maxLength: number | null,
-    summaryEligible: boolean,
+    listSummaryEligible: boolean,
+    boardSummaryEligible: boolean,
     system: boolean,
     displayFormat: string | null = null
   ): string {
@@ -2340,8 +3321,8 @@ export class LifePlanRepository {
     const now = new Date().toISOString()
     this.run(
       `INSERT INTO list_columns
-         (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, display_format, is_system, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, display_format, is_system, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       listId,
       name,
@@ -2349,9 +3330,39 @@ export class LifePlanRepository {
       order,
       required ? 1 : 0,
       maxLength,
-      summaryEligible ? 1 : 0,
+      listSummaryEligible || boardSummaryEligible ? 1 : 0,
+      listSummaryEligible ? 1 : 0,
+      boardSummaryEligible ? 1 : 0,
       displayFormat,
       system ? 1 : 0,
+      now,
+      now
+    )
+    return id
+  }
+
+  private createSeedGroup(listId: string, name: string, order: number, parentGroupId: string | null = null): string {
+    const existingCodes = this.client.database
+      .prepare('SELECT code FROM item_groups WHERE list_id = ?')
+      .all<{ code: string }>(listId)
+      .map((row) => row.code)
+    let index = order + 1
+    let code = `G${String(index).padStart(2, '0')}`
+    while (existingCodes.includes(code)) {
+      index += 1
+      code = `G${String(index).padStart(2, '0')}`
+    }
+    const id = randomUUID()
+    const now = new Date().toISOString()
+    this.run(
+      `INSERT INTO item_groups (id, list_id, parent_group_id, name, code, sort_order, display_config, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      id,
+      listId,
+      parentGroupId,
+      name,
+      code,
+      order,
       now,
       now
     )
@@ -2374,6 +3385,56 @@ export class LifePlanRepository {
 
   private isProtectedBirthdayColumn(listType: ListTemplateType, name: string): boolean {
     return normalizeListTemplateType(listType) === 'birthday_calendar' && BIRTHDAY_PROTECTED_COLUMN_NAMES.has(normalizeReservedColumnName(name))
+  }
+
+  private canRetemplateList(listId: string, currentTemplateType: ListTemplateType): boolean {
+    const itemCount = this.client.database.prepare('SELECT COUNT(*) AS count FROM items WHERE list_id = ?').get<{ count: number }>(listId)?.count ?? 0
+    const groupCount = this.client.database.prepare('SELECT COUNT(*) AS count FROM item_groups WHERE list_id = ?').get<{ count: number }>(listId)?.count ?? 0
+    if (itemCount > 0 || groupCount > 0) return false
+
+    const columns = this.client.database
+      .prepare('SELECT name FROM list_columns WHERE list_id = ? ORDER BY sort_order')
+      .all<{ name: string }>(listId)
+      .map((row) => normalizeReservedColumnName(row.name))
+
+    const normalizedType = normalizeListTemplateType(currentTemplateType)
+    const expected =
+      normalizedType === 'birthday_calendar'
+        ? ['name', 'birthday', 'year of birth', 'location']
+        : normalizedType === 'todo'
+          ? ['task', 'details', 'deadline', 'priority', 'people', 'location', 'effort', '% done', 'comments']
+          : normalizedType === 'shopping_list'
+            ? ['product', 'pieces', 'store', 'needed by', 'price / pc', 'cost', 'link']
+            : normalizedType === 'wishlist'
+              ? ['product', 'description', 'link', 'wishmeter']
+              : normalizedType === 'health'
+                ? ['entry', 'appointment date', 'recurrence', 'frequency', 'details']
+                : normalizedType === 'trips_events'
+                  ? ['title', 'type', 'start', 'end', 'topic / theme', 'location']
+                  : ['item name']
+
+    return columns.length === expected.length && columns.every((name, index) => name === expected[index])
+  }
+
+  private applyTemplateComputedValues(
+    templateType: ListTemplateType | undefined,
+    columns: ListColumn[],
+    values: Record<string, FieldValue>
+  ): Record<string, FieldValue> {
+    const normalizedType = normalizeListTemplateType(templateType)
+    if (normalizedType !== 'shopping_list') return values
+
+    const piecesColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'pieces')
+    const priceColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'price / pc')
+    const costColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'cost')
+    if (!piecesColumn || !priceColumn || !costColumn) return values
+
+    const pieces = Number(values[piecesColumn.id] ?? 0)
+    const price = Number(values[priceColumn.id] ?? 0)
+    return {
+      ...values,
+      [costColumn.id]: Number.isFinite(pieces) && Number.isFinite(price) ? Number((pieces * price).toFixed(2)) : 0
+    }
   }
 
   private validateItemValues(listId: string, incomingValues: Record<string, FieldValue>, itemId?: string): Record<string, FieldValue> {
@@ -2400,6 +3461,63 @@ export class LifePlanRepository {
     }
 
     return incomingValues
+  }
+
+  private resolveColumnSummaryEligibility(
+    listId: string,
+    name: string,
+    type: ColumnType,
+    role: ColumnRole | null,
+    requestedListSummary: boolean,
+    requestedBoardSummary: boolean,
+    columnId?: string
+  ): { list: boolean; board: boolean } {
+    const list = this.columnSupportsListSummary(name, type, role) && requestedListSummary
+    const board = this.columnSupportsBoardSummary(name, type, role) && requestedBoardSummary
+
+    if (list) this.assertSummaryColumnLimit(listId, 'list', columnId)
+    if (board) this.assertSummaryColumnLimit(listId, 'board', columnId)
+
+    return { list, board }
+  }
+
+  private assertSummaryColumnLimit(listId: string, scope: 'list' | 'board', columnId?: string): void {
+    const columnName = scope === 'list' ? 'is_list_summary_eligible' : 'is_board_summary_eligible'
+    const currentCount = this.client.database
+      .prepare(`SELECT COUNT(*) AS count FROM list_columns WHERE list_id = ? AND ${columnName} = 1 AND (? IS NULL OR id <> ?)`)
+      .get<{ count: number }>(listId, columnId ?? null, columnId ?? null)?.count ?? 0
+    const max = scope === 'list' ? MAX_LIST_SUMMARY_COLUMNS : MAX_BOARD_SUMMARY_COLUMNS
+    if (currentCount >= max) {
+      throw new Error(scope === 'list' ? `You can select at most ${MAX_LIST_SUMMARY_COLUMNS} list summary fields.` : `You can select at most ${MAX_BOARD_SUMMARY_COLUMNS} board summary fields.`)
+    }
+  }
+
+  private columnSupportsListSummary(
+    name: string,
+    type: ColumnType,
+    role: ColumnRole | null
+  ): boolean {
+    const normalizedName = normalizeReservedColumnName(name)
+    if (role === 'deadline') return true
+    if (type === 'text') return SUMMARY_COUNT_TEXT_COLUMNS.has(normalizedName)
+    if (type === 'currency') return normalizedName !== 'price / pc'
+    if (type === 'integer' || type === 'decimal') return !NON_SUMMARY_NUMERIC_COLUMNS.has(normalizedName)
+    if (type === 'date') return SUMMARY_DATE_COLUMNS.has(normalizedName)
+    return false
+  }
+
+  private columnSupportsBoardSummary(
+    name: string,
+    type: ColumnType,
+    role: ColumnRole | null
+  ): boolean {
+    const normalizedName = normalizeReservedColumnName(name)
+    if (role === 'deadline') return true
+    if (type === 'text') return SUMMARY_COUNT_TEXT_COLUMNS.has(normalizedName)
+    if (type === 'currency') return normalizedName !== 'price / pc'
+    if (type === 'integer' || type === 'decimal') return !NON_SUMMARY_NUMERIC_COLUMNS.has(normalizedName)
+    if (type === 'date') return SUMMARY_DATE_COLUMNS.has(normalizedName)
+    return false
   }
 
   private isMissingFieldValue(value: FieldValue | undefined): boolean {
@@ -2476,6 +3594,50 @@ export class LifePlanRepository {
     if (overlaps) throw new Error('This list overlaps another visible board element. Move or resize it first.')
   }
 
+  private assertListGridPlacementBatch(boardId: string, updates: Array<{ listId: string; grid: BoardList['grid'] }>): void {
+    const listRows = this.client.database
+      .prepare(
+        `SELECT id, grid_x, grid_y, grid_w, grid_h
+         FROM lists
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ id: string; grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+
+    const updateMap = new Map(updates.map((entry) => [entry.listId, entry.grid]))
+    const finalListGrids = listRows.map((row) => ({
+      id: row.id,
+      grid: updateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }
+    }))
+
+    for (const entry of finalListGrids) {
+      const { grid } = entry
+      const valid =
+        grid.x >= 1 && grid.y >= 1 && grid.w >= MIN_LIST_GRID_WIDTH && grid.h >= MIN_LIST_GRID_HEIGHT && grid.x + grid.w <= 17 && grid.y + grid.h <= 9
+      if (!valid) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+    }
+
+    for (let index = 0; index < finalListGrids.length; index += 1) {
+      const current = finalListGrids[index]
+      const overlapsList = finalListGrids.some(
+        (candidate, candidateIndex) => candidateIndex !== index && this.gridsOverlap(current.grid, candidate.grid)
+      )
+      if (overlapsList) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+      const overlapsWidget = widgetRows.some((row) =>
+        this.gridsOverlap(current.grid, { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h })
+      )
+      if (overlapsWidget) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+    }
+  }
+
   private assertWidgetGridPlacement(boardId: string, currentWidgetId: string, grid: BoardWidget['grid']): void {
     const listRows = this.client.database
       .prepare(
@@ -2498,6 +3660,118 @@ export class LifePlanRepository {
       .map((row) => ({ x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }))
       .some((candidate) => this.gridsOverlap(candidate, grid))
     if (overlaps) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+  }
+
+  private assertWidgetGridPlacementBatch(boardId: string, updates: Array<{ widgetId: string; grid: BoardWidget['grid'] }>): void {
+    const listRows = this.client.database
+      .prepare(
+        `SELECT grid_x, grid_y, grid_w, grid_h
+         FROM lists
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT id, grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ id: string; grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+
+    const updateMap = new Map(updates.map((entry) => [entry.widgetId, entry.grid]))
+    const finalWidgetGrids = widgetRows.map((row) => ({
+      id: row.id,
+      grid: updateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }
+    }))
+
+    for (const entry of finalWidgetGrids) {
+      const { grid } = entry
+      const valid =
+        grid.x >= 1 && grid.y >= 1 && grid.w >= MIN_WIDGET_GRID_WIDTH && grid.h >= MIN_WIDGET_GRID_HEIGHT && grid.x + grid.w <= 17 && grid.y + grid.h <= 9
+      if (!valid) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+    }
+
+    for (let index = 0; index < finalWidgetGrids.length; index += 1) {
+      const current = finalWidgetGrids[index]
+      const overlapsWidget = finalWidgetGrids.some(
+        (candidate, candidateIndex) => candidateIndex !== index && this.gridsOverlap(current.grid, candidate.grid)
+      )
+      if (overlapsWidget) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+      const overlapsList = listRows.some((row) =>
+        this.gridsOverlap(current.grid, { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h })
+      )
+      if (overlapsList) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+    }
+  }
+
+  private assertBoardLayoutPlacementBatch(
+    boardId: string,
+    listUpdates: Array<{ listId: string; grid: BoardList['grid'] }>,
+    widgetUpdates: Array<{ widgetId: string; grid: BoardWidget['grid'] }>
+  ): void {
+    const listRows = this.client.database
+      .prepare(
+        `SELECT id, grid_x, grid_y, grid_w, grid_h
+         FROM lists
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ id: string; grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+    const widgetRows = this.client.database
+      .prepare(
+        `SELECT id, grid_x, grid_y, grid_w, grid_h
+         FROM board_widgets
+         WHERE board_id = ?
+           AND display_enabled = 1`
+      )
+      .all<{ id: string; grid_x: number; grid_y: number; grid_w: number; grid_h: number }>(boardId)
+
+    const listUpdateMap = new Map(listUpdates.map((entry) => [entry.listId, entry.grid]))
+    const widgetUpdateMap = new Map(widgetUpdates.map((entry) => [entry.widgetId, entry.grid]))
+    const finalListGrids = listRows.map((row) => ({
+      id: row.id,
+      grid: listUpdateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }
+    }))
+    const finalWidgetGrids = widgetRows.map((row) => ({
+      id: row.id,
+      grid: widgetUpdateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }
+    }))
+
+    for (const entry of finalListGrids) {
+      const { grid } = entry
+      const valid =
+        grid.x >= 1 && grid.y >= 1 && grid.w >= MIN_LIST_GRID_WIDTH && grid.h >= MIN_LIST_GRID_HEIGHT && grid.x + grid.w <= 17 && grid.y + grid.h <= 9
+      if (!valid) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+    }
+
+    for (const entry of finalWidgetGrids) {
+      const { grid } = entry
+      const valid =
+        grid.x >= 1 && grid.y >= 1 && grid.w >= MIN_WIDGET_GRID_WIDTH && grid.h >= MIN_WIDGET_GRID_HEIGHT && grid.x + grid.w <= 17 && grid.y + grid.h <= 9
+      if (!valid) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+    }
+
+    for (let index = 0; index < finalListGrids.length; index += 1) {
+      const current = finalListGrids[index]
+      const overlapsList = finalListGrids.some(
+        (candidate, candidateIndex) => candidateIndex !== index && this.gridsOverlap(current.grid, candidate.grid)
+      )
+      if (overlapsList) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+      const overlapsWidget = finalWidgetGrids.some((candidate) => this.gridsOverlap(current.grid, candidate.grid))
+      if (overlapsWidget) throw new Error('This list overlaps another visible board element. Move or resize it first.')
+    }
+
+    for (let index = 0; index < finalWidgetGrids.length; index += 1) {
+      const current = finalWidgetGrids[index]
+      const overlapsWidget = finalWidgetGrids.some(
+        (candidate, candidateIndex) => candidateIndex !== index && this.gridsOverlap(current.grid, candidate.grid)
+      )
+      if (overlapsWidget) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+      const overlapsList = finalListGrids.some((candidate) => this.gridsOverlap(current.grid, candidate.grid))
+      if (overlapsList) throw new Error('This widget overlaps another visible board element. Move or resize it first.')
+    }
   }
 
   private createSeedItem(
@@ -2552,6 +3826,12 @@ export class LifePlanRepository {
       now,
       now
     )
+  }
+
+  private inferBoardSummaryAggregation(column: ListColumn): AggregationMethod {
+    if (column.role === 'deadline' || column.type === 'date') return 'next_due'
+    if (column.type === 'currency' || column.type === 'integer' || column.type === 'decimal') return 'sum'
+    return 'count'
   }
 
   private setDueDateColumn(listId: string, columnId: string): void {
@@ -2657,7 +3937,7 @@ export class LifePlanRepository {
     return null
   }
 
-  private findOpenWidgetSlot(boardId: string): BoardWidget['grid'] | null {
+  private findOpenWidgetSlot(boardId: string, type: WidgetType, config: BoardWidgetConfig): BoardWidget['grid'] | null {
     const listRows = this.client.database
       .prepare(
         `SELECT grid_x, grid_y, grid_w, grid_h
@@ -2678,9 +3958,12 @@ export class LifePlanRepository {
       .map((row) => ({ x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }))
       .filter((grid) => grid.x >= 1 && grid.y >= 1 && grid.w >= 1 && grid.h >= 1)
 
-    for (let y = 1; y <= 9 - MIN_WIDGET_GRID_HEIGHT; y += 1) {
-      for (let x = 1; x <= 17 - MIN_WIDGET_GRID_WIDTH; x += 1) {
-        const candidate = { x, y, w: MIN_WIDGET_GRID_WIDTH, h: MIN_WIDGET_GRID_HEIGHT }
+    const spec = this.widgetAspectSpec(type, config)
+    const candidateSize = this.widgetGridForScale(spec, spec.minScale)
+
+    for (let y = 1; y <= 9 - candidateSize.h; y += 1) {
+      for (let x = 1; x <= 17 - candidateSize.w; x += 1) {
+        const candidate = { x, y, ...candidateSize }
         if (!occupied.some((grid) => this.gridsOverlap(grid, candidate))) return candidate
       }
     }
@@ -2688,12 +3971,31 @@ export class LifePlanRepository {
     return null
   }
 
-  private normalizeWidgetGrid(grid: BoardWidget['grid']): BoardWidget['grid'] {
-    const w = this.clamp(grid.w, MIN_WIDGET_GRID_WIDTH, 16)
-    const h = this.clamp(grid.h, MIN_WIDGET_GRID_HEIGHT, 8)
+  private normalizeWidgetGrid(grid: BoardWidget['grid'], type: WidgetType, config: BoardWidgetConfig): BoardWidget['grid'] {
+    const spec = this.widgetAspectSpec(type, config)
+    const maxScale = Math.max(spec.minScale, Math.min(Math.floor(16 / spec.ratioW), Math.floor(8 / spec.ratioH)))
+    const desiredScale = Math.max(grid.w / spec.ratioW, grid.h / spec.ratioH)
+    const scale = this.clamp(Math.round(desiredScale), spec.minScale, maxScale)
+    const { w, h } = this.widgetGridForScale(spec, scale)
     const x = this.clamp(grid.x, 1, 17 - w)
     const y = this.clamp(grid.y, 1, 9 - h)
     return { x, y, w, h }
+  }
+
+  private widgetAspectSpec(type: WidgetType, config: BoardWidgetConfig): { ratioW: number; ratioH: number; minScale: number } {
+    if (type === 'word_of_day') return { ratioW: 3, ratioH: 2, minScale: 1 }
+    if (type === 'world_clocks') {
+      const count = this.clamp(config.worldClocks?.locations?.length ?? 1, 1, 5)
+      return { ratioW: count, ratioH: 1, minScale: 2 }
+    }
+    return { ratioW: 1, ratioH: 1, minScale: 2 }
+  }
+
+  private widgetGridForScale(spec: { ratioW: number; ratioH: number }, scale: number): Pick<BoardWidget['grid'], 'w' | 'h'> {
+    return {
+      w: spec.ratioW * scale,
+      h: spec.ratioH * scale
+    }
   }
 
   private gridsOverlap(a: BoardList['grid'], b: BoardList['grid']): boolean {

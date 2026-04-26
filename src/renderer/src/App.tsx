@@ -1,11 +1,14 @@
 import {
   AlarmClock,
   BookOpenText,
+  LayoutGrid,
+  List,
   Check,
   ChevronDown,
   ChevronRight,
   CloudSun,
   Clock3,
+  Copy,
   ExternalLink,
   Eye,
   EyeOff,
@@ -25,7 +28,9 @@ import {
 } from 'lucide-react'
 import { FormEvent, PointerEvent, useEffect, useRef, useState } from 'react'
 import type { Dispatch, ReactElement, SetStateAction } from 'react'
+import lplLogo from './assets/lpl_logo.png'
 import type {
+  AggregationMethod,
   AppSettings,
   AppTheme,
   BirthdayBoardView,
@@ -51,6 +56,7 @@ import type {
   ListTemplateType,
   ListSortDirection,
   RecurrenceMode,
+  SummarySlot,
   UpdateWidgetInput,
   WidgetType,
   WorldClockLocation
@@ -74,6 +80,30 @@ type ContextMenuState = {
   x: number
   y: number
   node: SelectedNode
+} | null
+
+type BoardRailMenuState = {
+  x: number
+  y: number
+  board: BoardSummary
+} | null
+
+type EditableSummarySlot = Omit<SummarySlot, 'value'>
+
+type ConfirmDialogState = {
+  title: string
+  message: string
+  confirmLabel?: string
+  destructive?: boolean
+  onConfirm: () => void | Promise<void>
+} | null
+
+type PromptDialogState = {
+  title: string
+  label: string
+  initialValue: string
+  confirmLabel?: string
+  onConfirm: (value: string) => void | Promise<void>
 } | null
 
 const columnTypes: ColumnType[] = ['text', 'integer', 'decimal', 'currency', 'date', 'boolean', 'choice', 'hyperlink']
@@ -112,9 +142,14 @@ const widgetTypes: Array<{ value: WidgetType; label: string; icon: typeof Clock3
   { value: 'world_clocks', label: 'World Clocks', icon: Globe2 },
   { value: 'countdown', label: 'Countdown', icon: AlarmClock }
 ]
-const listTemplateOptions: Array<{ value: ListTemplateType; label: string }> = [
-  { value: 'standard', label: 'Standard List' },
-  { value: 'birthday_calendar', label: 'Birthday Calendar' }
+const listTemplateOptions: Array<{ value: ListTemplateType; label: string; description: string }> = [
+  { value: 'todo', label: 'To Do', description: 'Tasks with deadlines, priority, people, effort, progress and comments.' },
+  { value: 'shopping_list', label: 'Shopping List', description: 'Products, pieces, store, needed-by date, price, calculated cost and link.' },
+  { value: 'wishlist', label: 'Wishlist', description: 'Desired products with links and a fun Wishmeter ranking.' },
+  { value: 'health', label: 'Health', description: 'One health list with check-ups, recurring appointments, investigations and treatment.' },
+  { value: 'trips_events', label: 'Trips & Events', description: 'Plans with start/end dates, type, topic and location.' },
+  { value: 'birthday_calendar', label: 'Birthday Calendar', description: 'Birthdays with turning age, location and gift-task action.' },
+  { value: 'custom', label: 'Build Custom List', description: 'Start with a single title field and shape the rest yourself.' }
 ]
 const birthdayBoardViewOptions: Array<{ value: BirthdayBoardView; label: string }> = [
   { value: 'this_week', label: 'This week' },
@@ -152,6 +187,7 @@ export function App(): ReactElement {
   const [displayState, setDisplayState] = useState<DisplayState | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments', theme: 'midnight_clear' })
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
+  const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const editingBoardId = useRef<string | null>(null)
 
@@ -194,7 +230,10 @@ export function App(): ReactElement {
       setAppSettings(nextAppSettings)
       return result
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Something went wrong.')
+      setMessageDialog({
+        title: 'Unable to complete action',
+        message: error instanceof Error ? error.message : 'Something went wrong.'
+      })
       return undefined
     } finally {
       setBusy(false)
@@ -245,6 +284,8 @@ export function App(): ReactElement {
 
   return (
     <AdminApp
+      globalMessageDialog={messageDialog}
+      setGlobalMessageDialog={setMessageDialog}
       boards={boards}
       busy={busy}
       displayState={displayState}
@@ -270,10 +311,12 @@ function AdminApp({
   boards,
   busy,
   displayState,
+  globalMessageDialog,
   previewSnapshot,
   runAction,
   onSelectBoard,
   selectedNode,
+  setGlobalMessageDialog,
   setSelectedNode,
   snapshot
 }: {
@@ -282,64 +325,70 @@ function AdminApp({
   boards: BoardSummary[]
   busy: boolean
   displayState: DisplayState | null
+  globalMessageDialog: { title: string; message: string } | null
   previewSnapshot: BoardSnapshot
   runAction: RunAction
   onSelectBoard: (boardId: string) => void
   selectedNode: SelectedNode
+  setGlobalMessageDialog: Dispatch<SetStateAction<{ title: string; message: string } | null>>
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
 }): ReactElement {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
-  const [newWidgetType, setNewWidgetType] = useState<WidgetType>('clock')
-  const [newListTemplateType, setNewListTemplateType] = useState<ListTemplateType>('standard')
+  const [boardMenu, setBoardMenu] = useState<BoardRailMenuState>(null)
+  const [boardDeleteDialog, setBoardDeleteDialog] = useState<BoardSummary | null>(null)
+  const [newListDialogOpen, setNewListDialogOpen] = useState(false)
   const allItems = snapshot.lists.flatMap((list) => list.items)
   const hasBoardChanges = allItems.some((item) => item.publicationStatus !== 'published')
 
   function closeMenu(): void {
     setContextMenu(null)
+    setBoardMenu(null)
   }
 
   return (
     <main className={`admin-shell ${appThemeClass}`} onClick={closeMenu}>
       <aside className="side-rail">
-        <h1 aria-label="Life Plan Lite" className="side-app-title">
-          <span className="cap-word">
-            <span className="cap-initial">L</span>
-            <span className="cap-rest">IFE</span>
-          </span>
-          <span className="cap-word">
-            <span className="cap-initial">P</span>
-            <span className="cap-rest">LAN</span>
-          </span>
-          <span className="cap-word">
-            <span className="cap-initial">L</span>
-            <span className="cap-rest">ITE</span>
-          </span>
-        </h1>
-        <div className="board-list">
-          {boards.map((board) => (
+        <div className="side-brand" aria-label="Life Plan Lite">
+          <img alt="Life Plan Lite" className="side-brand-image" src={lplLogo} />
+        </div>
+        <section className="side-board-section">
+          <p className="side-section-label">Available Boards</p>
+          <div className="board-list">
+            {boards.map((board) => (
+              <button
+                className={board.active ? 'nav-button active' : 'nav-button'}
+                disabled={busy}
+                key={board.id}
+                onClick={() => {
+                  onSelectBoard(board.id)
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setBoardMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    board
+                  })
+                }}
+              >
+                {board.name}
+              </button>
+            ))}
             <button
-              className={board.active ? 'nav-button active' : 'nav-button'}
+              className="icon-button wide"
               disabled={busy}
-              key={board.id}
-              onClick={() => {
-                onSelectBoard(board.id)
+              onClick={async () => {
+                const result = await runAction(() => window.lpl.createBoard({ name: 'New Board' }))
+                if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
               }}
             >
-              {board.name}
+              <Plus size={16} />
+              Add Board
             </button>
-          ))}
-          <button
-            className="icon-button wide"
-            onClick={async () => {
-              const result = await runAction(() => window.lpl.createBoard({ name: 'New Board' }))
-              if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
-            }}
-          >
-            <Plus size={16} />
-            Add Board
-          </button>
-        </div>
+          </div>
+        </section>
         <div className="side-actions">
           <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
           <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
@@ -369,22 +418,20 @@ function AdminApp({
         <div className="admin-content redesigned">
           <NavigationTree
             boards={boards}
-            newListTemplateType={newListTemplateType}
-            newWidgetType={newWidgetType}
+            onRequestNewList={() => setNewListDialogOpen(true)}
             onContextMenu={setContextMenu}
             runAction={runAction}
             selectedNode={selectedNode}
-            setNewListTemplateType={setNewListTemplateType}
-            setNewWidgetType={setNewWidgetType}
             setSelectedNode={setSelectedNode}
             snapshot={snapshot}
           />
 
           <section className="admin-workspace">
             <div className="workspace-edit">
-              <header className="workspace-heading">
-                <span className="workspace-heading-label">Currently Editing:</span>
-                <h3>{editorWorkspaceTitle(selectedNode, snapshot)}</h3>
+              <header className="pane-heading workspace-heading">
+                <div className="pane-heading-inline">
+                  <h3>Edit Panel</h3>
+                </div>
               </header>
               <PropertyEditor
                 allItems={allItems}
@@ -395,8 +442,6 @@ function AdminApp({
                 selectedNode={selectedNode}
                 setSelectedNode={setSelectedNode}
                 snapshot={snapshot}
-                listTemplateType={newListTemplateType}
-                widgetType={newWidgetType}
               />
             </div>
 
@@ -417,13 +462,119 @@ function AdminApp({
       {contextMenu && (
         <TreeContextMenu
           menu={contextMenu}
+          onRequestNewList={() => setNewListDialogOpen(true)}
           runAction={runAction}
           setSelectedNode={setSelectedNode}
           snapshot={snapshot}
           onClose={closeMenu}
         />
       )}
+      {boardMenu && (
+        <BoardRailContextMenu
+          board={boardMenu.board}
+          onClose={closeMenu}
+          onDuplicate={async () => {
+            const result = await runAction(() => window.lpl.duplicateBoard({ boardId: boardMenu.board.id }))
+            if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+            closeMenu()
+          }}
+          onDelete={() => {
+            setBoardDeleteDialog(boardMenu.board)
+            closeMenu()
+          }}
+          x={boardMenu.x}
+          y={boardMenu.y}
+        />
+      )}
+      {newListDialogOpen && (
+        <NewListTemplateModal
+          busy={busy}
+          onClose={() => setNewListDialogOpen(false)}
+          onSelect={async (templateType) => {
+            const result = await runAction(() =>
+              window.lpl.createList({
+                boardId: snapshot.id,
+                name: 'New List',
+                templateType
+              })
+            )
+            if (result && 'lists' in result) {
+              setSelectedNode({ kind: 'list', id: newestList(result)?.id ?? result.id })
+              setNewListDialogOpen(false)
+            }
+          }}
+        />
+      )}
+      {boardDeleteDialog && (
+        <DeleteBoardModal
+          board={boardDeleteDialog}
+          busy={busy}
+          onCancel={() => setBoardDeleteDialog(null)}
+          onConfirm={async () => {
+            const fallbackBoardId = boards.find((board) => board.id !== boardDeleteDialog.id)?.id ?? null
+            const keepBoardId = snapshot.id !== boardDeleteDialog.id ? snapshot.id : fallbackBoardId
+            const result = await runAction(() =>
+              window.lpl.deleteBoard({
+                boardId: boardDeleteDialog.id,
+                keepBoardId
+              })
+            )
+            if (result && 'lists' in result) {
+              setSelectedNode({ kind: 'board', id: result.id })
+              setBoardDeleteDialog(null)
+            }
+          }}
+        />
+      )}
+      {globalMessageDialog && (
+        <MessageModal
+          title={globalMessageDialog.title}
+          message={globalMessageDialog.message}
+          onClose={() => setGlobalMessageDialog(null)}
+        />
+      )}
     </main>
+  )
+}
+
+function BoardRailContextMenu({
+  board,
+  onClose,
+  onDuplicate,
+  onDelete,
+  x,
+  y
+}: {
+  board: BoardSummary
+  onClose: () => void
+  onDuplicate: () => void
+  onDelete: () => void
+  x: number
+  y: number
+}): ReactElement {
+  return (
+    <div className="context-menu" onClick={(event) => event.stopPropagation()} style={{ left: x, top: y }}>
+      <button
+        onClick={() => {
+          onDuplicate()
+        }}
+        type="button"
+      >
+        <Copy size={14} />
+        Duplicate Board
+      </button>
+      <button
+        className="danger-menu"
+        onClick={() => {
+          onDelete()
+          onClose()
+        }}
+        type="button"
+      >
+        <Trash2 size={14} />
+        Delete Board
+      </button>
+    </div>
   )
 }
 
@@ -535,29 +686,24 @@ function BoardVisibilityControl({
 
 function NavigationTree({
   boards,
-  newListTemplateType,
-  newWidgetType,
+  onRequestNewList,
   onContextMenu,
   runAction,
   selectedNode,
-  setNewListTemplateType,
-  setNewWidgetType,
   setSelectedNode,
   snapshot
 }: {
   boards: BoardSummary[]
-  newListTemplateType: ListTemplateType
-  newWidgetType: WidgetType
+  onRequestNewList: () => void
   onContextMenu: (menu: ContextMenuState) => void
   runAction: RunAction
   selectedNode: SelectedNode
-  setNewListTemplateType: Dispatch<SetStateAction<ListTemplateType>>
-  setNewWidgetType: Dispatch<SetStateAction<WidgetType>>
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
 }): ReactElement {
   const [expandedLists, setExpandedLists] = useState<Record<string, boolean>>({})
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null)
   const activeBoard = boards.find((board) => board.active)
 
   function openContext(event: React.MouseEvent, node: SelectedNode): void {
@@ -618,48 +764,32 @@ function NavigationTree({
       <header className="pane-heading">
         <div>
           <p className="tree-pane-title">Board Content Management</p>
-          <h3>Loaded Board: {snapshot.name}</h3>
+          <div className="pane-heading-inline tree-subheading">
+            <span className="pane-heading-label">Loaded Board:</span>
+            <h3 className="pane-heading-subject">{snapshot.name}</h3>
+          </div>
         </div>
         <div className="tree-header-actions">
-          <select className="mini-select" onChange={(event) => setNewListTemplateType(event.target.value as ListTemplateType)} value={newListTemplateType}>
-            {listTemplateOptions.map((template) => (
-              <option key={template.value} value={template.value}>
-                {template.label}
-              </option>
-            ))}
-          </select>
+          <button className="mini-button tree-action-button" onClick={() => setSelectedNode({ kind: 'board', id: snapshot.id })} type="button">
+            <SquarePen size={13} />
+            Edit Board
+          </button>
           <button
-            className="mini-button"
-            onClick={async () => {
-              const result = await runAction(() =>
-                window.lpl.createList({
-                  boardId: snapshot.id,
-                  name: newListTemplateType === 'birthday_calendar' ? 'Birthday Calendar' : 'New List',
-                  templateType: newListTemplateType
-                })
-              )
-              if (result && 'lists' in result) setSelectedNode({ kind: 'list', id: newestList(result)?.id ?? result.id })
-            }}
+            className="mini-button tree-action-button"
+            onClick={onRequestNewList}
             type="button"
           >
-            <Plus size={13} />
-            List
+            <List size={13} />
+            New List
           </button>
-          <select className="mini-select" onChange={(event) => setNewWidgetType(event.target.value as WidgetType)} value={newWidgetType}>
-            {widgetTypes.map((widgetType) => (
-              <option key={widgetType.value} value={widgetType.value}>
-                {widgetType.label}
-              </option>
-            ))}
-          </select>
           <button
-            className="mini-button"
+            className="mini-button tree-action-button"
             onClick={async () => {
               const result = await runAction(() =>
                 window.lpl.createWidget({
                   boardId: snapshot.id,
-                  type: newWidgetType,
-                  name: widgetTypes.find((entry) => entry.value === newWidgetType)?.label ?? 'Widget'
+                  type: 'clock',
+                  name: 'New Widget'
                 })
               )
               if (result && 'lists' in result) {
@@ -669,8 +799,8 @@ function NavigationTree({
             }}
             type="button"
           >
-            <Plus size={13} />
-            Widget
+            <LayoutGrid size={13} />
+            New Widget
           </button>
         </div>
       </header>
@@ -683,13 +813,14 @@ function NavigationTree({
             <p>The active board is {activeBoard?.name ?? 'not set'}.</p>
             <button
               onClick={() => {
-                if (
-                  window.confirm(
-                    `You are about to make ${snapshot.name} the active board, replacing ${activeBoard?.name ?? 'the current active board'}; Proceed?`
-                  )
-                ) {
-                  runAction(() => window.lpl.setActiveBoard(snapshot.id))
-                }
+                setConfirmDialog({
+                  title: 'Make Board Active',
+                  message: `You are about to make ${snapshot.name} the active board, replacing ${activeBoard?.name ?? 'the current active board'}. Proceed?`,
+                  confirmLabel: 'Make Active',
+                  onConfirm: async () => {
+                    await runAction(() => window.lpl.setActiveBoard(snapshot.id))
+                  }
+                })
               }}
               type="button"
             >
@@ -700,60 +831,85 @@ function NavigationTree({
         <p className="list-section-label">Lists in this board:</p>
       </div>
 
-      <div className="tree-children">
-        {snapshot.lists.map((list) => {
-          const expanded = expandedLists[list.id] ?? true
-          return (
-            <div className="tree-group list-tree-card" key={list.id}>
-              <button
-                className={nodeClass(selectedNode, { kind: 'list', id: list.id })}
-                onClick={() => setSelectedNode({ kind: 'list', id: list.id })}
-                onContextMenu={(event) => openContext(event, { kind: 'list', id: list.id })}
-              >
-                <span
-                  className="tree-expander"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    setExpandedLists((current) => ({ ...current, [list.id]: !expanded }))
-                  }}
-                >
-                  {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                </span>
-                <span>{list.name}: {list.items.length} open items</span>
-                {list.dueDateEnabled && nextDueLabel(list)}
-              </button>
-              {expanded && (
-                <div className="tree-children groups">
-                  {list.groups.filter((group) => !group.parentGroupId).map((group) => renderGroupNode(group, list))}
-                  <div className="tree-children items root-items">{list.items.filter((item) => !item.groupId).map((item) => itemNode(item, list))}</div>
+      <div className="tree-pane-main">
+        <div className="tree-list-scroll">
+          <div className="tree-children">
+            {snapshot.lists.map((list) => {
+              const expanded = expandedLists[list.id] ?? true
+              return (
+                <div className="tree-group list-tree-card" key={list.id}>
+                  <button
+                    className={nodeClass(selectedNode, { kind: 'list', id: list.id })}
+                    onClick={() => setSelectedNode({ kind: 'list', id: list.id })}
+                    onContextMenu={(event) => openContext(event, { kind: 'list', id: list.id })}
+                  >
+                    <span
+                      className="tree-expander"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setExpandedLists((current) => ({ ...current, [list.id]: !expanded }))
+                      }}
+                    >
+                      {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
+                    <span>
+                      {list.name}: {list.items.length} open items
+                    </span>
+                    {list.dueDateEnabled && nextDueLabel(list)}
+                  </button>
+                  {expanded && (
+                    <div className="tree-children groups">
+                      {list.groups.filter((group) => !group.parentGroupId).map((group) => renderGroupNode(group, list))}
+                      <div className="tree-children items root-items">{list.items.filter((item) => !item.groupId).map((item) => itemNode(item, list))}</div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          )
-        })}
-
-        <p className="list-section-label widget-section-label">Widgets in this board:</p>
-        <div className="tree-widget-grid">
-          {snapshot.widgets.map((widget) => {
-            const widgetMeta = widgetTypes.find((entry) => entry.value === widget.type)
-            const WidgetIcon = widgetMeta?.icon ?? Clock3
-            return (
-              <button
-                className={nodeClass(selectedNode, { kind: 'widget', id: widget.id })}
-                key={widget.id}
-                onClick={() => setSelectedNode({ kind: 'widget', id: widget.id })}
-                onContextMenu={(event) => openContext(event, { kind: 'widget', id: widget.id })}
-              >
-                <span className="widget-node-label">
-                  <WidgetIcon size={14} />
-                  {widget.name}
-                </span>
-                <small>{widgetMeta?.label ?? 'Widget'}</small>
-              </button>
-            )
-          })}
+              )
+            })}
+          </div>
+        </div>
+        <div className="tree-widget-section-header">
+          <span className="tree-widget-divider" />
+          <p className="list-section-label widget-section-label">Widgets in this board:</p>
+          <span className="tree-widget-divider" />
+        </div>
+        <div className="tree-widget-scroll">
+          <div className="tree-widget-grid">
+            {snapshot.widgets.map((widget) => {
+              const widgetMeta = widgetTypes.find((entry) => entry.value === widget.type)
+              const WidgetIcon = widgetMeta?.icon ?? Clock3
+              return (
+                <button
+                  className={nodeClass(selectedNode, { kind: 'widget', id: widget.id })}
+                  key={widget.id}
+                  onClick={() => setSelectedNode({ kind: 'widget', id: widget.id })}
+                  onContextMenu={(event) => openContext(event, { kind: 'widget', id: widget.id })}
+                >
+                  <span className="widget-node-label">
+                    <WidgetIcon size={14} />
+                    {widget.name}
+                  </span>
+                  <small>{widgetMeta?.label ?? 'Widget'}</small>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
+      {confirmDialog && (
+        <ConfirmActionModal
+          busy={false}
+          confirmLabel={confirmDialog.confirmLabel}
+          destructive={confirmDialog.destructive}
+          message={confirmDialog.message}
+          onCancel={() => setConfirmDialog(null)}
+          onConfirm={async () => {
+            await confirmDialog.onConfirm()
+            setConfirmDialog(null)
+          }}
+          title={confirmDialog.title}
+        />
+      )}
     </nav>
   )
 }
@@ -761,12 +917,14 @@ function NavigationTree({
 function TreeContextMenu({
   menu,
   onClose,
+  onRequestNewList,
   runAction,
   setSelectedNode,
   snapshot
 }: {
   menu: NonNullable<ContextMenuState>
   onClose: () => void
+  onRequestNewList: () => void
   runAction: RunAction
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
@@ -779,11 +937,14 @@ function TreeContextMenu({
     menu.node.kind === 'item' ? snapshot.lists.flatMap((list) => list.items).find((item) => item.id === menu.node.id) : null
   const itemList = nodeItem ? snapshot.lists.find((list) => list.id === nodeItem.listId) : null
   const nodeWidget = menu.node.kind === 'widget' ? snapshot.widgets.find((widget) => widget.id === menu.node.id) : null
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null)
+  const [promptDialog, setPromptDialog] = useState<PromptDialogState>(null)
 
   async function addChild(): Promise<void> {
     if (menu.node.kind === 'board') {
-      const result = await runAction(() => window.lpl.createList({ boardId: snapshot.id, name: 'New List' }))
-      if (result && 'lists' in result) setSelectedNode({ kind: 'list', id: newestList(result)?.id ?? result.id })
+      onRequestNewList()
+      onClose()
+      return
     }
     if (menu.node.kind === 'list' && nodeList) {
       const result = await runAction(() => window.lpl.createGroup({ listId: nodeList.id, name: 'New Group' }))
@@ -797,7 +958,7 @@ function TreeContextMenu({
         window.lpl.createItem({
           listId: groupList.id,
           groupId: nodeGroup.id,
-          values: blankValues(visibleColumns(groupList)),
+          values: blankValues(editableItemColumns(groupList)),
           dependencyItemIds: []
         })
       )
@@ -811,102 +972,191 @@ function TreeContextMenu({
 
   async function rename(): Promise<void> {
     if (menu.node.kind === 'board') {
-      const name = window.prompt('Board name', snapshot.name)
-      if (name)
-        await runAction(() =>
-          window.lpl.updateBoard({ boardId: snapshot.id, name, description: snapshot.description, owner: snapshot.owner })
-        )
+      setPromptDialog({
+        title: 'Rename Board',
+        label: 'Board name',
+        initialValue: snapshot.name,
+        confirmLabel: 'Save Name',
+        onConfirm: async (name) => {
+          await runAction(() =>
+            window.lpl.updateBoard({ boardId: snapshot.id, name, description: snapshot.description, owner: snapshot.owner })
+          )
+        }
+      })
     }
     if (menu.node.kind === 'list' && nodeList) {
-      const name = window.prompt('List name', nodeList.name)
-      if (name) await runAction(() => window.lpl.updateList({ ...listInput(nodeList), name }))
+      setPromptDialog({
+        title: 'Rename List',
+        label: 'List name',
+        initialValue: nodeList.name,
+        confirmLabel: 'Save Name',
+        onConfirm: async (name) => {
+          await runAction(() => window.lpl.updateList({ ...listInput(nodeList), name }))
+        }
+      })
     }
     if (nodeGroup) {
-      const name = window.prompt('Group name', nodeGroup.name)
-      if (name)
-        await runAction(() =>
-          window.lpl.updateGroup({
-            groupId: nodeGroup.id,
-            parentGroupId: nodeGroup.parentGroupId,
-            name,
-            showIdOnBoard: nodeGroup.showIdOnBoard,
-            summaries: nodeGroup.summaries
-          })
-        )
+      setPromptDialog({
+        title: 'Rename Group',
+        label: 'Group name',
+        initialValue: nodeGroup.name,
+        confirmLabel: 'Save Name',
+        onConfirm: async (name) => {
+          await runAction(() =>
+            window.lpl.updateGroup({
+              groupId: nodeGroup.id,
+              parentGroupId: nodeGroup.parentGroupId,
+              name,
+              showIdOnBoard: nodeGroup.showIdOnBoard,
+              summaries: nodeGroup.summaries
+            })
+          )
+        }
+      })
     }
     if (nodeItem && itemList) {
       const nameColumn = visibleColumns(itemList)[0]
-      const name = window.prompt('Item name', String(nodeItem.values[nameColumn.id] ?? ''))
-      if (name) {
-        await runAction(() =>
-          window.lpl.updateItem({
-            itemId: nodeItem.id,
-            groupId: nodeItem.groupId,
-            values: { ...nodeItem.values, [nameColumn.id]: name },
-            dependencyItemIds: nodeItem.dependencyItemIds
-          })
-        )
-      }
+      setPromptDialog({
+        title: 'Rename Item',
+        label: 'Item name',
+        initialValue: String(nodeItem.values[nameColumn.id] ?? ''),
+        confirmLabel: 'Save Name',
+        onConfirm: async (name) => {
+          await runAction(() =>
+            window.lpl.updateItem({
+              itemId: nodeItem.id,
+              groupId: nodeItem.groupId,
+              values: { ...nodeItem.values, [nameColumn.id]: name },
+              dependencyItemIds: nodeItem.dependencyItemIds
+            })
+          )
+        }
+      })
     }
     if (nodeWidget) {
-      const name = window.prompt('Widget name', nodeWidget.name)
-      if (name) {
-        await runAction(() =>
-          window.lpl.updateWidget({
-            widgetId: nodeWidget.id,
-            type: nodeWidget.type,
-            name,
-            displayEnabled: nodeWidget.displayEnabled,
-            grid: nodeWidget.grid,
-            config: nodeWidget.config
-          })
-        )
-      }
+      setPromptDialog({
+        title: 'Rename Widget',
+        label: 'Widget name',
+        initialValue: nodeWidget.name,
+        confirmLabel: 'Save Name',
+        onConfirm: async (name) => {
+          await runAction(() =>
+            window.lpl.updateWidget({
+              widgetId: nodeWidget.id,
+              type: nodeWidget.type,
+              name,
+              displayEnabled: nodeWidget.displayEnabled,
+              grid: nodeWidget.grid,
+              config: nodeWidget.config
+            })
+          )
+        }
+      })
     }
   }
 
   async function deleteNode(): Promise<void> {
-    if (menu.node.kind === 'list' && nodeList && window.confirm(`Delete "${nodeList.name}" and all child items?`)) {
-      await runAction(() => window.lpl.deleteList(nodeList.id))
-      setSelectedNode({ kind: 'board', id: snapshot.id })
+    if (menu.node.kind === 'list' && nodeList) {
+      setConfirmDialog({
+        title: 'Delete List',
+        message: `Delete "${nodeList.name}" and all child items?`,
+        confirmLabel: 'Delete List',
+        destructive: true,
+        onConfirm: async () => {
+          await runAction(() => window.lpl.deleteList(nodeList.id))
+          setSelectedNode({ kind: 'board', id: snapshot.id })
+        }
+      })
     }
-    if (nodeGroup && window.confirm(`Delete "${nodeGroup.name}"? Child tasks will be moved back to the list root.`)) {
-      await runAction(() => window.lpl.deleteGroup(nodeGroup.id))
-      setSelectedNode(groupList ? { kind: 'list', id: groupList.id } : { kind: 'board', id: snapshot.id })
+    if (nodeGroup) {
+      setConfirmDialog({
+        title: 'Delete Group',
+        message: `Delete "${nodeGroup.name}"? Child tasks will be moved back to the list root.`,
+        confirmLabel: 'Delete Group',
+        destructive: true,
+        onConfirm: async () => {
+          await runAction(() => window.lpl.deleteGroup(nodeGroup.id))
+          setSelectedNode(groupList ? { kind: 'list', id: groupList.id } : { kind: 'board', id: snapshot.id })
+        }
+      })
     }
-    if (nodeItem && window.confirm(`Delete "${nodeItem.displayCode}"?`)) {
-      await runAction(() => window.lpl.deleteItem(nodeItem.id))
-      setSelectedNode(itemList ? { kind: 'list', id: itemList.id } : { kind: 'board', id: snapshot.id })
+    if (nodeItem) {
+      setConfirmDialog({
+        title: 'Delete Item',
+        message: `Delete "${nodeItem.displayCode}"?`,
+        confirmLabel: 'Delete Item',
+        destructive: true,
+        onConfirm: async () => {
+          await runAction(() => window.lpl.deleteItem(nodeItem.id))
+          setSelectedNode(itemList ? { kind: 'list', id: itemList.id } : { kind: 'board', id: snapshot.id })
+        }
+      })
     }
-    if (nodeWidget && window.confirm(`Delete "${nodeWidget.name}"?`)) {
-      await runAction(() => window.lpl.deleteWidget(nodeWidget.id))
-      setSelectedNode({ kind: 'board', id: snapshot.id })
+    if (nodeWidget) {
+      setConfirmDialog({
+        title: 'Delete Widget',
+        message: `Delete "${nodeWidget.name}"?`,
+        confirmLabel: 'Delete Widget',
+        destructive: true,
+        onConfirm: async () => {
+          await runAction(() => window.lpl.deleteWidget(nodeWidget.id))
+          setSelectedNode({ kind: 'board', id: snapshot.id })
+        }
+      })
     }
   }
 
   return (
-    <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
-      {menu.node.kind !== 'item' && menu.node.kind !== 'widget' && (
-        <button onClick={addChild}>
-          <Plus size={14} />
-          {menu.node.kind === 'board' ? 'Add New List' : menu.node.kind === 'list' ? 'Add New Group' : 'Add New Item'}
+    <>
+      <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
+        {menu.node.kind !== 'item' && menu.node.kind !== 'widget' && (
+          <button onClick={addChild}>
+            <Plus size={14} />
+            {menu.node.kind === 'board' ? 'Add New List' : menu.node.kind === 'list' ? 'Add New Group' : 'Add New Item'}
+          </button>
+        )}
+        <button onClick={rename}>
+          <Pencil size={14} />
+          Rename
         </button>
+        {menu.node.kind !== 'board' && (
+          <button className="danger-menu" onClick={deleteNode}>
+            <Trash2 size={14} />
+            Delete
+          </button>
+        )}
+      </div>
+      {promptDialog && (
+        <PromptModal
+          busy={false}
+          confirmLabel={promptDialog.confirmLabel}
+          initialValue={promptDialog.initialValue}
+          label={promptDialog.label}
+          onCancel={() => setPromptDialog(null)}
+          onConfirm={async (value) => {
+            await promptDialog.onConfirm(value)
+            setPromptDialog(null)
+            onClose()
+          }}
+          title={promptDialog.title}
+        />
       )}
-      <button onClick={() => setSelectedNode(menu.node)}>
-        <Pencil size={14} />
-        Edit
-      </button>
-      <button onClick={rename}>
-        <Pencil size={14} />
-        Rename
-      </button>
-      {menu.node.kind !== 'board' && (
-        <button className="danger-menu" onClick={deleteNode}>
-          <Trash2 size={14} />
-          Delete
-        </button>
+      {confirmDialog && (
+        <ConfirmActionModal
+          busy={false}
+          confirmLabel={confirmDialog.confirmLabel}
+          destructive={confirmDialog.destructive}
+          message={confirmDialog.message}
+          onCancel={() => setConfirmDialog(null)}
+          onConfirm={async () => {
+            await confirmDialog.onConfirm()
+            setConfirmDialog(null)
+            onClose()
+          }}
+          title={confirmDialog.title}
+        />
       )}
-    </div>
+    </>
   )
 }
 
@@ -915,24 +1165,21 @@ function PropertyEditor({
   appSettings,
   boards,
   busy,
-  listTemplateType,
   runAction,
   selectedNode,
   setSelectedNode,
-  snapshot,
-  widgetType
+  snapshot
 }: {
   allItems: BoardItem[]
   appSettings: AppSettings
   boards: BoardSummary[]
   busy: boolean
-  listTemplateType: ListTemplateType
   runAction: RunAction
   selectedNode: SelectedNode
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
-  widgetType: WidgetType
 }): ReactElement {
+  const context = editorWorkspaceContext(selectedNode, snapshot)
   const selectedList =
     selectedNode.kind === 'list'
       ? snapshot.lists.find((list) => list.id === selectedNode.id)
@@ -947,168 +1194,312 @@ function PropertyEditor({
 
   return (
     <section className="property-pane">
-      {selectedNode.kind === 'board' && (
-        <BoardEditor
-          key={snapshot.id}
-          listTemplateType={listTemplateType}
-          runAction={runAction}
-          setSelectedNode={setSelectedNode}
-          snapshot={snapshot}
-          widgetType={widgetType}
-        />
-      )}
-      {selectedNode.kind === 'list' && selectedList && (
-        <ListEditorPanel
-          boards={boards}
-          key={selectedList.id}
-          list={selectedList}
-          runAction={runAction}
-          setSelectedNode={setSelectedNode}
-          snapshot={snapshot}
-        />
-      )}
-      {selectedNode.kind === 'group' && selectedGroup && selectedList && (
-        <GroupEditorPanel group={selectedGroup} key={selectedGroup.id} list={selectedList} runAction={runAction} setSelectedNode={setSelectedNode} />
-      )}
-      {selectedNode.kind === 'item' && selectedItem && selectedList && appSettings && (
-        <ItemEditorPanel
-          allItems={allItems}
-          appSettings={appSettings}
-          busy={busy}
-          item={selectedItem}
-          key={selectedItem.id}
-          list={selectedList}
-          runAction={runAction}
-        />
-      )}
-      {selectedNode.kind === 'widget' && selectedWidget && (
-        <WidgetEditorPanel key={selectedWidget.id} runAction={runAction} setSelectedNode={setSelectedNode} snapshot={snapshot} widget={selectedWidget} />
-      )}
+      <div className="editor-context-bar">
+        <div className="editor-context-inline">
+          <span className="editor-context-label">{context.label}</span>
+          <strong className="editor-context-subject">{context.subject}</strong>
+        </div>
+      </div>
+      <div className="property-pane-body">
+        {selectedNode.kind === 'board' && (
+          <BoardEditor
+            key={snapshot.id}
+            onDuplicate={async () => {
+              const result = await runAction(() => window.lpl.duplicateBoard({ boardId: snapshot.id }))
+              if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+            }}
+            runAction={runAction}
+            snapshot={snapshot}
+          />
+        )}
+        {selectedNode.kind === 'list' && selectedList && (
+          <ListEditorPanel
+            allItems={allItems}
+            busy={busy}
+            boards={boards}
+            key={selectedList.id}
+            list={selectedList}
+            runAction={runAction}
+            setSelectedNode={setSelectedNode}
+            snapshot={snapshot}
+          />
+        )}
+        {selectedNode.kind === 'group' && selectedGroup && selectedList && (
+          <GroupEditorPanel
+            allItems={allItems}
+            busy={busy}
+            group={selectedGroup}
+            key={selectedGroup.id}
+            list={selectedList}
+            runAction={runAction}
+            setSelectedNode={setSelectedNode}
+            snapshot={snapshot}
+          />
+        )}
+        {selectedNode.kind === 'item' && selectedItem && selectedList && appSettings && (
+          <ItemEditorPanel
+            appSettings={appSettings}
+            busy={busy}
+            item={selectedItem}
+            key={selectedItem.id}
+            list={selectedList}
+            runAction={runAction}
+            snapshot={snapshot}
+          />
+        )}
+        {selectedNode.kind === 'widget' && selectedWidget && (
+          <WidgetEditorPanel key={selectedWidget.id} runAction={runAction} setSelectedNode={setSelectedNode} snapshot={snapshot} widget={selectedWidget} />
+        )}
+      </div>
     </section>
   )
 }
 
 function BoardEditor({
-  listTemplateType,
+  onDuplicate,
   runAction,
-  setSelectedNode,
-  snapshot,
-  widgetType
+  snapshot
 }: {
-  listTemplateType: ListTemplateType
+  onDuplicate: () => void | Promise<void>
   runAction: RunAction
-  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
-  widgetType: WidgetType
 }): ReactElement {
   const [name, setName] = useState(snapshot.name)
   const [description, setDescription] = useState(snapshot.description)
   const [owner, setOwner] = useState(snapshot.owner)
+  const [activeTab, setActiveTab] = useState<'properties' | 'summary'>('properties')
+  const [summarySlots, setSummarySlots] = useState<EditableSummarySlot[]>(
+    snapshot.summarySlots.map(({ value: _value, ...slot }) => slot)
+  )
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null)
 
   useEffect(() => {
     setName(snapshot.name)
     setDescription(snapshot.description)
     setOwner(snapshot.owner)
-  }, [snapshot.id])
+    setSummarySlots(snapshot.summarySlots.map(({ value: _value, ...slot }) => slot))
+    setActiveTab('properties')
+  }, [snapshot.id, snapshot.summarySlots])
+
+  const summaryLists = snapshot.lists.filter((list) => list.columns.some((column) => column.boardSummaryEligible))
+
+  function setSlot(slotIndex: number, updater: (slot: EditableSummarySlot) => EditableSummarySlot): void {
+    setSummarySlots((current) => current.map((slot) => (slot.slotIndex === slotIndex ? updater(slot) : slot)))
+  }
+
+  function eligibleBoardSummaryColumns(listId: string | null): ListColumn[] {
+    if (!listId) return []
+    const list = snapshot.lists.find((candidate) => candidate.id === listId)
+    return list ? visibleColumns(list).filter((column) => column.boardSummaryEligible) : []
+  }
+
+  function sourceSelectionValue(slot: EditableSummarySlot): string {
+    if (slot.aggregationMethod === 'active_count') return '__board_active__'
+    if (slot.aggregationMethod === 'completed_count') return '__board_archived__'
+    return slot.sourceListId ?? ''
+  }
 
   function submit(event: FormEvent): void {
     event.preventDefault()
-    runAction(() => window.lpl.updateBoard({ boardId: snapshot.id, name, description, owner }))
+    runAction(async () => {
+      return window.lpl.updateBoard({ boardId: snapshot.id, name, description, owner, summarySlots })
+    })
   }
 
   return (
-    <form className="editor-card" onSubmit={submit}>
-      <EditorHeading eyebrow="Board" title={snapshot.name} />
-      <div className="field-grid two">
-        <label>
-          <span>Board name</span>
-          <input onChange={(event) => setName(event.target.value)} required value={name} />
-        </label>
-        <label>
-          <span>Owner</span>
-          <input onChange={(event) => setOwner(event.target.value)} value={owner} />
-        </label>
-        <label className="wide-field">
-          <span>Description</span>
-          <input onChange={(event) => setDescription(event.target.value)} value={description} />
-        </label>
-        <label className="radio-field">
-          <input
-            checked={snapshot.active}
-            onChange={() => {
-              if (!snapshot.active && window.confirm('This will become the displayed board now. Continue?')) {
-                runAction(() => window.lpl.setActiveBoard(snapshot.id))
-              }
-            }}
-            type="radio"
-          />
-          <span>Make active</span>
-        </label>
+    <form className="editor-tabbed" onSubmit={submit}>
+      <div className="editor-tabbar">
+        <button className={activeTab === 'properties' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('properties')} type="button">
+          Board Properties
+        </button>
+        <button className={activeTab === 'summary' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('summary')} type="button">
+          Board Summary
+        </button>
+      </div>
+      <div className="editor-tab-content">
+        {activeTab === 'properties' ? (
+          <div className="field-grid board-fields board-tab-fields">
+            <label>
+              <span>Board name</span>
+              <input onChange={(event) => setName(event.target.value)} required value={name} />
+            </label>
+            <label>
+              <span>Owner</span>
+              <input onChange={(event) => setOwner(event.target.value)} value={owner} />
+            </label>
+            <label className="board-state-field">
+              <span>State</span>
+              {snapshot.active ? (
+                <div className="board-state-static board-state-control">
+                  <span>ACTIVE</span>
+                </div>
+              ) : (
+                <button
+                  className="icon-button board-state-control"
+                  onClick={() => {
+                    setConfirmDialog({
+                      title: 'Make Board Active',
+                      message: 'This will become the displayed board now. Continue?',
+                      confirmLabel: 'Make Active',
+                      onConfirm: async () => {
+                        await runAction(() => window.lpl.setActiveBoard(snapshot.id))
+                      }
+                    })
+                  }}
+                  type="button"
+                >
+                  <SquarePen size={16} />
+                  Make active
+                </button>
+              )}
+            </label>
+            <label className="board-wide-field">
+              <span>Description</span>
+              <input onChange={(event) => setDescription(event.target.value)} value={description} />
+            </label>
+          </div>
+        ) : (
+          <div className="board-summary-tab">
+            <div className="summary-config-list board-summary-config-list">
+              {summarySlots.map((slot) => {
+                const fieldOptions = eligibleBoardSummaryColumns(slot.sourceListId)
+                return (
+                  <div className="board-summary-slot-row" key={slot.slotIndex}>
+                    <label>
+                      <span>Slot {slot.slotIndex + 1} Label</span>
+                      <input
+                        onChange={(event) => setSlot(slot.slotIndex, (current) => ({ ...current, label: event.target.value }))}
+                        value={slot.label}
+                      />
+                    </label>
+                    <label>
+                      <span>Source</span>
+                      <select
+                        onChange={(event) => {
+                          const nextValue = event.target.value
+                          if (nextValue === '__board_active__') {
+                            setSlot(slot.slotIndex, (current) => ({
+                              ...current,
+                              sourceListId: null,
+                              sourceColumnId: null,
+                              aggregationMethod: 'active_count'
+                            }))
+                            return
+                          }
+                          if (nextValue === '__board_archived__') {
+                            setSlot(slot.slotIndex, (current) => ({
+                              ...current,
+                              sourceListId: null,
+                              sourceColumnId: null,
+                              aggregationMethod: 'completed_count'
+                            }))
+                            return
+                          }
+                          if (!nextValue) {
+                            setSlot(slot.slotIndex, (current) => ({
+                              ...current,
+                              sourceListId: null,
+                              sourceColumnId: null,
+                              aggregationMethod: 'count'
+                            }))
+                            return
+                          }
+                          const nextColumns = eligibleBoardSummaryColumns(nextValue)
+                          setSlot(slot.slotIndex, (current) => ({
+                            ...current,
+                            sourceListId: nextValue,
+                            sourceColumnId: nextColumns[0]?.id ?? null,
+                            aggregationMethod: nextColumns[0] ? inferredBoardSummaryAggregation(nextColumns[0]) : 'count'
+                          }))
+                        }}
+                        value={sourceSelectionValue(slot)}
+                      >
+                        <option value="">Empty</option>
+                        <option value="__board_active__">Board: Open Tasks</option>
+                        <option value="__board_archived__">Board: Archived Items</option>
+                        {summaryLists.map((list) => (
+                          <option key={list.id} value={list.id}>
+                            {list.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Field</span>
+                      <select
+                        disabled={!slot.sourceListId}
+                        onChange={(event) => {
+                          const nextColumn = fieldOptions.find((column) => column.id === event.target.value) ?? null
+                          setSlot(slot.slotIndex, (current) => ({
+                            ...current,
+                            sourceColumnId: nextColumn?.id ?? null,
+                            aggregationMethod: nextColumn ? inferredBoardSummaryAggregation(nextColumn) : current.aggregationMethod
+                          }))
+                        }}
+                        value={slot.sourceColumnId ?? ''}
+                      >
+                        <option value="">Select field...</option>
+                        {fieldOptions.map((column) => (
+                          <option key={column.id} value={column.id}>
+                            {column.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
       <div className="form-actions">
-        <button
-          className="icon-button"
-          onClick={async () => {
-            const result = await runAction(() =>
-              window.lpl.createList({
-                boardId: snapshot.id,
-                name: listTemplateType === 'birthday_calendar' ? 'Birthday Calendar' : 'New List',
-                templateType: listTemplateType
-              })
-            )
-            if (result && 'lists' in result) {
-              const created = newestList(result)
-              if (created) setSelectedNode({ kind: 'list', id: created.id })
-            }
-          }}
-          type="button"
-        >
-          <Plus size={16} />
-          Add List
-        </button>
-        <button
-          className="icon-button"
-          onClick={async () => {
-            const result = await runAction(() =>
-              window.lpl.createWidget({
-                boardId: snapshot.id,
-                type: widgetType,
-                name: widgetTypes.find((entry) => entry.value === widgetType)?.label ?? 'Widget'
-              })
-            )
-            if (result && 'lists' in result) {
-              const created = newestWidget(result)
-              if (created) setSelectedNode({ kind: 'widget', id: created.id })
-            }
-          }}
-          type="button"
-        >
-          <Plus size={16} />
-          Add Widget
+        <button className="icon-button" onClick={() => void onDuplicate()} type="button">
+          <Copy size={16} />
+          Duplicate Board
         </button>
         <button className="primary-button" type="submit">
           <Save size={16} />
           Save Board
         </button>
       </div>
+      {confirmDialog && (
+        <ConfirmActionModal
+          busy={false}
+          confirmLabel={confirmDialog.confirmLabel}
+          destructive={confirmDialog.destructive}
+          message={confirmDialog.message}
+          onCancel={() => setConfirmDialog(null)}
+          onConfirm={async () => {
+            await confirmDialog.onConfirm()
+            setConfirmDialog(null)
+          }}
+          title={confirmDialog.title}
+        />
+      )}
     </form>
   )
 }
 
 function ListEditorPanel({
+  allItems,
   boards,
+  busy,
   list,
   runAction,
   setSelectedNode,
   snapshot
 }: {
+  allItems: BoardItem[]
   boards: BoardSummary[]
+  busy: boolean
   list: BoardList
   runAction: RunAction
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
 }): ReactElement {
   const [name, setName] = useState(list.name)
+  const [templateType, setTemplateType] = useState<ListTemplateType>(list.templateType)
   const [grid, setGrid] = useState(list.grid)
   const [displayEnabled, setDisplayEnabled] = useState(list.displayEnabled)
   const [dueDateEnabled, setDueDateEnabled] = useState(list.dueDateEnabled)
@@ -1122,11 +1513,18 @@ function ListEditorPanel({
   const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>(list.templateConfig.birthday?.boardView ?? 'this_month')
   const [newColumnName, setNewColumnName] = useState('')
   const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
-  const [targetBoardId, setTargetBoardId] = useState('')
+  const [moveTargetBoardId, setMoveTargetBoardId] = useState('')
+  const [copyTargetBoardId, setCopyTargetBoardId] = useState('')
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null)
+  const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
+  const [showCreateItemModal, setShowCreateItemModal] = useState(false)
+  const [activeTab, setActiveTab] = useState<'properties' | 'structure' | 'contents' | 'settings' | 'summary'>('properties')
+  const newColumnInputRef = useRef<HTMLInputElement | null>(null)
   const sortColumn = sortColumnId ? visibleColumns(list).find((column) => column.id === sortColumnId) : null
 
   useEffect(() => {
     setName(list.name)
+    setTemplateType(list.templateType)
     setGrid(list.grid)
     setDisplayEnabled(list.displayEnabled)
     setDueDateEnabled(list.dueDateEnabled)
@@ -1138,8 +1536,12 @@ function ListEditorPanel({
     setShowCreatedAtOnBoard(list.showCreatedAtOnBoard)
     setShowCreatedByOnBoard(list.showCreatedByOnBoard)
     setBirthdayBoardView(list.templateConfig.birthday?.boardView ?? 'this_month')
-    setTargetBoardId(boards.find((board) => board.id !== list.boardId)?.id ?? '')
+    setMoveTargetBoardId('')
+    setCopyTargetBoardId('')
+    setActiveTab('properties')
   }, [list.id])
+
+  const hasTemplateSettings = templateType === 'birthday_calendar'
 
   function submit(event: FormEvent): void {
     event.preventDefault()
@@ -1164,7 +1566,10 @@ function ListEditorPanel({
       ? placeListForDisplay(snapshot.lists, snapshot.widgets, list.id, candidateGrid)
       : { grid: { x: 0, y: 0, w: 0, h: 0 }, moved: [] }
     if (nextDisplayEnabled && !placement) {
-      window.alert('This list cannot be shown because the board has no available 4 x 2 slot. Hide another list or resize the layout first.')
+      setMessageDialog({
+        title: 'No Space Available',
+        message: 'This list cannot be shown because the board has no available 4 x 2 slot. Hide another list or resize the layout first.'
+      })
       return
     }
     const nextGrid = placement?.grid ?? { x: 0, y: 0, w: 0, h: 0 }
@@ -1176,16 +1581,19 @@ function ListEditorPanel({
     setShowCreatedAtOnBoard(nextShowCreatedAtOnBoard)
     setShowCreatedByOnBoard(nextShowCreatedByOnBoard)
     runAction(async () => {
-      for (const moved of placement?.moved ?? []) {
-        await window.lpl.updateList({ ...listInput(moved.list), grid: moved.grid })
+      if ((placement?.moved.length ?? 0) > 0) {
+        await window.lpl.updateListLayouts([
+          { listId: list.id, grid: nextGrid },
+          ...(placement?.moved ?? []).map((moved) => ({ listId: moved.list.id, grid: moved.grid }))
+        ])
       }
-        return window.lpl.updateList({
-          listId: list.id,
-          name,
-          templateType: list.templateType,
-          templateConfig: list.templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {},
-          grid: nextGrid,
-          dueDateEnabled,
+      return window.lpl.updateList({
+        listId: list.id,
+        name,
+        templateType,
+        templateConfig: templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {},
+        grid: nextGrid,
+        dueDateEnabled,
         dueDateColumnId: list.dueDateColumnId,
         deadlineMandatory,
         sortColumnId,
@@ -1207,248 +1615,420 @@ function ListEditorPanel({
     setNewColumnType('text')
   }
 
+  function focusColumnBuilder(): void {
+    setActiveTab('structure')
+    window.setTimeout(() => newColumnInputRef.current?.focus(), 0)
+  }
+
   return (
-    <div className="editor-stack">
-      <form className="editor-card" onSubmit={submit}>
-        <EditorHeading eyebrow="List" title={list.name} />
-        <div className="field-grid list-fields">
-          <label>
-            <span>List name</span>
-            <input onChange={(event) => setName(event.target.value)} required value={name} />
-          </label>
-          <label className="toggle-field">
-            <input checked={displayEnabled} onChange={(event) => saveList(event.target.checked)} type="checkbox" />
-            <span>Show list on board</span>
-          </label>
-          <label className="toggle-field">
-            <input
-              checked={dueDateEnabled}
-              onChange={(event) => {
-                setDueDateEnabled(event.target.checked)
-                if (!event.target.checked) setDeadlineMandatory(false)
-              }}
-              type="checkbox"
-            />
-            <span>List has deadline</span>
-          </label>
-          <label className="toggle-field">
-            <input
-              checked={deadlineMandatory}
-              disabled={!dueDateEnabled}
-              onChange={(event) => setDeadlineMandatory(event.target.checked)}
-              type="checkbox"
-            />
-            <span>Deadline mandatory</span>
-          </label>
-          <label>
-            <span>Sort by</span>
-            <select
-              onChange={(event) => {
-                const nextColumnId = event.target.value || null
-                setSortColumnId(nextColumnId)
-                const nextColumn = visibleColumns(list).find((column) => column.id === nextColumnId)
-                setSortDirection(nextColumn ? defaultSortDirection(nextColumn) : 'manual')
-              }}
-              value={sortColumnId ?? ''}
-            >
-              <option value="">Manual order</option>
-              {visibleColumns(list).map((column) => (
-                <option key={column.id} value={column.id}>
-                  {column.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Sort order</span>
-            <select
-              disabled={!sortColumn}
-              onChange={(event) => setSortDirection(event.target.value as ListSortDirection)}
-              value={sortColumn ? sortDirection : 'manual'}
-            >
-              <option value="manual">Manual</option>
-              {sortColumn &&
-                sortDirectionOptions(sortColumn).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <div className="geometry-row">
-            {(['w', 'h', 'x', 'y'] as const).map((key) => (
-              <label key={key}>
-                <span>Grid {key.toUpperCase()}</span>
-                <input
-                  max={key === 'x' || key === 'w' ? 16 : 8}
-                  min={displayEnabled && key === 'w' ? MIN_LIST_GRID_WIDTH : displayEnabled && key === 'h' ? MIN_LIST_GRID_HEIGHT : 1}
-                  onChange={(event) => setGrid((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                  type="number"
-                  value={grid[key]}
-                />
-              </label>
-            ))}
-          </div>
-          {list.templateType === 'birthday_calendar' && (
-            <label>
-              <span>Board birthday view</span>
-              <select onChange={(event) => setBirthdayBoardView(event.target.value as BirthdayBoardView)} value={birthdayBoardView}>
-                {birthdayBoardViewOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+    <div className="editor-tabbed editor-tabbed-list">
+      <div className="editor-tabbar">
+        <button className={activeTab === 'properties' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('properties')} type="button">
+          List Properties
+        </button>
+        <button className={activeTab === 'structure' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('structure')} type="button">
+          List Structure
+        </button>
+        <button className={activeTab === 'contents' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('contents')} type="button">
+          List Contents
+        </button>
+        <button className={activeTab === 'settings' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('settings')} type="button">
+          List Settings
+        </button>
+        <button className={activeTab === 'summary' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('summary')} type="button">
+          List Summary
+        </button>
+      </div>
+      <div className="editor-tab-content">
+        {activeTab === 'properties' && (
+          <form className="list-tab-panel" onSubmit={submit}>
+            <div className="list-general-panel">
+              <div className="list-general-top">
+                <div className="list-general-main-fields">
+                  <label>
+                    <span>List Name</span>
+                    <input autoFocus={list.name === 'New List'} onChange={(event) => setName(event.target.value)} required value={name} />
+                  </label>
+                  <label>
+                    <span>List Template</span>
+                    <select
+                      onChange={(event) => {
+                        const nextType = event.target.value as ListTemplateType
+                        setTemplateType(nextType)
+                        if (nextType === 'birthday_calendar') {
+                          setDueDateEnabled(false)
+                          setDeadlineMandatory(false)
+                          setSortColumnId(null)
+                          setSortDirection('manual')
+                        }
+                      }}
+                      value={templateType}
+                    >
+                      {listTemplateOptions.map((template) => (
+                        <option key={template.value} value={template.value}>
+                          {template.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sort by</span>
+                    <select
+                      disabled={templateType === 'birthday_calendar'}
+                      onChange={(event) => {
+                        const nextColumnId = event.target.value || null
+                        setSortColumnId(nextColumnId)
+                        const nextColumn = visibleColumns(list).find((column) => column.id === nextColumnId)
+                        setSortDirection(nextColumn ? defaultSortDirection(nextColumn) : 'manual')
+                      }}
+                      value={sortColumnId ?? ''}
+                    >
+                      <option value="">Manual order</option>
+                      {visibleColumns(list).map((column) => (
+                        <option key={column.id} value={column.id}>
+                          {column.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sort Order</span>
+                    <select
+                      disabled={!sortColumn || templateType === 'birthday_calendar'}
+                      onChange={(event) => setSortDirection(event.target.value as ListSortDirection)}
+                      value={sortColumn ? sortDirection : 'manual'}
+                    >
+                      <option value="manual">Manual</option>
+                      {sortColumn &&
+                        sortDirectionOptions(sortColumn).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="list-settings-stack">
+                  <label className="list-setting-toggle">
+                    <input checked={displayEnabled} onChange={(event) => saveList(event.target.checked)} type="checkbox" />
+                    <span>Show List on Board</span>
+                  </label>
+                  <div className="list-settings-pair">
+                    <label className="list-setting-toggle">
+                      <input
+                        checked={dueDateEnabled}
+                        disabled={templateType === 'birthday_calendar'}
+                        onChange={(event) => {
+                          setDueDateEnabled(event.target.checked)
+                          if (!event.target.checked) setDeadlineMandatory(false)
+                        }}
+                        type="checkbox"
+                      />
+                      <span>Enable Deadline Field</span>
+                    </label>
+                    <label className="list-setting-toggle">
+                      <input
+                        checked={deadlineMandatory}
+                        disabled={!dueDateEnabled || templateType === 'birthday_calendar'}
+                        onChange={(event) => setDeadlineMandatory(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>Deadline Mandatory?</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+              <div className="list-general-bottom">
+                <section className="list-general-subpanel quick-actions-panel">
+                  <h4>Quick Actions</h4>
+                  <div className="quick-actions-layout">
+                    <div className="quick-actions-row quick-actions-row-primary">
+                      <button className="icon-button" onClick={() => setShowCreateItemModal(true)} type="button">
+                        <Plus size={16} />
+                        Add Item
+                      </button>
+                      {list.templateType !== 'birthday_calendar' && (
+                        <button
+                          className="icon-button"
+                          onClick={async () => {
+                            const result = await runAction(() => window.lpl.createGroup({ listId: list.id, name: 'New Group' }))
+                            if (result && 'lists' in result) {
+                              const created = newestGroup(result.lists.find((candidate) => candidate.id === list.id))
+                              if (created) setSelectedNode({ kind: 'group', id: created.id })
+                            }
+                          }}
+                          type="button"
+                        >
+                          <Plus size={16} />
+                          Add Group
+                        </button>
+                      )}
+                      <button className="icon-button" onClick={focusColumnBuilder} type="button">
+                        <Plus size={16} />
+                        Add Column
+                      </button>
+                    </div>
+                    <div className="quick-actions-row quick-actions-row-transfer">
+                      <label className="quick-actions-transfer-field">
+                        <span>Copy List To:</span>
+                        <div className="quick-actions-inline">
+                          <select onChange={(event) => setCopyTargetBoardId(event.target.value)} value={copyTargetBoardId}>
+                            <option value="">Target board...</option>
+                            {boards
+                              .filter((board) => board.id !== list.boardId)
+                              .map((board) => (
+                                <option key={board.id} value={board.id}>
+                                  {board.name}
+                                </option>
+                              ))}
+                          </select>
+                          <button
+                            className="icon-button"
+                            disabled={!copyTargetBoardId}
+                            onClick={() => runAction(() => window.lpl.copyListToBoard({ listId: list.id, targetBoardId: copyTargetBoardId }))}
+                            type="button"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </label>
+                      <label className="quick-actions-transfer-field">
+                        <span>Move List To:</span>
+                        <div className="quick-actions-inline">
+                          <select onChange={(event) => setMoveTargetBoardId(event.target.value)} value={moveTargetBoardId}>
+                            <option value="">Target board...</option>
+                            {boards
+                              .filter((board) => board.id !== list.boardId)
+                              .map((board) => (
+                                <option key={board.id} value={board.id}>
+                                  {board.name}
+                                </option>
+                              ))}
+                          </select>
+                          <button
+                            className="icon-button"
+                            disabled={!moveTargetBoardId}
+                            onClick={() => runAction(() => window.lpl.moveListToBoard({ listId: list.id, targetBoardId: moveTargetBoardId }))}
+                            type="button"
+                          >
+                            Move
+                          </button>
+                        </div>
+                      </label>
+                    </div>
+                    <div className="quick-actions-row quick-actions-row-final">
+                      <button
+                        className="danger-button"
+                        onClick={() =>
+                          setConfirmDialog({
+                            title: 'Delete List',
+                            message: `Delete "${list.name}" and all child items?`,
+                            confirmLabel: 'Delete List',
+                            destructive: true,
+                            onConfirm: async () => {
+                              await runAction(() => window.lpl.deleteList(list.id))
+                              setSelectedNode({ kind: 'board', id: snapshot.id })
+                            }
+                          })
+                        }
+                        type="button"
+                      >
+                        <Trash2 size={16} />
+                        Delete List
+                      </button>
+                      <button className="primary-button" type="submit">
+                        <Save size={16} />
+                        Save List
+                      </button>
+                    </div>
+                  </div>
+                </section>
+                <section className="list-general-subpanel">
+                  <h4>List Size &amp; Grid Placement</h4>
+                  <p>Use the controls below to manually adjust the list size &amp; position on the grid</p>
+                  <div className="geometry-row geometry-row-wide">
+                    {([
+                      ['h', 'Height'],
+                      ['w', 'Width'],
+                      ['x', 'X-Position'],
+                      ['y', 'Y-Position']
+                    ] as const).map(([key, label]) => (
+                      <label key={key}>
+                        <span>{label}</span>
+                        <input
+                          max={key === 'x' || key === 'w' ? 16 : 8}
+                          min={displayEnabled && key === 'w' ? MIN_LIST_GRID_WIDTH : displayEnabled && key === 'h' ? MIN_LIST_GRID_HEIGHT : 1}
+                          onChange={(event) => setGrid((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                          type="number"
+                          value={grid[key]}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </div>
+          </form>
+        )}
+
+        {activeTab === 'settings' && (
+          <section className="list-tab-panel">
+            {hasTemplateSettings ? (
+              <div className="field-grid two">
+                <label>
+                  <span>Board birthday view</span>
+                  <select onChange={(event) => setBirthdayBoardView(event.target.value as BirthdayBoardView)} value={birthdayBoardView}>
+                    {birthdayBoardViewOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ) : (
+              <div className="empty-editor-state">No template-specific settings for this list.</div>
+            )}
+          </section>
+        )}
+
+        {activeTab === 'structure' && (
+          <section className="list-tab-panel list-structure-tab-panel">
+            {templateType === 'birthday_calendar' && <p className="locked-template-note">Birthday Calendar keeps its core fields protected, but you can still add extra fields around them.</p>}
+            <div className="column-list-table">
+              <div className="column-list-header">
+                <span>Column Name</span>
+                <span>Field Type</span>
+                <span>Required</span>
+                <span>Show</span>
+                <span>Actions</span>
+              </div>
+              <div className="column-list-scroll">
+                <div className="column-list">
+                  <SystemColumnRow
+                    name="Item ID"
+                    onToggle={(checked) => saveList(displayEnabled, grid, { showItemIdOnBoard: checked })}
+                    showOnBoard={showItemIdOnBoard}
+                    typeLabel="system"
+                  />
+                  <SystemColumnRow
+                    name="Dependencies"
+                    onToggle={(checked) => saveList(displayEnabled, grid, { showDependenciesOnBoard: checked })}
+                    showOnBoard={showDependenciesOnBoard}
+                    typeLabel="system"
+                  />
+                  <SystemColumnRow
+                    name="Created At"
+                    onToggle={(checked) => saveList(displayEnabled, grid, { showCreatedAtOnBoard: checked })}
+                    showOnBoard={showCreatedAtOnBoard}
+                    typeLabel="system"
+                  />
+                  <SystemColumnRow
+                    name="Created By"
+                    onToggle={(checked) => saveList(displayEnabled, grid, { showCreatedByOnBoard: checked })}
+                    showOnBoard={showCreatedByOnBoard}
+                    typeLabel="system"
+                  />
+                  {visibleColumns(list).map((column) => (
+                    <ColumnRow column={column} key={column.id} list={list} locked={false} runAction={runAction} />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <form className="add-column-row" onSubmit={addColumn}>
+              <input onChange={(event) => setNewColumnName(event.target.value)} placeholder="New column" ref={newColumnInputRef} value={newColumnName} />
+              <select onChange={(event) => setNewColumnType(event.target.value as ColumnType)} value={newColumnType}>
+                {columnTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
                   </option>
                 ))}
               </select>
-            </label>
-          )}
-        </div>
-        <div className="form-actions">
-          <select className="target-board-select" onChange={(event) => setTargetBoardId(event.target.value)} value={targetBoardId}>
-            <option value="">Target board...</option>
-            {boards
-              .filter((board) => board.id !== list.boardId)
-              .map((board) => (
-                <option key={board.id} value={board.id}>
-                  {board.name}
-                </option>
-              ))}
-          </select>
-          <button
-            className="icon-button"
-            disabled={!targetBoardId}
-            onClick={() => runAction(() => window.lpl.copyListToBoard({ listId: list.id, targetBoardId }))}
-            type="button"
-          >
-            Copy To
-          </button>
-          <button
-            className="icon-button"
-            disabled={!targetBoardId}
-            onClick={() => runAction(() => window.lpl.moveListToBoard({ listId: list.id, targetBoardId }))}
-            type="button"
-          >
-            Move To
-          </button>
-          <button
-            className="icon-button"
-            onClick={async () => {
-              const result = await runAction(() =>
-                window.lpl.createItem({ listId: list.id, groupId: null, values: blankValues(visibleColumns(list)), dependencyItemIds: [] })
-              )
-              if (result && 'lists' in result) {
-                const created = newestItem(result.lists.find((candidate) => candidate.id === list.id))
-                if (created) setSelectedNode({ kind: 'item', id: created.id })
-              }
-            }}
-            type="button"
-          >
-            <Plus size={16} />
-            Add Item
-          </button>
-          {list.templateType !== 'birthday_calendar' && (
-            <button
-              className="icon-button"
-              onClick={async () => {
-                const result = await runAction(() => window.lpl.createGroup({ listId: list.id, name: 'New Group' }))
-                if (result && 'lists' in result) {
-                  const created = newestGroup(result.lists.find((candidate) => candidate.id === list.id))
-                  if (created) setSelectedNode({ kind: 'group', id: created.id })
-                }
-              }}
-              type="button"
-            >
-              <Plus size={16} />
-              Add Group
-            </button>
-          )}
-          <button className="primary-button" type="submit">
-            <Save size={16} />
-            Save List
-          </button>
-        </div>
-      </form>
-
-      <section className="editor-card">
-        <EditorHeading eyebrow="Columns" title="List Fields" />
-        {list.templateType === 'birthday_calendar' && <p className="locked-template-note">Birthday Calendar fields are locked to preserve calendar behavior.</p>}
-        <div className="column-list">
-          <SystemColumnRow
-            name="Item ID"
-            onToggle={(checked) => saveList(displayEnabled, grid, { showItemIdOnBoard: checked })}
-            showOnBoard={showItemIdOnBoard}
-            typeLabel="system"
-          />
-          <SystemColumnRow
-            name="Dependencies"
-            onToggle={(checked) => saveList(displayEnabled, grid, { showDependenciesOnBoard: checked })}
-            showOnBoard={showDependenciesOnBoard}
-            typeLabel="system"
-          />
-          <SystemColumnRow
-            name="Created At"
-            onToggle={(checked) => saveList(displayEnabled, grid, { showCreatedAtOnBoard: checked })}
-            showOnBoard={showCreatedAtOnBoard}
-            typeLabel="system"
-          />
-          <SystemColumnRow
-            name="Created By"
-            onToggle={(checked) => saveList(displayEnabled, grid, { showCreatedByOnBoard: checked })}
-            showOnBoard={showCreatedByOnBoard}
-            typeLabel="system"
-          />
-          {visibleColumns(list).map((column) => (
-            <ColumnRow column={column} key={column.id} list={list} locked={list.templateType === 'birthday_calendar'} runAction={runAction} />
-          ))}
-        </div>
-        {list.templateType !== 'birthday_calendar' && (
-          <form className="add-column-row" onSubmit={addColumn}>
-            <input onChange={(event) => setNewColumnName(event.target.value)} placeholder="New column" value={newColumnName} />
-            <select onChange={(event) => setNewColumnType(event.target.value as ColumnType)} value={newColumnType}>
-              {columnTypes.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-            <button className="icon-button" type="submit">
-              <Plus size={16} />
-              Add Field
-            </button>
-          </form>
+              <button className="icon-button" type="submit">
+                <Plus size={16} />
+                Add Field
+              </button>
+            </form>
+          </section>
         )}
-      </section>
 
-      <section className="editor-card">
-        <EditorHeading eyebrow="Items" title="List Items" />
-        <div className="admin-table expanded">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Group</th>
-                {visibleColumns(list).map((column) => (
-                  <th key={column.id}>{column.name}</th>
-                ))}
-                {list.dueDateEnabled && <th>Deadline Status</th>}
-                <th>State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.items.map((item) => (
-                <tr key={item.id} onClick={() => setSelectedNode({ kind: 'item', id: item.id })}>
-                  <td className="code-cell">{item.displayCode}</td>
-                  <td>{groupName(item.groupId, list)}</td>
-                  {visibleColumns(list).map((column) => (
-                    <td key={column.id}>{formatCellValue(item.values[column.id], column)}</td>
+        {activeTab === 'contents' && (
+          <section className="list-tab-panel list-items-tab-panel">
+            <div className="admin-table expanded sticky-header-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Group</th>
+                    {visibleColumns(list).map((column) => (
+                      <th key={column.id}>{column.name}</th>
+                    ))}
+                    {list.dueDateEnabled && <th>Status</th>}
+                    <th>State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.items.map((item) => (
+                    <tr key={item.id} onClick={() => setSelectedNode({ kind: 'item', id: item.id })}>
+                      <td className="code-cell">{item.displayCode}</td>
+                      <td>{groupName(item.groupId, list)}</td>
+                      {visibleColumns(list).map((column) => (
+                        <td key={column.id}>{formatCellValue(item.values[column.id], column)}</td>
+                      ))}
+                      {list.dueDateEnabled && <td>{item.deadlineStatus}</td>}
+                      <td>{statusLabel(item)}</td>
+                    </tr>
                   ))}
-                  {list.dueDateEnabled && <td>{item.deadlineStatus}</td>}
-                  <td>{statusLabel(item)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'summary' && (
+          <section className="list-tab-panel list-summary-tab-panel">
+            <div className="column-list-table">
+              <div className="summary-list-header">
+                <span>Column</span>
+                <span>Behavior</span>
+                <span>List Summary</span>
+                <span>Board Summary</span>
+              </div>
+              <div className="summary-list-scroll">
+                {visibleColumns(list).map((column) => (
+                  <ColumnSummaryRow key={column.id} column={column} list={list} runAction={runAction} />
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
+      {showCreateItemModal && (
+        <BoardItemModal
+          allItems={allItems}
+          busy={busy}
+          item={null}
+          list={list}
+          mode="create"
+          onClose={() => setShowCreateItemModal(false)}
+          runAction={runAction}
+          snapshot={snapshot}
+        />
+      )}
+      {confirmDialog && (
+        <ConfirmActionModal
+          busy={busy}
+          confirmLabel={confirmDialog.confirmLabel}
+          destructive={confirmDialog.destructive}
+          message={confirmDialog.message}
+          onCancel={() => setConfirmDialog(null)}
+          onConfirm={async () => {
+            await confirmDialog.onConfirm()
+            setConfirmDialog(null)
+          }}
+          title={confirmDialog.title}
+        />
+      )}
     </div>
   )
 }
@@ -1469,17 +2049,18 @@ function SystemColumnRow({
       <input disabled value={name} />
       <input disabled value={typeLabel} />
       <span className="readonly-field">System</span>
-      <span className="readonly-field">-</span>
       <label>
         <input checked={showOnBoard} onChange={(event) => onToggle(event.target.checked)} type="checkbox" />
         Show
       </label>
-      <button className="mini-button" disabled type="button">
-        Save
-      </button>
-      <button className="mini-button danger-mini" disabled type="button">
-        Delete
-      </button>
+      <div className="column-actions">
+        <button className="mini-button" disabled type="button">
+          Save
+        </button>
+        <button className="mini-button danger-mini" disabled type="button">
+          Delete
+        </button>
+      </div>
     </div>
   )
 }
@@ -1498,18 +2079,17 @@ function ColumnRow({
   const [name, setName] = useState(column.name)
   const [type, setType] = useState<ColumnType>(column.type)
   const [required, setRequired] = useState(column.required)
-  const [summaryEligible, setSummaryEligible] = useState(column.summaryEligible)
   const [choiceConfig, setChoiceConfig] = useState<ChoiceConfig>(() => column.choiceConfig ?? defaultChoiceConfig(column.name))
   const [choicesDraft, setChoicesDraft] = useState(choiceConfigToText(column.choiceConfig ?? defaultChoiceConfig(column.name)))
   const [dateDisplayFormat, setDateDisplayFormat] = useState<DateDisplayFormat>(column.dateDisplayFormat)
   const [currencyCode, setCurrencyCode] = useState<CurrencyCode>(column.currencyCode)
   const [showOnBoard, setShowOnBoard] = useState(column.showOnBoard)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null)
 
   useEffect(() => {
     setName(column.name)
     setType(column.type)
     setRequired(column.required)
-    setSummaryEligible(column.summaryEligible)
     setChoiceConfig(column.choiceConfig ?? defaultChoiceConfig(column.name))
     setChoicesDraft(choiceConfigToText(column.choiceConfig ?? defaultChoiceConfig(column.name)))
     setDateDisplayFormat(column.dateDisplayFormat)
@@ -1529,7 +2109,8 @@ function ColumnRow({
         type,
         required,
         maxLength: column.maxLength,
-        summaryEligible,
+        listSummaryEligible: column.listSummaryEligible,
+        boardSummaryEligible: column.boardSummaryEligible,
         choiceConfig: nextChoiceConfig,
         dateDisplayFormat: type === 'date' ? dateDisplayFormat : 'date',
         recurrence: 'none',
@@ -1541,9 +2122,15 @@ function ColumnRow({
   }
 
   function remove(): void {
-    if (window.confirm(`Delete "${column.name}"? Existing values stored in this field on child items will be deleted.`)) {
-      runAction(() => window.lpl.deleteColumn(column.id))
-    }
+    setConfirmDialog({
+      title: 'Delete Field',
+      message: `Delete "${column.name}"? Existing values stored in this field on child items will be deleted.`,
+      confirmLabel: 'Delete Field',
+      destructive: true,
+      onConfirm: async () => {
+        await runAction(() => window.lpl.deleteColumn(column.id))
+      }
+    })
   }
 
   return (
@@ -1576,19 +2163,17 @@ function ColumnRow({
         Required
       </label>
       <label>
-        <input checked={summaryEligible} disabled={locked} onChange={(event) => setSummaryEligible(event.target.checked)} type="checkbox" />
-        Summary
-      </label>
-      <label>
         <input checked={showOnBoard} disabled={locked} onChange={(event) => setShowOnBoard(event.target.checked)} type="checkbox" />
         Show
       </label>
-      <button className="mini-button" disabled={locked} onClick={save} type="button">
-        Save
-      </button>
-      <button className="mini-button danger-mini" disabled={locked || list.columns.length <= 1 || column.role === 'deadline'} onClick={remove} type="button">
-        Delete
-      </button>
+      <div className="column-actions">
+        <button className="mini-button" disabled={locked} onClick={save} type="button">
+          Save
+        </button>
+        <button className="mini-button danger-mini" disabled={locked || list.columns.length <= 1 || column.role === 'deadline'} onClick={remove} type="button">
+          Delete
+        </button>
+      </div>
       {type === 'date' && (
         <div className="date-config-row">
           <label>
@@ -1652,24 +2237,110 @@ function ColumnRow({
           </label>
         </div>
       )}
+      {confirmDialog && (
+        <ConfirmActionModal
+          busy={false}
+          confirmLabel={confirmDialog.confirmLabel}
+          destructive={confirmDialog.destructive}
+          message={confirmDialog.message}
+          onCancel={() => setConfirmDialog(null)}
+          onConfirm={async () => {
+            await confirmDialog.onConfirm()
+            setConfirmDialog(null)
+          }}
+          title={confirmDialog.title}
+        />
+      )}
+    </div>
+  )
+}
+
+function ColumnSummaryRow({
+  column,
+  list,
+  runAction
+}: {
+  column: ListColumn
+  list: BoardList
+  runAction: RunAction
+}): ReactElement {
+  const listSummaryAllowed = supportsListSummaryForColumn(column)
+  const boardSummaryAllowed = supportsBoardSummaryForColumn(column)
+  const listSummaryCount = list.columns.filter((candidate) => candidate.listSummaryEligible).length
+  const boardSummaryCount = list.columns.filter((candidate) => candidate.boardSummaryEligible).length
+
+  function summaryBehaviorLabel(): string {
+    if (!listSummaryAllowed && !boardSummaryAllowed) return 'Not summarizable'
+    if (column.role === 'deadline' || column.type === 'date') return 'Next due / overdue'
+    if (column.type === 'currency' || column.type === 'integer' || column.type === 'decimal') return 'Sum'
+    return 'Count items'
+  }
+
+  function updateSummaryFlags(nextListSummaryEligible: boolean, nextBoardSummaryEligible: boolean): void {
+    runAction(() =>
+      window.lpl.updateColumn({
+        columnId: column.id,
+        name: column.name,
+        type: column.type,
+        required: column.required,
+        maxLength: column.maxLength,
+        listSummaryEligible: nextListSummaryEligible,
+        boardSummaryEligible: nextBoardSummaryEligible,
+        choiceConfig: column.choiceConfig,
+        dateDisplayFormat: column.dateDisplayFormat,
+        recurrence: 'none',
+        recurrenceDays: [],
+        currencyCode: column.currencyCode,
+        showOnBoard: column.showOnBoard
+      })
+    )
+  }
+
+  return (
+    <div className="summary-row">
+      <span>{column.name}</span>
+      <span>{summaryBehaviorLabel()}</span>
+      <label>
+        <input
+          checked={column.listSummaryEligible}
+          disabled={!listSummaryAllowed || (!column.listSummaryEligible && listSummaryCount >= 2)}
+          onChange={(event) => updateSummaryFlags(event.target.checked, column.boardSummaryEligible)}
+          type="checkbox"
+        />
+      </label>
+      <label>
+        <input
+          checked={column.boardSummaryEligible}
+          disabled={!boardSummaryAllowed || (!column.boardSummaryEligible && boardSummaryCount >= 5)}
+          onChange={(event) => updateSummaryFlags(column.listSummaryEligible, event.target.checked)}
+          type="checkbox"
+        />
+      </label>
     </div>
   )
 }
 
 function GroupEditorPanel({
+  allItems,
+  busy,
   group,
   list,
   runAction,
-  setSelectedNode
+  setSelectedNode,
+  snapshot
 }: {
+  allItems: BoardItem[]
+  busy: boolean
   group: ItemGroup
   list: BoardList
   runAction: RunAction
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
+  snapshot: BoardSnapshot
 }): ReactElement {
   const [name, setName] = useState(group.name)
   const [showIdOnBoard, setShowIdOnBoard] = useState(group.showIdOnBoard)
   const [summaries, setSummaries] = useState<GroupSummaryConfig[]>(group.summaries)
+  const [showCreateItemModal, setShowCreateItemModal] = useState(false)
 
   useEffect(() => {
     setName(group.name)
@@ -1726,15 +2397,7 @@ function GroupEditorPanel({
       <div className="form-actions">
         <button
           className="icon-button"
-          onClick={async () => {
-            const result = await runAction(() =>
-              window.lpl.createItem({ listId: list.id, groupId: group.id, values: blankValues(visibleColumns(list)), dependencyItemIds: [] })
-            )
-            if (result && 'lists' in result) {
-              const created = newestItem(result.lists.find((candidate) => candidate.id === list.id))
-              if (created) setSelectedNode({ kind: 'item', id: created.id })
-            }
-          }}
+          onClick={() => setShowCreateItemModal(true)}
           type="button"
         >
           <Plus size={16} />
@@ -1749,29 +2412,42 @@ function GroupEditorPanel({
           Save Group
         </button>
       </div>
+      {showCreateItemModal && (
+        <BoardItemModal
+          allItems={allItems}
+          busy={busy}
+          item={null}
+          list={list}
+          mode="create"
+          onClose={() => setShowCreateItemModal(false)}
+          runAction={runAction}
+          snapshot={snapshot}
+        />
+      )}
     </form>
   )
 }
 
 function ItemEditorPanel({
-  allItems,
   appSettings,
   busy,
   item,
   list,
-  runAction
+  runAction,
+  snapshot
 }: {
-  allItems: BoardItem[]
   appSettings: AppSettings
   busy: boolean
   item: BoardItem
   list: BoardList
   runAction: RunAction
+  snapshot: BoardSnapshot
 }): ReactElement {
-  const editableColumns = visibleColumns(list)
+  const editableColumns = editableItemColumns(list)
   const [values, setValues] = useState<FormValues>(() => valuesForItem(item, editableColumns))
   const [dependencies, setDependencies] = useState<string[]>(item.dependencyItemIds)
   const [groupId, setGroupId] = useState<string | null>(item.groupId)
+  const [activeTab, setActiveTab] = useState<'details' | 'dependencies'>('details')
   const [closeDialog, setCloseDialog] = useState<{ action: 'completed' | 'cancelled' } | null>(null)
   const [closeComment, setCloseComment] = useState('')
   const [closing, setClosing] = useState(false)
@@ -1781,6 +2457,7 @@ function ItemEditorPanel({
     setValues(valuesForItem(item, editableColumns))
     setDependencies(item.dependencyItemIds)
     setGroupId(item.groupId)
+    setActiveTab('details')
   }, [item.id])
 
   function setValue(column: ListColumn, value: FieldValue): void {
@@ -1814,23 +2491,45 @@ function ItemEditorPanel({
 
   return (
     <>
-      <form className="editor-card" onSubmit={submit}>
-        <EditorHeading eyebrow="Item" title={item.displayCode} />
-        <div className="field-grid two">
-          <label>
-            <span>Group</span>
-            <select onChange={(event) => setGroupId(event.target.value || null)} value={groupId ?? ''}>
-              <option value="">List root</option>
-              {groupOptions(list).map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.label}
-                </option>
-              ))}
-            </select>
-          </label>
+      <form className="editor-tabbed" onSubmit={submit}>
+        <div className="editor-tabbar">
+          <button className={activeTab === 'details' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('details')} type="button">
+            Item Details
+          </button>
+          <button className={activeTab === 'dependencies' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('dependencies')} type="button">
+            Dependencies
+          </button>
         </div>
-        <ItemFields columns={editableColumns} setValue={setValue} values={values} />
-        <DependencyPicker allItems={allItems.filter((candidate) => candidate.id !== item.id)} dependencies={dependencies} setDependencies={setDependencies} />
+        <div className="editor-tab-content">
+          {activeTab === 'details' && (
+            <section className="list-tab-panel item-tab-panel">
+              <div className="field-grid two">
+                <label>
+                  <span>Group</span>
+                  <select onChange={(event) => setGroupId(event.target.value || null)} value={groupId ?? ''}>
+                    <option value="">List root</option>
+                    {groupOptions(list).map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <ItemFields columns={editableColumns} setValue={setValue} values={values} />
+            </section>
+          )}
+          {activeTab === 'dependencies' && (
+            <section className="list-tab-panel item-tab-panel dependency-tab-panel">
+              <DependencyTreePicker
+                currentItemId={item.id}
+                dependencies={dependencies}
+                setDependencies={setDependencies}
+                snapshot={snapshot}
+              />
+            </section>
+          )}
+        </div>
         <div className="form-actions">
           {item.publicationStatus !== 'draft' && (
             <button className="icon-button" disabled={busy || closing} onClick={() => requestClose('completed')} type="button">
@@ -1889,6 +2588,7 @@ function WidgetEditorPanel({
   const [grid, setGrid] = useState(widget.grid)
   const [type, setType] = useState<WidgetType>(widget.type)
   const [config, setConfig] = useState<BoardWidgetConfig>(widget.config)
+  const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
 
   useEffect(() => {
     setName(widget.name)
@@ -1900,9 +2600,12 @@ function WidgetEditorPanel({
 
   function submit(event: FormEvent): void {
     event.preventDefault()
-    const nextGrid = displayEnabled ? normalizeWidgetDisplayGrid(grid) : { x: 0, y: 0, w: 0, h: 0 }
-    if (displayEnabled && !canPlaceWidgetGrid(nextGrid, snapshot.lists, snapshot.widgets, widget.id)) {
-      window.alert('This widget overlaps another visible board element. Move or resize it first.')
+    const nextGrid = displayEnabled ? normalizeWidgetDisplayGrid(grid, type, config) : { x: 0, y: 0, w: 0, h: 0 }
+    if (displayEnabled && !canPlaceWidgetGrid(nextGrid, snapshot.lists, snapshot.widgets, widget.id, type, config)) {
+      setMessageDialog({
+        title: 'Widget Placement Conflict',
+        message: 'This widget overlaps another visible board element. Move or resize it first.'
+      })
       return
     }
     void runAction(() =>
@@ -1920,22 +2623,26 @@ function WidgetEditorPanel({
   return (
     <form className="editor-card" onSubmit={submit}>
       <EditorHeading eyebrow="Widget" title={widget.name} />
-      <div className="field-grid two">
-        <label>
-          <span>Widget name</span>
-          <input onChange={(event) => setName(event.target.value)} required value={name} />
-        </label>
-        <label>
-          <span>Widget type</span>
-          <select
-            onChange={(event) => {
-              const nextType = event.target.value as WidgetType
-              setType(nextType)
-              setConfig(defaultConfigForWidgetType(nextType))
-              setName(widgetTypes.find((entry) => entry.value === nextType)?.label ?? 'Widget')
-            }}
-            value={type}
-          >
+        <div className="field-grid two">
+          <label>
+            <span>Widget name</span>
+            <input autoFocus={widget.name === 'New Widget'} onChange={(event) => setName(event.target.value)} required value={name} />
+          </label>
+          <label>
+            <span>Widget type</span>
+            <select
+              onChange={(event) => {
+                const nextType = event.target.value as WidgetType
+                const nextConfig = defaultConfigForWidgetType(nextType)
+                setType(nextType)
+                setConfig(nextConfig)
+                setGrid((current) => normalizeWidgetDisplayGrid(current, nextType, nextConfig))
+                if (name === 'New Widget' || name === widgetTypes.find((entry) => entry.value === type)?.label) {
+                  setName(widgetTypes.find((entry) => entry.value === nextType)?.label ?? 'Widget')
+                }
+              }}
+              value={type}
+            >
             {widgetTypes.map((widgetType) => (
               <option key={widgetType.value} value={widgetType.value}>
                 {widgetType.label}
@@ -2111,6 +2818,7 @@ function WidgetEditorPanel({
           Save Widget
         </button>
       </div>
+      {messageDialog && <MessageModal title={messageDialog.title} message={messageDialog.message} onClose={() => setMessageDialog(null)} />}
     </form>
   )
 }
@@ -2133,7 +2841,7 @@ function BoardPreviewWidget({
       <header className="pane-heading">
         <div className="pane-heading-inline">
           <span className="pane-heading-label">Live Layout:</span>
-          <h3>16 x 8 Grid</h3>
+          <h3 className="pane-heading-subject">16 x 8 Grid</h3>
         </div>
       </header>
       <div className="preview-canvas">
@@ -2144,9 +2852,19 @@ function BoardPreviewWidget({
             const sourceList = layoutSnapshot.lists.find((entry) => entry.id === list.id) ?? list
             const placement = resolveListGridChange(sourceList, grid, layoutSnapshot.lists, layoutSnapshot.widgets)
             if (!placement) return
+            if (placement.message) return
             runAction(async () => {
-              for (const moved of placement.moved) {
-                await window.lpl.updateList({ ...listInput(moved.list), grid: moved.grid })
+              if ((placement.movedWidgets?.length ?? 0) > 0) {
+                return window.lpl.updateBoardLayouts({
+                  lists: [{ listId: sourceList.id, grid: placement.grid }, ...placement.moved.map((moved) => ({ listId: moved.list.id, grid: moved.grid }))],
+                  widgets: (placement.movedWidgets ?? []).map((moved) => ({ widgetId: moved.widget.id, grid: moved.grid }))
+                })
+              }
+              if (placement.moved.length > 0) {
+                return window.lpl.updateListLayouts([
+                  { listId: sourceList.id, grid: placement.grid },
+                  ...placement.moved.map((moved) => ({ listId: moved.list.id, grid: moved.grid }))
+                ])
               }
               return window.lpl.updateList({ ...listInput(sourceList), grid: placement.grid })
             })
@@ -2154,9 +2872,24 @@ function BoardPreviewWidget({
           onListSelect={(listId) => setSelectedNode({ kind: 'list', id: listId })}
           onWidgetChange={(widget, grid) => {
             const sourceWidget = layoutSnapshot.widgets.find((entry) => entry.id === widget.id) ?? widget
-            if (canPlaceWidgetGrid(grid, layoutSnapshot.lists, layoutSnapshot.widgets, widget.id)) {
-              runAction(() => window.lpl.updateWidget({ ...widgetInput(sourceWidget), grid }))
-            }
+            const nextGrid = normalizeWidgetDisplayGrid(grid, sourceWidget.type, sourceWidget.config)
+            const placement = resolveWidgetGridChange(sourceWidget, nextGrid, layoutSnapshot.widgets, layoutSnapshot.lists)
+            if (!placement) return
+            runAction(async () => {
+              if ((placement.movedLists?.length ?? 0) > 0) {
+                return window.lpl.updateBoardLayouts({
+                  lists: (placement.movedLists ?? []).map((moved) => ({ listId: moved.list.id, grid: moved.grid })),
+                  widgets: [{ widgetId: sourceWidget.id, grid: placement.grid }, ...placement.moved.map((moved) => ({ widgetId: moved.widget.id, grid: moved.grid }))]
+                })
+              }
+              if (placement.moved.length > 0) {
+                return window.lpl.updateWidgetLayouts([
+                  { widgetId: sourceWidget.id, grid: placement.grid },
+                  ...placement.moved.map((moved) => ({ widgetId: moved.widget.id, grid: moved.grid }))
+                ])
+              }
+              return window.lpl.updateWidget({ ...widgetInput(sourceWidget), grid: placement.grid })
+            })
           }}
           onWidgetSelect={(widgetId) => setSelectedNode({ kind: 'widget', id: widgetId })}
           selectedListId={selectedNode.kind === 'list' ? selectedNode.id : undefined}
@@ -2211,6 +2944,7 @@ function DisplayBoard({
   >(null)
   const [listSettingsListId, setListSettingsListId] = useState<string | null>(null)
   const [summaryDialogMode, setSummaryDialogMode] = useState<'today' | 'next24h' | null>(null)
+  const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
   const confirmationMode = appSettings?.closeConfirmationMode ?? 'with_comments'
   const enableBoardInteraction = !compact && !editable && Boolean(appSettings && runAction)
   const enableCloseActions = enableBoardInteraction
@@ -2233,7 +2967,10 @@ function DisplayBoard({
       setCloseDialog(null)
       setCloseComment('')
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to close the item right now.')
+      setMessageDialog({
+        title: 'Unable to close item',
+        message: error instanceof Error ? error.message : 'Unable to close the item right now.'
+      })
     } finally {
       setClosingItemId(null)
     }
@@ -2349,6 +3086,7 @@ function DisplayBoard({
           mode={itemDialog.mode}
           onClose={() => setItemDialog(null)}
           runAction={runAction}
+          snapshot={snapshot}
         />
       )}
       {enableBoardInteraction && listSettingsList && runAction && (
@@ -2371,12 +3109,268 @@ function DisplayBoard({
       {summaryDialogMode && (
         <DaySummaryModal mode={summaryDialogMode} onClose={() => setSummaryDialogMode(null)} snapshot={snapshot} />
       )}
+      {messageDialog && <MessageModal title={messageDialog.title} message={messageDialog.message} onClose={() => setMessageDialog(null)} />}
     </section>
+  )
+}
+
+function MessageModal({
+  message,
+  onClose,
+  title
+}: {
+  message: string
+  onClose: () => void
+  title: string
+}): ReactElement {
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div aria-modal="true" className="modal-card message-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Notice</p>
+            <h3>{title}</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <p>{message}</p>
+        </div>
+        <div className="modal-actions">
+          <button className="primary-button" onClick={onClose} type="button">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ConfirmActionModal({
+  busy,
+  confirmLabel = 'Confirm',
+  destructive = false,
+  message,
+  onCancel,
+  onConfirm,
+  title
+}: {
+  busy: boolean
+  confirmLabel?: string
+  destructive?: boolean
+  message: string
+  onCancel: () => void
+  onConfirm: () => void | Promise<void>
+  title: string
+}): ReactElement {
+  return (
+    <div className="modal-backdrop" onClick={onCancel} role="presentation">
+      <div aria-modal="true" className="modal-card message-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Confirm</p>
+            <h3>{title}</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <p>{message}</p>
+        </div>
+        <div className="modal-actions">
+          <button className="icon-button" disabled={busy} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button className={destructive ? 'danger-button' : 'primary-button'} disabled={busy} onClick={() => void onConfirm()} type="button">
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PromptModal({
+  busy,
+  confirmLabel = 'Save',
+  initialValue,
+  label,
+  onCancel,
+  onConfirm,
+  title
+}: {
+  busy: boolean
+  confirmLabel?: string
+  initialValue: string
+  label: string
+  onCancel: () => void
+  onConfirm: (value: string) => void | Promise<void>
+  title: string
+}): ReactElement {
+  const [value, setValue] = useState(initialValue)
+
+  useEffect(() => {
+    setValue(initialValue)
+  }, [initialValue])
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel} role="presentation">
+      <div aria-modal="true" className="modal-card message-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Edit</p>
+            <h3>{title}</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <label className="modal-field">
+            <span>{label}</span>
+            <input autoFocus onChange={(event) => setValue(event.target.value)} value={value} />
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="icon-button" disabled={busy} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            disabled={busy || !value.trim()}
+            onClick={() => void onConfirm(value.trim())}
+            type="button"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DeleteBoardModal({
+  board,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  board: BoardSummary
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void | Promise<void>
+}): ReactElement {
+  return (
+    <div className="modal-backdrop" onClick={onCancel} role="presentation">
+      <div aria-modal="true" className="modal-card" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Delete Board</p>
+            <h3>{board.name}</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <p>This will delete the board and all of its structure.</p>
+          <p>Active tasks from this board will be moved to the archive as cancelled.</p>
+        </div>
+        <div className="modal-actions">
+          <button className="icon-button" disabled={busy} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button className="danger-button" disabled={busy} onClick={() => void onConfirm()} type="button">
+            <Trash2 size={16} />
+            Delete Board
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NewListTemplateModal({
+  busy,
+  onClose,
+  onSelect
+}: {
+  busy: boolean
+  onClose: () => void
+  onSelect: (templateType: ListTemplateType) => void | Promise<void>
+}): ReactElement {
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div aria-modal="true" className="modal-card modal-card-wide template-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">New List</p>
+            <h3>Choose a list template</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <div className="template-choice-grid">
+            {listTemplateOptions.map((template) => (
+              <button
+                className="template-choice-card"
+                disabled={busy}
+                key={template.value}
+                onClick={() => void onSelect(template.value)}
+                type="button"
+              >
+                <strong>{template.label}</strong>
+                <span>{template.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="icon-button" disabled={busy} onClick={onClose} type="button">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
 function themeClassName(theme: AppTheme): string {
   return themeOptions.find((entry) => entry.value === theme)?.className ?? 'theme-midnight-clear'
+}
+
+function widgetTypeLabel(type: WidgetType): string {
+  return widgetTypes.find((entry) => entry.value === type)?.label ?? 'Widget'
+}
+
+type WidgetAspectSpec = {
+  ratioW: number
+  ratioH: number
+  minScale: number
+}
+
+function widgetAspectSpec(type: WidgetType, config: BoardWidgetConfig): WidgetAspectSpec {
+  if (type === 'word_of_day') return { ratioW: 3, ratioH: 2, minScale: 1 }
+  if (type === 'world_clocks') {
+    const count = clamp(config.worldClocks?.locations?.length ?? 1, 1, 5)
+    return { ratioW: count, ratioH: 1, minScale: 2 }
+  }
+  return { ratioW: 1, ratioH: 1, minScale: 2 }
+}
+
+function widgetScaleBounds(spec: WidgetAspectSpec): { min: number; max: number } {
+  return {
+    min: spec.minScale,
+    max: Math.max(spec.minScale, Math.min(Math.floor(16 / spec.ratioW), Math.floor(8 / spec.ratioH)))
+  }
+}
+
+function widgetGridForScale(spec: WidgetAspectSpec, scale: number): Pick<BoardWidget['grid'], 'w' | 'h'> {
+  return {
+    w: spec.ratioW * scale,
+    h: spec.ratioH * scale
+  }
+}
+
+function compactWidgetSummary(widget: BoardWidget): string {
+  if (widget.type === 'weather') return 'Current location'
+  if (widget.type === 'word_of_day') return 'Daily prompt'
+  if (widget.type === 'world_clocks') {
+    const count = widget.config.worldClocks?.locations?.length ?? 0
+    return count > 0 ? `${count} zone${count === 1 ? '' : 's'}` : 'World time'
+  }
+  if (widget.type === 'countdown') return widget.config.countdown?.label?.trim() || 'Target date'
+  return 'Time & date'
 }
 
 function editorWorkspaceTitle(selectedNode: SelectedNode, snapshot: BoardSnapshot): string {
@@ -2396,6 +3390,33 @@ function editorWorkspaceTitle(selectedNode: SelectedNode, snapshot: BoardSnapsho
   }
   const widget = snapshot.widgets.find((entry) => entry.id === selectedNode.id)
   return widget ? `Widget: ${widget.name}` : 'Widget Properties'
+}
+
+function editorWorkspaceContext(selectedNode: SelectedNode, snapshot: BoardSnapshot): {
+  label: string
+  subject: string
+} {
+  if (selectedNode.kind === 'board') {
+    return { label: 'CURRENTLY EDITING:', subject: 'Board Properties' }
+  }
+  if (selectedNode.kind === 'list') {
+    const list = snapshot.lists.find((entry) => entry.id === selectedNode.id)
+    return { label: 'CURRENTLY EDITING LIST:', subject: list?.name ?? 'List Properties' }
+  }
+  if (selectedNode.kind === 'group') {
+    const group = snapshot.lists.flatMap((list) => list.groups).find((entry) => entry.id === selectedNode.id)
+    return { label: 'CURRENTLY EDITING GROUP:', subject: group?.name ?? 'Group Properties' }
+  }
+  if (selectedNode.kind === 'item') {
+    const itemList = snapshot.lists.find((list) => list.items.some((item) => item.id === selectedNode.id))
+    const item = itemList?.items.find((entry) => entry.id === selectedNode.id)
+    return {
+      label: 'CURRENTLY EDITING ITEM:',
+      subject: item && itemList ? itemTitle(item, itemList) : 'Item Properties'
+    }
+  }
+  const widget = snapshot.widgets.find((entry) => entry.id === selectedNode.id)
+  return { label: 'CURRENTLY EDITING WIDGET:', subject: widget?.name ?? 'Widget Properties' }
 }
 
 function BoardListView({
@@ -2428,6 +3449,8 @@ function BoardListView({
   const columns = boardVisibleColumns(list)
   const rows = boardDisplayRows(list)
   const displayColumns = birthdayBoardColumns(list, columns)
+  const itemCount = list.items.length
+  const groupCount = list.groups.length
   const drag = useRef<{
     mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
     x: number
@@ -2450,10 +3473,15 @@ function BoardListView({
     if (!drag.current || !onChange) return
     const unitW = drag.current.rect.width / 16
     const unitH = drag.current.rect.height / 8
-    const dx = Math.round((event.clientX - drag.current.x) / unitW)
-    const dy = Math.round((event.clientY - drag.current.y) / unitH)
     const next =
-      drag.current.mode === 'move' ? moveGrid(drag.current.grid, dx, dy) : resizeGrid(drag.current.grid, drag.current.mode, dx, dy)
+      drag.current.mode === 'move'
+        ? pointerMoveGrid(drag.current.grid, drag.current.rect, event.clientX, event.clientY)
+        : resizeGrid(
+            drag.current.grid,
+            drag.current.mode,
+            Math.round((event.clientX - drag.current.x) / unitW),
+            Math.round((event.clientY - drag.current.y) / unitH)
+          )
     drag.current = null
     onChange(list, next)
   }
@@ -2502,110 +3530,127 @@ function BoardListView({
               )}
             </div>
           )}
-          <h3>{list.name}</h3>
+          <h3>{compact ? `LIST: ${list.name}` : list.name}</h3>
         </div>
         {editable ? <Grip size={16} /> : list.dueDateEnabled && <span className="due-chip">Deadline</span>}
       </header>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {list.showItemIdOnBoard && <th>ID</th>}
-              {list.showDependenciesOnBoard && <th>Dep</th>}
-              {list.showCreatedAtOnBoard && <th>Created At</th>}
-              {list.showCreatedByOnBoard && <th>Created By</th>}
-               {displayColumns.map((column) => (
-                 <th key={column.key}>{column.label}</th>
-               ))}
-               {list.dueDateEnabled && <th>Deadline</th>}
-               {(onCloseItem || onGiftItem) && <th className="row-actions-heading" />}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) =>
-              row.kind === 'group' ? (
-                <tr className="group-heading-row" key={`group-${row.group.id}`}>
-                  {list.showItemIdOnBoard && <td className="code-cell">{row.group.showIdOnBoard ? row.group.code : ''}</td>}
-                  {list.showDependenciesOnBoard && <td />}
-                  {list.showCreatedAtOnBoard && <td />}
-                  {list.showCreatedByOnBoard && <td />}
-                  {displayColumns.map((column, index) => (
-                    <td key={column.key}>
-                      {column.kind === 'real' ? formatGroupCell(row.group, column.column, list, index === 0) : ''}
-                    </td>
-                  ))}
-                  {list.dueDateEnabled && <td />}
-                  {(onCloseItem || onGiftItem) && <td />}
-                </tr>
-              ) : (
-                <tr
-                  className={`${deadlineRowClass(row.item) ?? ''} ${onOpenItem ? 'board-item-row clickable-row' : 'board-item-row'}`.trim()}
-                  key={row.item.id}
-                  onClick={() => onOpenItem?.(list.id, row.item.id)}
-                >
-                  {list.showItemIdOnBoard && <td className="code-cell">{row.item.displayCode}</td>}
-                  {list.showDependenciesOnBoard && <td>{row.item.dependencyCodes.join(', ') || '-'}</td>}
-                  {list.showCreatedAtOnBoard && <td>{formatSystemDate(row.item.createdAt)}</td>}
-                  {list.showCreatedByOnBoard && <td>{row.item.createdBy}</td>}
+      {compact ? (
+        <div className="compact-list-preview">
+          <div className="compact-list-meta">
+            <span>{itemCount} item{itemCount === 1 ? '' : 's'}</span>
+            {groupCount > 0 && <span>{groupCount} group{groupCount === 1 ? '' : 's'}</span>}
+            {list.dueDateEnabled && <span>Deadline</span>}
+          </div>
+          <div className="compact-list-caption">
+            {list.templateType === 'birthday_calendar'
+              ? 'Birthday timeline'
+              : displayColumns.length > 0
+                ? `${displayColumns.length} visible field${displayColumns.length === 1 ? '' : 's'}`
+                : 'Layout preview'}
+          </div>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {list.showItemIdOnBoard && <th>ID</th>}
+                {list.showDependenciesOnBoard && <th>Dep</th>}
+                {list.showCreatedAtOnBoard && <th>Created At</th>}
+                {list.showCreatedByOnBoard && <th>Created By</th>}
                   {displayColumns.map((column) => (
-                    <td key={column.key}>
-                      {column.kind === 'real'
-                        ? formatBirthdayAwareCellValue(row.item, column.column, list)
-                        : birthdayTurningLabel(row.item, list)}
-                    </td>
+                    <th key={column.key}>{column.label}</th>
                   ))}
-                  {list.dueDateEnabled && <td>{row.item.deadlineStatus}</td>}
-                  {(onCloseItem || onGiftItem) && (
-                    <td className="row-actions-cell">
-                      {onGiftItem && list.templateType === 'birthday_calendar' && (
+                  {list.dueDateEnabled && <th>Status</th>}
+                  {(onCloseItem || onGiftItem) && <th className="row-actions-heading" />}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) =>
+                row.kind === 'group' ? (
+                  <tr className="group-heading-row" key={`group-${row.group.id}`}>
+                    {list.showItemIdOnBoard && <td className="code-cell">{row.group.showIdOnBoard ? row.group.code : ''}</td>}
+                    {list.showDependenciesOnBoard && <td />}
+                    {list.showCreatedAtOnBoard && <td />}
+                    {list.showCreatedByOnBoard && <td />}
+                    {displayColumns.map((column, index) => (
+                      <td key={column.key}>
+                        {column.kind === 'real' ? formatGroupCell(row.group, column.column, list, index === 0) : ''}
+                      </td>
+                    ))}
+                    {list.dueDateEnabled && <td />}
+                    {(onCloseItem || onGiftItem) && <td />}
+                  </tr>
+                ) : (
+                  <tr
+                    className={`${deadlineRowClass(row.item) ?? ''} ${onOpenItem ? 'board-item-row clickable-row' : 'board-item-row'}`.trim()}
+                    key={row.item.id}
+                    onClick={() => onOpenItem?.(list.id, row.item.id)}
+                  >
+                    {list.showItemIdOnBoard && <td className="code-cell">{row.item.displayCode}</td>}
+                    {list.showDependenciesOnBoard && <td>{row.item.dependencyCodes.join(', ') || '-'}</td>}
+                    {list.showCreatedAtOnBoard && <td>{formatSystemDate(row.item.createdAt)}</td>}
+                    {list.showCreatedByOnBoard && <td>{row.item.createdBy}</td>}
+                    {displayColumns.map((column) => (
+                      <td key={column.key}>
+                        {column.kind === 'real'
+                          ? formatBirthdayAwareCellValue(row.item, column.column, list)
+                          : birthdayTurningLabel(row.item, list)}
+                      </td>
+                    ))}
+                    {list.dueDateEnabled && <td>{row.item.deadlineStatus}</td>}
+                    {(onCloseItem || onGiftItem) && (
+                      <td className="row-actions-cell">
+                        {onGiftItem && list.templateType === 'birthday_calendar' && (
+                          <button
+                            aria-label={`Create gift task for ${row.item.displayCode}`}
+                            className="row-action-button gift"
+                            disabled={rowActionBusy}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onGiftItem(list.id, row.item.id)
+                            }}
+                            title="Create gift task"
+                            type="button"
+                          >
+                            <Gift size={14} />
+                          </button>
+                        )}
                         <button
-                          aria-label={`Create gift task for ${row.item.displayCode}`}
-                          className="row-action-button gift"
+                          aria-label={`Mark ${row.item.displayCode} completed`}
+                          className="row-action-button complete"
                           disabled={rowActionBusy}
                           onClick={(event) => {
                             event.stopPropagation()
-                            onGiftItem(list.id, row.item.id)
+                            onCloseItem?.(row.item, 'completed')
                           }}
-                          title="Create gift task"
+                          title="Mark completed"
                           type="button"
                         >
-                          <Gift size={14} />
+                          <Check size={14} />
                         </button>
-                      )}
-                      <button
-                        aria-label={`Mark ${row.item.displayCode} completed`}
-                        className="row-action-button complete"
-                        disabled={rowActionBusy}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onCloseItem?.(row.item, 'completed')
-                        }}
-                        title="Mark completed"
-                        type="button"
-                      >
-                        <Check size={14} />
-                      </button>
-                      <button
-                        aria-label={`Cancel ${row.item.displayCode}`}
-                        className="row-action-button cancel"
-                        disabled={rowActionBusy}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onCloseItem?.(row.item, 'cancelled')
-                        }}
-                        title="Cancel task"
-                        type="button"
-                      >
-                        <X size={14} />
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              )
-            )}
-          </tbody>
-        </table>
-      </div>
+                        <button
+                          aria-label={`Cancel ${row.item.displayCode}`}
+                          className="row-action-button cancel"
+                          disabled={rowActionBusy}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onCloseItem?.(row.item, 'cancelled')
+                          }}
+                          title="Cancel task"
+                          type="button"
+                        >
+                          <X size={14} />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                )
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
       {editable &&
         (['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const).map((handle) => (
           <button
@@ -2638,6 +3683,8 @@ function BoardWidgetView({
     mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
     x: number
     y: number
+    grabOffsetX: number
+    grabOffsetY: number
     grid: BoardWidget['grid']
     rect: DOMRect
   } | null>(null)
@@ -2645,21 +3692,44 @@ function BoardWidgetView({
   function startDrag(event: PointerEvent, mode: NonNullable<typeof drag.current>['mode']): void {
     if (!editable) return
     const grid = event.currentTarget.closest('.board-grid')?.getBoundingClientRect()
+    const panel = event.currentTarget.closest('.board-widget-panel')?.getBoundingClientRect()
     if (!grid) return
     event.preventDefault()
     event.stopPropagation()
     ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
-    drag.current = { mode, x: event.clientX, y: event.clientY, grid: widget.grid, rect: grid }
+    drag.current = {
+      mode,
+      x: event.clientX,
+      y: event.clientY,
+      grabOffsetX: panel ? event.clientX - panel.left : 0,
+      grabOffsetY: panel ? event.clientY - panel.top : 0,
+      grid: widget.grid,
+      rect: grid
+    }
   }
 
   function finishDrag(event: PointerEvent): void {
     if (!drag.current || !onChange) return
     const unitW = drag.current.rect.width / 16
     const unitH = drag.current.rect.height / 8
-    const dx = Math.round((event.clientX - drag.current.x) / unitW)
-    const dy = Math.round((event.clientY - drag.current.y) / unitH)
     const next =
-      drag.current.mode === 'move' ? moveWidgetGrid(drag.current.grid, dx, dy) : resizeWidgetGrid(drag.current.grid, drag.current.mode, dx, dy)
+      drag.current.mode === 'move'
+        ? pointerMoveWidgetGridWithOffset(
+            drag.current.grid,
+            drag.current.rect,
+            event.clientX,
+            event.clientY,
+            drag.current.grabOffsetX,
+            drag.current.grabOffsetY
+          )
+        : resizeWidgetGrid(
+            drag.current.grid,
+            widget.type,
+            widget.config,
+            drag.current.mode,
+            Math.round((event.clientX - drag.current.x) / unitW),
+            Math.round((event.clientY - drag.current.y) / unitH)
+          )
     drag.current = null
     onChange(widget, next)
   }
@@ -2677,7 +3747,7 @@ function BoardWidgetView({
       <header onPointerDown={(event) => startDrag(event, 'move')}>
         <div className="board-widget-header">
           <WidgetTypeIcon type={widget.type} />
-          <h3>{widget.name}</h3>
+          <h3>{compact ? 'Widget' : widget.name}</h3>
         </div>
       </header>
       <div className="widget-body">
@@ -2703,11 +3773,20 @@ function WidgetTypeIcon({ type }: { type: WidgetType }): ReactElement {
 }
 
 function WidgetRenderer({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
+  if (compact) return <CompactWidgetPreview widget={widget} />
   if (widget.type === 'weather') return <WeatherWidget compact={compact} widget={widget} />
   if (widget.type === 'word_of_day') return <WordOfDayWidget compact={compact} widget={widget} />
   if (widget.type === 'world_clocks') return <WorldClocksWidget compact={compact} widget={widget} />
   if (widget.type === 'countdown') return <CountdownWidget compact={compact} widget={widget} />
   return <ClockWidget compact={compact} widget={widget} />
+}
+
+function CompactWidgetPreview({ widget }: { widget: BoardWidget }): ReactElement {
+  return (
+    <div className="compact-widget-preview">
+      <div className="compact-widget-name">{widget.name}</div>
+    </div>
+  )
 }
 
 function ClockWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
@@ -2911,30 +3990,34 @@ function AnalogueClockFace({
 function BoardItemModal({
   allItems,
   busy,
+  initialGroupId,
   item,
   list,
   mode,
   onClose,
-  runAction
+  runAction,
+  snapshot
 }: {
   allItems: BoardItem[]
   busy: boolean
+  initialGroupId?: string | null
   item: BoardItem | null
   list: BoardList
   mode: 'create' | 'edit'
   onClose: () => void
   runAction: RunAction
+  snapshot: BoardSnapshot
 }): ReactElement {
-  const editableColumns = visibleColumns(list)
+  const editableColumns = editableItemColumns(list)
   const [values, setValues] = useState<FormValues>(() => (item ? valuesForItem(item, editableColumns) : blankValues(editableColumns)))
   const [dependencies, setDependencies] = useState<string[]>(item?.dependencyItemIds ?? [])
-  const [groupId, setGroupId] = useState<string | null>(item?.groupId ?? null)
+  const [groupId, setGroupId] = useState<string | null>(item?.groupId ?? initialGroupId ?? null)
 
   useEffect(() => {
     setValues(item ? valuesForItem(item, editableColumns) : blankValues(editableColumns))
     setDependencies(item?.dependencyItemIds ?? [])
-    setGroupId(item?.groupId ?? null)
-  }, [item?.id, list.id])
+    setGroupId(item?.groupId ?? initialGroupId ?? null)
+  }, [initialGroupId, item?.id, list.id])
 
   function setValue(column: ListColumn, value: FieldValue): void {
     setValues((current) => ({ ...current, [column.id]: coerceInputValue(column, value) }))
@@ -2987,7 +4070,12 @@ function BoardItemModal({
               </label>
             </div>
             <ItemFields columns={editableColumns} setValue={setValue} values={values} />
-            <DependencyPicker allItems={allItems.filter((candidate) => candidate.id !== item?.id)} dependencies={dependencies} setDependencies={setDependencies} />
+            <DependencyTreePicker
+              currentItemId={item?.id ?? ''}
+              dependencies={dependencies}
+              setDependencies={setDependencies}
+              snapshot={snapshot}
+            />
           </div>
           <div className="modal-actions">
             <button className="icon-button" disabled={busy} onClick={onClose} type="button">
@@ -3028,6 +4116,7 @@ function BoardListSettingsModal({
   const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>(list.templateConfig.birthday?.boardView ?? 'this_month')
   const [newColumnName, setNewColumnName] = useState('')
   const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
+  const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
   const sortColumn = sortColumnId ? visibleColumns(list).find((column) => column.id === sortColumnId) : null
 
   useEffect(() => {
@@ -3068,14 +4157,20 @@ function BoardListSettingsModal({
       : { grid: { x: 0, y: 0, w: 0, h: 0 }, moved: [] }
 
     if (displayEnabled && !placement) {
-      window.alert('This list cannot be shown because the board has no available 4 x 2 slot. Hide another list or resize the layout first.')
+      setMessageDialog({
+        title: 'No Space Available',
+        message: 'This list cannot be shown because the board has no available 4 x 2 slot. Hide another list or resize the layout first.'
+      })
       return
     }
 
     const nextGrid = placement?.grid ?? { x: 0, y: 0, w: 0, h: 0 }
     const result = await runAction(async () => {
-      for (const moved of placement?.moved ?? []) {
-        await window.lpl.updateList({ ...listInput(moved.list), grid: moved.grid })
+      if ((placement?.moved.length ?? 0) > 0) {
+        await window.lpl.updateListLayouts([
+          { listId: list.id, grid: nextGrid },
+          ...(placement?.moved ?? []).map((moved) => ({ listId: moved.list.id, grid: moved.grid }))
+        ])
       }
       return window.lpl.updateList({
         listId: list.id,
@@ -3202,7 +4297,7 @@ function BoardListSettingsModal({
             </section>
             <section className="modal-section">
               <EditorHeading eyebrow="Display" title="Board Columns" />
-              {list.templateType === 'birthday_calendar' && <p className="locked-template-note">Birthday Calendar fields are locked to preserve calendar behavior.</p>}
+              {list.templateType === 'birthday_calendar' && <p className="locked-template-note">Birthday Calendar keeps its core fields protected, but you can still add extra fields around them.</p>}
               <div className="column-list">
                 <SystemColumnRow
                   name="Item ID"
@@ -3229,25 +4324,23 @@ function BoardListSettingsModal({
                   typeLabel="system"
                 />
                 {visibleColumns(list).map((column) => (
-                  <ColumnRow column={column} key={column.id} list={list} locked={list.templateType === 'birthday_calendar'} runAction={runAction} />
+                  <ColumnRow column={column} key={column.id} list={list} locked={false} runAction={runAction} />
                 ))}
               </div>
-              {list.templateType !== 'birthday_calendar' && (
-                <div className="add-column-row">
-                  <input onChange={(event) => setNewColumnName(event.target.value)} placeholder="New column" value={newColumnName} />
-                  <select onChange={(event) => setNewColumnType(event.target.value as ColumnType)} value={newColumnType}>
-                    {columnTypes.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                  <button className="icon-button" onClick={addColumn} type="button">
-                    <Plus size={16} />
-                    Add Field
-                  </button>
-                </div>
-              )}
+              <div className="add-column-row">
+                <input onChange={(event) => setNewColumnName(event.target.value)} placeholder="New column" value={newColumnName} />
+                <select onChange={(event) => setNewColumnType(event.target.value as ColumnType)} value={newColumnType}>
+                  {columnTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <button className="icon-button" onClick={addColumn} type="button">
+                  <Plus size={16} />
+                  Add Field
+                </button>
+              </div>
             </section>
           </div>
           <div className="modal-actions">
@@ -3260,6 +4353,7 @@ function BoardListSettingsModal({
             </button>
           </div>
         </form>
+        {messageDialog && <MessageModal title={messageDialog.title} message={messageDialog.message} onClose={() => setMessageDialog(null)} />}
       </div>
     </div>
   )
@@ -3348,7 +4442,7 @@ function BirthdayGiftModal({
   runAction: RunAction
 }): ReactElement {
   const birthdayName = itemTitle(birthdayItem, birthdayList)
-  const birthdayColumn = birthdayCoreColumns(birthdayList).find((column) => column.name === 'Birthday')
+  const birthdayColumn = birthdayCoreColumns(birthdayList).find((column) => isBirthdayDateColumn(column))
   const occurrence = birthdayColumn ? birthdayOccurrenceDate(birthdayItem.values[birthdayColumn.id]) : null
   const [targetListId, setTargetListId] = useState(lists[0]?.id ?? '')
   const [title, setTitle] = useState(`Get present for ${birthdayName}`)
@@ -3364,8 +4458,8 @@ function BirthdayGiftModal({
     event.preventDefault()
     const targetList = lists.find((list) => list.id === targetListId)
     if (!targetList) return
-    const values = blankValues(visibleColumns(targetList))
-    const nameColumn = visibleColumns(targetList)[0]
+    const values = blankValues(editableItemColumns(targetList))
+    const nameColumn = editableItemColumns(targetList)[0]
     if (nameColumn) values[nameColumn.id] = title
     if (targetList.dueDateEnabled && targetList.dueDateColumnId && deadline) {
       values[targetList.dueDateColumnId] = deadline
@@ -3586,35 +4680,134 @@ function ItemFields({
   )
 }
 
-function DependencyPicker({
-  allItems,
+function DependencyTreePicker({
+  currentItemId,
   dependencies,
-  setDependencies
+  setDependencies,
+  snapshot
 }: {
-  allItems: BoardItem[]
+  currentItemId: string
   dependencies: string[]
   setDependencies: Dispatch<SetStateAction<string[]>>
+  snapshot: BoardSnapshot
 }): ReactElement {
-  return (
-    <fieldset className="dependency-picker">
-      <legend>Dependencies</legend>
-      <div>
-        {allItems.map((item) => (
-          <label key={item.id}>
-            <input
-              checked={dependencies.includes(item.id)}
-              onChange={(event) => {
-                setDependencies((current) =>
-                  event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id)
-                )
-              }}
-              type="checkbox"
-            />
-            <span>{item.displayCode}</span>
-          </label>
-        ))}
+  const [boardExpanded, setBoardExpanded] = useState(true)
+  const [expandedLists, setExpandedLists] = useState<Record<string, boolean>>({})
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    setBoardExpanded(true)
+    setExpandedLists({})
+    setExpandedGroups({})
+  }, [snapshot.id, currentItemId])
+
+  function toggleItemDependency(itemId: string, checked: boolean): void {
+    setDependencies((current) => (checked ? [...current, itemId] : current.filter((id) => id !== itemId)))
+  }
+
+  function renderItemRow(item: BoardItem, list: BoardList, depth: number): ReactElement {
+    return (
+      <div className="dependency-tree-row" key={item.id}>
+        <label className="dependency-tree-item" style={{ paddingInlineStart: `${0.65 + depth * 1.05}rem` }}>
+          <input
+            checked={dependencies.includes(item.id)}
+            onChange={(event) => toggleItemDependency(item.id, event.target.checked)}
+            type="checkbox"
+          />
+          <span>{itemTitle(item, list)}</span>
+          <small>{item.displayCode}</small>
+        </label>
       </div>
-    </fieldset>
+    )
+  }
+
+  function renderGroupRows(group: ItemGroup, list: BoardList, depth: number): ReactElement {
+    const expanded = expandedGroups[group.id] ?? true
+    const childGroups = list.groups.filter((candidate) => candidate.parentGroupId === group.id)
+    const childItems = list.items.filter((candidate) => candidate.groupId === group.id && candidate.id !== currentItemId)
+    const hasChildren = childGroups.length > 0 || childItems.length > 0
+
+    return (
+      <div key={group.id}>
+        <button
+          className="dependency-tree-branch dependency-tree-level-group"
+          onClick={() => {
+            if (hasChildren) {
+              setExpandedGroups((current) => ({ ...current, [group.id]: !expanded }))
+            }
+          }}
+          style={{ paddingInlineStart: `${0.65 + depth * 1.05}rem` }}
+          type="button"
+        >
+          <span className="dependency-tree-expander">
+            {hasChildren ? (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
+          </span>
+          <span>{group.name}</span>
+          <small>{group.code}</small>
+        </button>
+        {expanded && (
+          <>
+            {childGroups.map((child) => renderGroupRows(child, list, depth + 1))}
+            {childItems.map((child) => renderItemRow(child, list, depth + 1))}
+          </>
+        )}
+      </div>
+    )
+  }
+
+  function renderListRows(list: BoardList): ReactElement {
+    const expanded = expandedLists[list.id] ?? true
+    const childGroups = list.groups.filter((group) => !group.parentGroupId)
+    const rootItems = list.items.filter((candidate) => !candidate.groupId && candidate.id !== currentItemId)
+    const hasChildren = childGroups.length > 0 || rootItems.length > 0
+
+    return (
+      <div key={list.id}>
+        <button
+          className="dependency-tree-branch dependency-tree-level-list"
+          onClick={() => {
+            if (hasChildren) {
+              setExpandedLists((current) => ({ ...current, [list.id]: !expanded }))
+            }
+          }}
+          style={{ paddingInlineStart: '1.7rem' }}
+          type="button"
+        >
+          <span className="dependency-tree-expander">
+            {hasChildren ? (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
+          </span>
+          <span>{list.name}</span>
+          <small>{list.code}</small>
+        </button>
+        {expanded && (
+          <>
+            {childGroups.map((group) => renderGroupRows(group, list, 2))}
+            {rootItems.map((rootItem) => renderItemRow(rootItem, list, 2))}
+          </>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="dependency-tree-panel">
+      <div className="dependency-tree-toolbar">
+        <span>Board Dependency Tree</span>
+        <small>Select the tasks this item depends on.</small>
+      </div>
+      <div className="dependency-tree-scroll">
+        <button className="dependency-tree-branch dependency-tree-level-board" onClick={() => setBoardExpanded((current) => !current)} type="button">
+          <span className="dependency-tree-expander">{boardExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+          <span>{snapshot.name}</span>
+          <small>{snapshot.lists.length} lists</small>
+        </button>
+        {boardExpanded && (
+          <div className="dependency-tree-body">
+            {snapshot.lists.map((boardList) => renderListRows(boardList))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -3626,6 +4819,25 @@ function EditorHeading({ eyebrow, title }: { eyebrow: string; title: string }): 
         <h3>{title}</h3>
       </div>
     </header>
+  )
+}
+
+function CollapsibleEditorSectionHeader({
+  expanded,
+  onToggle,
+  title
+}: {
+  expanded: boolean
+  onToggle: () => void
+  title: string
+}): ReactElement {
+  return (
+    <button className="editor-section-toggle" onClick={onToggle} type="button">
+      <span className="editor-section-toggle-main">
+        <span className="editor-section-toggle-icon">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+        <h3>{title}</h3>
+      </span>
+    </button>
   )
 }
 
@@ -3788,33 +5000,918 @@ function resolveListGridChange(
   candidate: BoardList['grid'],
   lists: BoardList[],
   widgets: BoardWidget[]
-): { grid: BoardList['grid']; moved: { list: BoardList; grid: BoardList['grid'] }[] } | null {
+): { grid: BoardList['grid']; moved: { list: BoardList; grid: BoardList['grid'] }[]; movedWidgets?: { widget: BoardWidget; grid: BoardWidget['grid'] }[]; message?: string } | null {
   const normalized = normalizeDisplayGrid(candidate)
   if (canPlaceGrid(normalized, lists, widgets, list.id)) return { grid: normalized, moved: [] }
+
+  const mixedHorizontalReflow = resolveHorizontalMixedReflow({ kind: 'list', id: list.id, grid: list.grid, list }, normalized, lists, widgets)
+  if (mixedHorizontalReflow) return { grid: mixedHorizontalReflow.grid, moved: mixedHorizontalReflow.movedLists, movedWidgets: mixedHorizontalReflow.movedWidgets }
+
+  const mixedVerticalReflow = resolveVerticalMixedReflow({ kind: 'list', id: list.id, grid: list.grid, list }, normalized, lists, widgets)
+  if (mixedVerticalReflow) return { grid: mixedVerticalReflow.grid, moved: mixedVerticalReflow.movedLists, movedWidgets: mixedVerticalReflow.movedWidgets }
 
   const overlappingLists = lists.filter(
     (entry) => entry.displayEnabled && entry.id !== list.id && validDisplayGrid(entry.grid) && gridsOverlap(normalized, entry.grid)
   )
-  if (overlappingLists.length !== 1) return null
+  const overlappingWidgets = widgets.filter(
+    (entry) => entry.displayEnabled && validWidgetGrid(entry.grid) && gridsOverlap(normalized, entry.grid)
+  )
 
-  const target = overlappingLists[0]
-  const swappedTargetGrid = { ...target.grid, x: list.grid.x, y: list.grid.y }
-  const remainingLists = lists.filter((entry) => entry.id !== list.id && entry.id !== target.id)
-  const canSwap =
-    canPlaceAgainst(swappedTargetGrid, [
-      ...remainingLists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
-      ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
-    ]) && canPlaceAgainst(normalized, [
-      ...remainingLists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
-      ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
-    ])
+  const horizontalReflow = resolveHorizontalListReflow(list, normalized, lists, widgets)
+  if (horizontalReflow) return horizontalReflow
 
-  if (!canSwap) return null
-  return { grid: normalized, moved: [{ list: target, grid: swappedTargetGrid }] }
+  const verticalReflow = resolveVerticalListReflow(list, normalized, lists, widgets)
+  if (verticalReflow) return verticalReflow
+
+  const bestEffortMove = resolveBestEffortListMove(list, normalized, lists, widgets)
+  if (bestEffortMove) return bestEffortMove
+
+  const mixedOverlaps = [...overlappingLists.map((entry) => ({ kind: 'list' as const, id: entry.id, grid: entry.grid, list: entry })), ...overlappingWidgets.map((entry) => ({ kind: 'widget' as const, id: entry.id, grid: entry.grid, widget: entry }))]
+  if (mixedOverlaps.length === 1) {
+    const mixedSwap = resolveMixedSwap({ kind: 'list', id: list.id, grid: list.grid, list }, normalized, mixedOverlaps[0], lists, widgets)
+    if (mixedSwap) return { grid: mixedSwap.grid, moved: mixedSwap.movedLists, movedWidgets: mixedSwap.movedWidgets }
+  }
+
+  if (overlappingLists.length === 1) {
+    const target = overlappingLists[0]
+    if (sameGridSize(normalized, target.grid)) {
+      const swappedTargetGrid = { ...target.grid, x: list.grid.x, y: list.grid.y }
+      const remainingLists = lists.filter((entry) => entry.id !== list.id && entry.id !== target.id)
+      const canSwap =
+        canPlaceAgainst(swappedTargetGrid, [
+          ...remainingLists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
+          ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
+        ]) && canPlaceAgainst(normalized, [
+          ...remainingLists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
+          ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
+        ])
+
+      if (canSwap) return { grid: normalized, moved: [{ list: target, grid: swappedTargetGrid }] }
+    }
+
+    return {
+      grid: list.grid,
+      moved: [],
+      message:
+        'You are attempting to swap positions of two lists of different sizes. Position swapping is only possible if the two items are of the same size.'
+    }
+  }
+
+  return null
+}
+
+function resolveWidgetGridChange(
+  widget: BoardWidget,
+  candidate: BoardWidget['grid'],
+  widgets: BoardWidget[],
+  lists: BoardList[]
+): { grid: BoardWidget['grid']; moved: { widget: BoardWidget; grid: BoardWidget['grid'] }[]; movedLists?: { list: BoardList; grid: BoardList['grid'] }[] } | null {
+  if (canPlaceWidgetGrid(candidate, lists, widgets, widget.id, widget.type, widget.config)) return { grid: candidate, moved: [] }
+
+  const mixedHorizontalReflow = resolveHorizontalMixedReflow({ kind: 'widget', id: widget.id, grid: widget.grid, widget }, candidate, lists, widgets)
+  if (mixedHorizontalReflow) return { grid: mixedHorizontalReflow.grid, moved: mixedHorizontalReflow.movedWidgets, movedLists: mixedHorizontalReflow.movedLists }
+
+  const mixedVerticalReflow = resolveVerticalMixedReflow({ kind: 'widget', id: widget.id, grid: widget.grid, widget }, candidate, lists, widgets)
+  if (mixedVerticalReflow) return { grid: mixedVerticalReflow.grid, moved: mixedVerticalReflow.movedWidgets, movedLists: mixedVerticalReflow.movedLists }
+
+  const overlappingWidgets = widgets.filter(
+    (entry) => entry.displayEnabled && entry.id !== widget.id && validWidgetGrid(entry.grid) && gridsOverlap(candidate, entry.grid)
+  )
+  const overlappingLists = lists.filter(
+    (entry) => entry.displayEnabled && validDisplayGrid(entry.grid) && gridsOverlap(candidate, entry.grid)
+  )
+
+  const horizontalReflow = resolveHorizontalWidgetReflow(widget, candidate, widgets, lists)
+  if (horizontalReflow) return horizontalReflow
+
+  const verticalReflow = resolveVerticalWidgetReflow(widget, candidate, widgets, lists)
+  if (verticalReflow) return verticalReflow
+
+  const bestEffortMove = resolveBestEffortWidgetMove(widget, candidate, widgets, lists)
+  if (bestEffortMove) return bestEffortMove
+
+  const mixedOverlaps = [...overlappingWidgets.map((entry) => ({ kind: 'widget' as const, id: entry.id, grid: entry.grid, widget: entry })), ...overlappingLists.map((entry) => ({ kind: 'list' as const, id: entry.id, grid: entry.grid, list: entry }))]
+  if (mixedOverlaps.length === 1) {
+    const mixedSwap = resolveMixedSwap({ kind: 'widget', id: widget.id, grid: widget.grid, widget }, candidate, mixedOverlaps[0], lists, widgets)
+    if (mixedSwap) return { grid: mixedSwap.grid, moved: mixedSwap.movedWidgets, movedLists: mixedSwap.movedLists }
+  }
+
+  if (overlappingWidgets.length === 1) {
+    const target = overlappingWidgets[0]
+    if (sameGridSize(candidate, target.grid)) {
+      const swappedTargetGrid = { ...target.grid, x: widget.grid.x, y: widget.grid.y }
+      const remainingWidgets = widgets.filter((entry) => entry.id !== widget.id && entry.id !== target.id)
+      const canSwap =
+        canPlaceAgainst(swappedTargetGrid, [
+          ...lists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
+          ...remainingWidgets.filter((entry) => entry.displayEnabled).map((entry) => entry.grid)
+        ]) && canPlaceAgainst(candidate, [
+          ...lists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
+          ...remainingWidgets.filter((entry) => entry.displayEnabled).map((entry) => entry.grid)
+        ])
+
+      if (canSwap) return { grid: candidate, moved: [{ widget: target, grid: swappedTargetGrid }] }
+    }
+  }
+
+  return null
 }
 
 function gridsOverlap(a: BoardList['grid'], b: BoardList['grid']): boolean {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
+function sameGridSize(a: BoardList['grid'], b: BoardList['grid']): boolean {
+  return a.w === b.w && a.h === b.h
+}
+
+function sameGridPosition(a: BoardList['grid'], b: BoardList['grid']): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
+}
+
+function sameRowBand(a: BoardList['grid'], b: BoardList['grid']): boolean {
+  return a.y === b.y && a.h === b.h
+}
+
+function sameColumnBand(a: BoardList['grid'], b: BoardList['grid']): boolean {
+  return a.x === b.x && a.w === b.w
+}
+
+function validWidgetGrid(grid: BoardWidget['grid']): boolean {
+  return grid.x >= 1 && grid.y >= 1 && grid.w >= 2 && grid.h >= 2 && grid.x + grid.w <= 17 && grid.y + grid.h <= 9
+}
+
+type LayoutElement =
+  | { kind: 'list'; id: string; grid: BoardList['grid']; list: BoardList }
+  | { kind: 'widget'; id: string; grid: BoardWidget['grid']; widget: BoardWidget }
+
+type MixedLayoutChange = {
+  grid: BoardList['grid']
+  movedLists: { list: BoardList; grid: BoardList['grid'] }[]
+  movedWidgets: { widget: BoardWidget; grid: BoardWidget['grid'] }[]
+}
+
+function allLayoutElements(lists: BoardList[], widgets: BoardWidget[]): LayoutElement[] {
+  return [
+    ...lists.filter((entry) => entry.displayEnabled).map((list) => ({ kind: 'list' as const, id: list.id, grid: list.grid, list })),
+    ...widgets.filter((entry) => entry.displayEnabled).map((widget) => ({ kind: 'widget' as const, id: widget.id, grid: widget.grid, widget }))
+  ]
+}
+
+function validLayoutGrid(element: LayoutElement): boolean {
+  return element.kind === 'list' ? validDisplayGrid(element.grid) : validWidgetGrid(element.grid)
+}
+
+function resolveHorizontalListReflow(
+  list: BoardList,
+  candidate: BoardList['grid'],
+  lists: BoardList[],
+  widgets: BoardWidget[]
+): { grid: BoardList['grid']; moved: { list: BoardList; grid: BoardList['grid'] }[] } | null {
+  if (candidate.y !== list.grid.y || candidate.h !== list.grid.h) return null
+
+  const rowPeers = lists
+    .filter((entry) => entry.displayEnabled && entry.id !== list.id && validDisplayGrid(entry.grid) && sameRowBand(entry.grid, list.grid))
+    .sort((a, b) => a.grid.x - b.grid.x)
+  if (rowPeers.length === 0) return null
+
+  const peers = affectedHorizontalPeers(list, candidate, rowPeers)
+  if (peers.length === 0) return null
+
+  const overlappingPeers = peers.filter((entry) => gridsOverlap(entry.grid, candidate))
+  const desiredOrder = [...peers]
+  const insertIndex = horizontalInsertIndex(list, candidate, desiredOrder, overlappingPeers)
+  desiredOrder.splice(insertIndex, 0, list)
+
+  const positioned = positionHorizontalRun(desiredOrder, list.id, candidate)
+  const occupiedExternal = [
+    ...lists
+      .filter((entry) => entry.displayEnabled && entry.id !== list.id && !peers.some((peer) => peer.id === entry.id))
+      .map((entry) => entry.grid),
+    ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
+  ]
+
+  if (!validatePositionedRun(positioned, occupiedExternal)) return null
+  return positionedResult(list.id, positioned)
+}
+
+function resolveHorizontalWidgetReflow(
+  widget: BoardWidget,
+  candidate: BoardWidget['grid'],
+  widgets: BoardWidget[],
+  lists: BoardList[]
+): { grid: BoardWidget['grid']; moved: { widget: BoardWidget; grid: BoardWidget['grid'] }[] } | null {
+  if (candidate.y !== widget.grid.y || candidate.h !== widget.grid.h) return null
+
+  const rowPeers = widgets
+    .filter((entry) => entry.displayEnabled && entry.id !== widget.id && validWidgetGrid(entry.grid) && sameRowBand(entry.grid, widget.grid))
+    .sort((a, b) => a.grid.x - b.grid.x)
+  if (rowPeers.length === 0) return null
+
+  const peers = affectedHorizontalWidgetPeers(widget, candidate, rowPeers)
+  if (peers.length === 0) return null
+
+  const overlappingPeers = peers.filter((entry) => gridsOverlap(entry.grid, candidate))
+  const desiredOrder = [...peers]
+  const insertIndex = horizontalWidgetInsertIndex(widget, candidate, desiredOrder, overlappingPeers)
+  desiredOrder.splice(insertIndex, 0, widget)
+
+  const positioned = positionHorizontalWidgetRun(desiredOrder, widget.id, candidate)
+  const occupiedExternal = [
+    ...lists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
+    ...widgets
+      .filter((entry) => entry.displayEnabled && entry.id !== widget.id && !peers.some((peer) => peer.id === entry.id))
+      .map((entry) => entry.grid)
+  ]
+
+  if (!validateWidgetPositionedRun(positioned, occupiedExternal)) return null
+  return widgetPositionedResult(widget.id, positioned)
+}
+
+function resolveHorizontalMixedReflow(
+  moving: LayoutElement,
+  candidate: BoardList['grid'],
+  lists: BoardList[],
+  widgets: BoardWidget[]
+): MixedLayoutChange | null {
+  if (candidate.y !== moving.grid.y || candidate.h !== moving.grid.h) return null
+
+  const peers = allLayoutElements(lists, widgets)
+    .filter((entry) => entry.id !== moving.id && sameRowBand(entry.grid, moving.grid) && validLayoutGrid(entry))
+    .sort((a, b) => a.grid.x - b.grid.x)
+  if (peers.length === 0) return null
+
+  const corridorStart = Math.min(moving.grid.x, candidate.x)
+  const corridorEnd = Math.max(moving.grid.x + moving.grid.w - 1, candidate.x + candidate.w - 1)
+  const affected = peers.filter((entry) => rangesOverlap(entry.grid.x, entry.grid.x + entry.grid.w - 1, corridorStart, corridorEnd))
+  if (affected.length === 0) return null
+
+  const overlappingPeers = affected.filter((entry) => gridsOverlap(entry.grid, candidate))
+  const ordered = [...affected]
+  const insertIndex = genericInsertIndex(moving, candidate, ordered, overlappingPeers, 'horizontal')
+  ordered.splice(insertIndex, 0, moving)
+
+  const positioned = positionHorizontalMixedRun(ordered, moving.id, candidate)
+  const affectedIds = new Set(affected.map((entry) => entry.id))
+  const occupiedExternal = allLayoutElements(lists, widgets)
+    .filter((entry) => entry.id !== moving.id && !affectedIds.has(entry.id))
+    .map((entry) => entry.grid)
+
+  if (!validateMixedPositionedRun(positioned, occupiedExternal)) return null
+  return mixedPositionedResult(moving.id, positioned)
+}
+
+function horizontalInsertIndex(
+  list: BoardList,
+  candidate: BoardList['grid'],
+  orderedPeers: BoardList[],
+  overlappingPeers: BoardList[]
+): number {
+  if (overlappingPeers.length > 0) {
+    if (candidate.x > list.grid.x) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[overlappingPeers.length - 1].id) + 1
+    }
+    if (candidate.x < list.grid.x) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[0].id)
+    }
+  }
+
+  const candidateCenter = candidate.x + candidate.w / 2
+  const byCenter = orderedPeers.findIndex((entry) => candidateCenter < entry.grid.x + entry.grid.w / 2)
+  return byCenter === -1 ? orderedPeers.length : byCenter
+}
+
+function positionHorizontalRun(
+  ordered: BoardList[],
+  movingListId: string,
+  candidate: BoardList['grid']
+): { list: BoardList; grid: BoardList['grid'] }[] {
+  const movingIndex = ordered.findIndex((entry) => entry.id === movingListId)
+  const placed = new Map<string, BoardList['grid']>()
+  placed.set(movingListId, { ...candidate })
+
+  let nextX = candidate.x
+  for (let index = movingIndex - 1; index >= 0; index -= 1) {
+    const entry = ordered[index]
+    nextX -= entry.grid.w
+    placed.set(entry.id, { ...entry.grid, x: nextX, y: candidate.y })
+  }
+
+  let trailingX = candidate.x + candidate.w
+  for (let index = movingIndex + 1; index < ordered.length; index += 1) {
+    const entry = ordered[index]
+    placed.set(entry.id, { ...entry.grid, x: trailingX, y: candidate.y })
+    trailingX += entry.grid.w
+  }
+
+  const positioned = ordered.map((entry) => ({ list: entry, grid: placed.get(entry.id) ?? entry.grid }))
+  const minX = Math.min(...positioned.map((entry) => entry.grid.x))
+  if (minX < 1) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, x: entry.grid.x + (1 - minX) }
+  }
+
+  const maxX = Math.max(...positioned.map((entry) => entry.grid.x + entry.grid.w - 1))
+  if (maxX > 16) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, x: entry.grid.x - (maxX - 16) }
+  }
+
+  return positioned
+}
+
+function positionHorizontalWidgetRun(
+  ordered: BoardWidget[],
+  movingWidgetId: string,
+  candidate: BoardWidget['grid']
+): { widget: BoardWidget; grid: BoardWidget['grid'] }[] {
+  const movingIndex = ordered.findIndex((entry) => entry.id === movingWidgetId)
+  const placed = new Map<string, BoardWidget['grid']>()
+  placed.set(movingWidgetId, { ...candidate })
+
+  let nextX = candidate.x
+  for (let index = movingIndex - 1; index >= 0; index -= 1) {
+    const entry = ordered[index]
+    nextX -= entry.grid.w
+    placed.set(entry.id, { ...entry.grid, x: nextX, y: candidate.y })
+  }
+
+  let trailingX = candidate.x + candidate.w
+  for (let index = movingIndex + 1; index < ordered.length; index += 1) {
+    const entry = ordered[index]
+    placed.set(entry.id, { ...entry.grid, x: trailingX, y: candidate.y })
+    trailingX += entry.grid.w
+  }
+
+  const positioned = ordered.map((entry) => ({ widget: entry, grid: placed.get(entry.id) ?? entry.grid }))
+  const minX = Math.min(...positioned.map((entry) => entry.grid.x))
+  if (minX < 1) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, x: entry.grid.x + (1 - minX) }
+  }
+
+  const maxX = Math.max(...positioned.map((entry) => entry.grid.x + entry.grid.w - 1))
+  if (maxX > 16) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, x: entry.grid.x - (maxX - 16) }
+  }
+
+  return positioned
+}
+
+function resolveVerticalListReflow(
+  list: BoardList,
+  candidate: BoardList['grid'],
+  lists: BoardList[],
+  widgets: BoardWidget[]
+): { grid: BoardList['grid']; moved: { list: BoardList; grid: BoardList['grid'] }[] } | null {
+  if (candidate.x !== list.grid.x || candidate.w !== list.grid.w) return null
+
+  const columnPeers = lists
+    .filter((entry) => entry.displayEnabled && entry.id !== list.id && validDisplayGrid(entry.grid) && sameColumnBand(entry.grid, list.grid))
+    .sort((a, b) => a.grid.y - b.grid.y)
+  if (columnPeers.length === 0) return null
+
+  const peers = affectedVerticalPeers(list, candidate, columnPeers)
+  if (peers.length === 0) return null
+
+  const overlappingPeers = peers.filter((entry) => gridsOverlap(entry.grid, candidate))
+  const desiredOrder = [...peers]
+  const insertIndex = verticalInsertIndex(list, candidate, desiredOrder, overlappingPeers)
+  desiredOrder.splice(insertIndex, 0, list)
+
+  const positioned = positionVerticalRun(desiredOrder, list.id, candidate)
+  const occupiedExternal = [
+    ...lists
+      .filter((entry) => entry.displayEnabled && entry.id !== list.id && !peers.some((peer) => peer.id === entry.id))
+      .map((entry) => entry.grid),
+    ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
+  ]
+
+  if (!validatePositionedRun(positioned, occupiedExternal)) return null
+  return positionedResult(list.id, positioned)
+}
+
+function resolveVerticalWidgetReflow(
+  widget: BoardWidget,
+  candidate: BoardWidget['grid'],
+  widgets: BoardWidget[],
+  lists: BoardList[]
+): { grid: BoardWidget['grid']; moved: { widget: BoardWidget; grid: BoardWidget['grid'] }[] } | null {
+  if (candidate.x !== widget.grid.x || candidate.w !== widget.grid.w) return null
+
+  const columnPeers = widgets
+    .filter((entry) => entry.displayEnabled && entry.id !== widget.id && validWidgetGrid(entry.grid) && sameColumnBand(entry.grid, widget.grid))
+    .sort((a, b) => a.grid.y - b.grid.y)
+  if (columnPeers.length === 0) return null
+
+  const peers = affectedVerticalWidgetPeers(widget, candidate, columnPeers)
+  if (peers.length === 0) return null
+
+  const overlappingPeers = peers.filter((entry) => gridsOverlap(entry.grid, candidate))
+  const desiredOrder = [...peers]
+  const insertIndex = verticalWidgetInsertIndex(widget, candidate, desiredOrder, overlappingPeers)
+  desiredOrder.splice(insertIndex, 0, widget)
+
+  const positioned = positionVerticalWidgetRun(desiredOrder, widget.id, candidate)
+  const occupiedExternal = [
+    ...lists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid),
+    ...widgets
+      .filter((entry) => entry.displayEnabled && entry.id !== widget.id && !peers.some((peer) => peer.id === entry.id))
+      .map((entry) => entry.grid)
+  ]
+
+  if (!validateWidgetPositionedRun(positioned, occupiedExternal)) return null
+  return widgetPositionedResult(widget.id, positioned)
+}
+
+function resolveVerticalMixedReflow(
+  moving: LayoutElement,
+  candidate: BoardList['grid'],
+  lists: BoardList[],
+  widgets: BoardWidget[]
+): MixedLayoutChange | null {
+  if (candidate.x !== moving.grid.x || candidate.w !== moving.grid.w) return null
+
+  const peers = allLayoutElements(lists, widgets)
+    .filter((entry) => entry.id !== moving.id && sameColumnBand(entry.grid, moving.grid) && validLayoutGrid(entry))
+    .sort((a, b) => a.grid.y - b.grid.y)
+  if (peers.length === 0) return null
+
+  const corridorStart = Math.min(moving.grid.y, candidate.y)
+  const corridorEnd = Math.max(moving.grid.y + moving.grid.h - 1, candidate.y + candidate.h - 1)
+  const affected = peers.filter((entry) => rangesOverlap(entry.grid.y, entry.grid.y + entry.grid.h - 1, corridorStart, corridorEnd))
+  if (affected.length === 0) return null
+
+  const overlappingPeers = affected.filter((entry) => gridsOverlap(entry.grid, candidate))
+  const ordered = [...affected]
+  const insertIndex = genericInsertIndex(moving, candidate, ordered, overlappingPeers, 'vertical')
+  ordered.splice(insertIndex, 0, moving)
+
+  const positioned = positionVerticalMixedRun(ordered, moving.id, candidate)
+  const affectedIds = new Set(affected.map((entry) => entry.id))
+  const occupiedExternal = allLayoutElements(lists, widgets)
+    .filter((entry) => entry.id !== moving.id && !affectedIds.has(entry.id))
+    .map((entry) => entry.grid)
+
+  if (!validateMixedPositionedRun(positioned, occupiedExternal)) return null
+  return mixedPositionedResult(moving.id, positioned)
+}
+
+function affectedHorizontalPeers(list: BoardList, candidate: BoardList['grid'], peers: BoardList[]): BoardList[] {
+  const corridorStart = Math.min(list.grid.x, candidate.x)
+  const corridorEnd = Math.max(list.grid.x + list.grid.w - 1, candidate.x + candidate.w - 1)
+  return peers.filter((entry) => rangesOverlap(entry.grid.x, entry.grid.x + entry.grid.w - 1, corridorStart, corridorEnd))
+}
+
+function affectedVerticalPeers(list: BoardList, candidate: BoardList['grid'], peers: BoardList[]): BoardList[] {
+  const corridorStart = Math.min(list.grid.y, candidate.y)
+  const corridorEnd = Math.max(list.grid.y + list.grid.h - 1, candidate.y + candidate.h - 1)
+  return peers.filter((entry) => rangesOverlap(entry.grid.y, entry.grid.y + entry.grid.h - 1, corridorStart, corridorEnd))
+}
+
+function affectedHorizontalWidgetPeers(widget: BoardWidget, candidate: BoardWidget['grid'], peers: BoardWidget[]): BoardWidget[] {
+  const corridorStart = Math.min(widget.grid.x, candidate.x)
+  const corridorEnd = Math.max(widget.grid.x + widget.grid.w - 1, candidate.x + candidate.w - 1)
+  return peers.filter((entry) => rangesOverlap(entry.grid.x, entry.grid.x + entry.grid.w - 1, corridorStart, corridorEnd))
+}
+
+function affectedVerticalWidgetPeers(widget: BoardWidget, candidate: BoardWidget['grid'], peers: BoardWidget[]): BoardWidget[] {
+  const corridorStart = Math.min(widget.grid.y, candidate.y)
+  const corridorEnd = Math.max(widget.grid.y + widget.grid.h - 1, candidate.y + candidate.h - 1)
+  return peers.filter((entry) => rangesOverlap(entry.grid.y, entry.grid.y + entry.grid.h - 1, corridorStart, corridorEnd))
+}
+
+function resolveMixedSwap(
+  moving: LayoutElement,
+  candidate: BoardList['grid'],
+  target: LayoutElement,
+  lists: BoardList[],
+  widgets: BoardWidget[]
+): MixedLayoutChange | null {
+  if (!sameGridSize(candidate, target.grid)) return null
+  const swappedTargetGrid = { ...target.grid, x: moving.grid.x, y: moving.grid.y }
+  const occupied = allLayoutElements(lists, widgets)
+    .filter((entry) => entry.id !== moving.id && entry.id !== target.id)
+    .map((entry) => entry.grid)
+  const canSwap = canPlaceAgainst(swappedTargetGrid, occupied) && canPlaceAgainst(candidate, occupied)
+  if (!canSwap) return null
+  return mixedPositionedResult(moving.id, [
+    { element: moving, grid: candidate },
+    { element: target, grid: swappedTargetGrid }
+  ])
+}
+
+function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean {
+  return startA <= endB && endA >= startB
+}
+
+function resolveBestEffortListMove(
+  list: BoardList,
+  candidate: BoardList['grid'],
+  lists: BoardList[],
+  widgets: BoardWidget[]
+): { grid: BoardList['grid']; moved: { list: BoardList; grid: BoardList['grid'] }[] } | null {
+  const others = lists.filter((entry) => entry.displayEnabled && entry.id !== list.id)
+  const occupied = [...others.map((entry) => entry.grid), ...widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)]
+  const dx = candidate.x - list.grid.x
+  const dy = candidate.y - list.grid.y
+
+  const candidates: BoardList['grid'][] = []
+  for (let y = 1; y <= 9 - candidate.h; y += 1) {
+    for (let x = 1; x <= 17 - candidate.w; x += 1) {
+      const probe = { ...candidate, x, y }
+      if (canPlaceAgainst(probe, occupied)) candidates.push(probe)
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  const directional = candidates
+    .filter((probe) => matchesMoveDirection(list.grid, candidate, probe))
+    .sort((a, b) => compareBestEffortGrid(list.grid, candidate, a, b, dx, dy))
+
+  const chosen = (directional[0] ?? candidates.sort((a, b) => compareBestEffortGrid(list.grid, candidate, a, b, dx, dy))[0]) ?? null
+  if (!chosen || sameGridPosition(chosen, list.grid)) return null
+  return { grid: chosen, moved: [] }
+}
+
+function resolveBestEffortWidgetMove(
+  widget: BoardWidget,
+  candidate: BoardWidget['grid'],
+  widgets: BoardWidget[],
+  lists: BoardList[]
+): { grid: BoardWidget['grid']; moved: { widget: BoardWidget; grid: BoardWidget['grid'] }[] } | null {
+  const others = widgets.filter((entry) => entry.displayEnabled && entry.id !== widget.id)
+  const occupied = [...others.map((entry) => entry.grid), ...lists.filter((entry) => entry.displayEnabled).map((entry) => entry.grid)]
+  const dx = candidate.x - widget.grid.x
+  const dy = candidate.y - widget.grid.y
+
+  const candidates: BoardWidget['grid'][] = []
+  for (let y = 1; y <= 9 - candidate.h; y += 1) {
+    for (let x = 1; x <= 17 - candidate.w; x += 1) {
+      const probe = { ...candidate, x, y }
+      if (canPlaceAgainst(probe, occupied)) candidates.push(probe)
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  const directional = candidates
+    .filter((probe) => matchesMoveDirection(widget.grid, candidate, probe))
+    .sort((a, b) => compareBestEffortGrid(widget.grid, candidate, a, b, dx, dy))
+
+  const chosen = (directional[0] ?? candidates.sort((a, b) => compareBestEffortGrid(widget.grid, candidate, a, b, dx, dy))[0]) ?? null
+  if (!chosen || sameGridPosition(chosen, widget.grid)) return null
+  return { grid: chosen, moved: [] }
+}
+
+function matchesMoveDirection(origin: BoardList['grid'], candidate: BoardList['grid'], probe: BoardList['grid']): boolean {
+  const dx = candidate.x - origin.x
+  const dy = candidate.y - origin.y
+  const horizontalOkay = dx === 0 || Math.sign(probe.x - origin.x) === Math.sign(dx) || probe.x === origin.x
+  const verticalOkay = dy === 0 || Math.sign(probe.y - origin.y) === Math.sign(dy) || probe.y === origin.y
+  return horizontalOkay && verticalOkay
+}
+
+function compareBestEffortGrid(
+  origin: BoardList['grid'],
+  candidate: BoardList['grid'],
+  a: BoardList['grid'],
+  b: BoardList['grid'],
+  dx: number,
+  dy: number
+): number {
+  const scoreA = bestEffortScore(origin, candidate, a, dx, dy)
+  const scoreB = bestEffortScore(origin, candidate, b, dx, dy)
+  if (scoreA.progress !== scoreB.progress) return scoreB.progress - scoreA.progress
+  if (scoreA.distance !== scoreB.distance) return scoreA.distance - scoreB.distance
+  if (scoreA.secondary !== scoreB.secondary) return scoreA.secondary - scoreB.secondary
+  return scoreA.tertiary - scoreB.tertiary
+}
+
+function bestEffortScore(
+  origin: BoardList['grid'],
+  candidate: BoardList['grid'],
+  probe: BoardList['grid'],
+  dx: number,
+  dy: number
+): { progress: number; distance: number; secondary: number; tertiary: number } {
+  const progressX = dx === 0 ? 0 : Math.max(0, Math.sign(dx) * (probe.x - origin.x))
+  const progressY = dy === 0 ? 0 : Math.max(0, Math.sign(dy) * (probe.y - origin.y))
+  const distance = Math.abs(probe.x - candidate.x) + Math.abs(probe.y - candidate.y)
+  const secondary = Math.abs(probe.x - candidate.x)
+  const tertiary = Math.abs(probe.y - candidate.y)
+  return { progress: progressX + progressY, distance, secondary, tertiary }
+}
+
+function verticalInsertIndex(
+  list: BoardList,
+  candidate: BoardList['grid'],
+  orderedPeers: BoardList[],
+  overlappingPeers: BoardList[]
+): number {
+  if (overlappingPeers.length > 0) {
+    if (candidate.y > list.grid.y) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[overlappingPeers.length - 1].id) + 1
+    }
+    if (candidate.y < list.grid.y) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[0].id)
+    }
+  }
+
+  const candidateCenter = candidate.y + candidate.h / 2
+  const byCenter = orderedPeers.findIndex((entry) => candidateCenter < entry.grid.y + entry.grid.h / 2)
+  return byCenter === -1 ? orderedPeers.length : byCenter
+}
+
+function horizontalWidgetInsertIndex(
+  widget: BoardWidget,
+  candidate: BoardWidget['grid'],
+  orderedPeers: BoardWidget[],
+  overlappingPeers: BoardWidget[]
+): number {
+  if (overlappingPeers.length > 0) {
+    if (candidate.x > widget.grid.x) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[overlappingPeers.length - 1].id) + 1
+    }
+    if (candidate.x < widget.grid.x) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[0].id)
+    }
+  }
+
+  const candidateCenter = candidate.x + candidate.w / 2
+  const byCenter = orderedPeers.findIndex((entry) => candidateCenter < entry.grid.x + entry.grid.w / 2)
+  return byCenter === -1 ? orderedPeers.length : byCenter
+}
+
+function verticalWidgetInsertIndex(
+  widget: BoardWidget,
+  candidate: BoardWidget['grid'],
+  orderedPeers: BoardWidget[],
+  overlappingPeers: BoardWidget[]
+): number {
+  if (overlappingPeers.length > 0) {
+    if (candidate.y > widget.grid.y) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[overlappingPeers.length - 1].id) + 1
+    }
+    if (candidate.y < widget.grid.y) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[0].id)
+    }
+  }
+
+  const candidateCenter = candidate.y + candidate.h / 2
+  const byCenter = orderedPeers.findIndex((entry) => candidateCenter < entry.grid.y + entry.grid.h / 2)
+  return byCenter === -1 ? orderedPeers.length : byCenter
+}
+
+function genericInsertIndex(
+  moving: LayoutElement,
+  candidate: BoardList['grid'],
+  orderedPeers: LayoutElement[],
+  overlappingPeers: LayoutElement[],
+  axis: 'horizontal' | 'vertical'
+): number {
+  const movingCoord = axis === 'horizontal' ? moving.grid.x : moving.grid.y
+  const candidateCoord = axis === 'horizontal' ? candidate.x : candidate.y
+  if (overlappingPeers.length > 0) {
+    if (candidateCoord > movingCoord) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[overlappingPeers.length - 1].id) + 1
+    }
+    if (candidateCoord < movingCoord) {
+      return orderedPeers.findIndex((entry) => entry.id === overlappingPeers[0].id)
+    }
+  }
+
+  const candidateCenter =
+    axis === 'horizontal' ? candidate.x + candidate.w / 2 : candidate.y + candidate.h / 2
+  const byCenter = orderedPeers.findIndex((entry) =>
+    candidateCenter < (axis === 'horizontal' ? entry.grid.x + entry.grid.w / 2 : entry.grid.y + entry.grid.h / 2)
+  )
+  return byCenter === -1 ? orderedPeers.length : byCenter
+}
+
+function positionVerticalRun(
+  ordered: BoardList[],
+  movingListId: string,
+  candidate: BoardList['grid']
+): { list: BoardList; grid: BoardList['grid'] }[] {
+  const movingIndex = ordered.findIndex((entry) => entry.id === movingListId)
+  const placed = new Map<string, BoardList['grid']>()
+  placed.set(movingListId, { ...candidate })
+
+  let nextY = candidate.y
+  for (let index = movingIndex - 1; index >= 0; index -= 1) {
+    const entry = ordered[index]
+    nextY -= entry.grid.h
+    placed.set(entry.id, { ...entry.grid, x: candidate.x, y: nextY })
+  }
+
+  let trailingY = candidate.y + candidate.h
+  for (let index = movingIndex + 1; index < ordered.length; index += 1) {
+    const entry = ordered[index]
+    placed.set(entry.id, { ...entry.grid, x: candidate.x, y: trailingY })
+    trailingY += entry.grid.h
+  }
+
+  const positioned = ordered.map((entry) => ({ list: entry, grid: placed.get(entry.id) ?? entry.grid }))
+  const minY = Math.min(...positioned.map((entry) => entry.grid.y))
+  if (minY < 1) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, y: entry.grid.y + (1 - minY) }
+  }
+
+  const maxY = Math.max(...positioned.map((entry) => entry.grid.y + entry.grid.h - 1))
+  if (maxY > 8) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, y: entry.grid.y - (maxY - 8) }
+  }
+
+  return positioned
+}
+
+function positionVerticalWidgetRun(
+  ordered: BoardWidget[],
+  movingWidgetId: string,
+  candidate: BoardWidget['grid']
+): { widget: BoardWidget; grid: BoardWidget['grid'] }[] {
+  const movingIndex = ordered.findIndex((entry) => entry.id === movingWidgetId)
+  const placed = new Map<string, BoardWidget['grid']>()
+  placed.set(movingWidgetId, { ...candidate })
+
+  let nextY = candidate.y
+  for (let index = movingIndex - 1; index >= 0; index -= 1) {
+    const entry = ordered[index]
+    nextY -= entry.grid.h
+    placed.set(entry.id, { ...entry.grid, x: candidate.x, y: nextY })
+  }
+
+  let trailingY = candidate.y + candidate.h
+  for (let index = movingIndex + 1; index < ordered.length; index += 1) {
+    const entry = ordered[index]
+    placed.set(entry.id, { ...entry.grid, x: candidate.x, y: trailingY })
+    trailingY += entry.grid.h
+  }
+
+  const positioned = ordered.map((entry) => ({ widget: entry, grid: placed.get(entry.id) ?? entry.grid }))
+  const minY = Math.min(...positioned.map((entry) => entry.grid.y))
+  if (minY < 1) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, y: entry.grid.y + (1 - minY) }
+  }
+
+  const maxY = Math.max(...positioned.map((entry) => entry.grid.y + entry.grid.h - 1))
+  if (maxY > 8) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, y: entry.grid.y - (maxY - 8) }
+  }
+
+  return positioned
+}
+
+function positionHorizontalMixedRun(
+  ordered: LayoutElement[],
+  movingId: string,
+  candidate: BoardList['grid']
+): { element: LayoutElement; grid: BoardList['grid'] }[] {
+  const movingIndex = ordered.findIndex((entry) => entry.id === movingId)
+  const placed = new Map<string, BoardList['grid']>()
+  placed.set(movingId, { ...candidate })
+
+  let nextX = candidate.x
+  for (let index = movingIndex - 1; index >= 0; index -= 1) {
+    const entry = ordered[index]
+    nextX -= entry.grid.w
+    placed.set(entry.id, { ...entry.grid, x: nextX, y: candidate.y })
+  }
+
+  let trailingX = candidate.x + candidate.w
+  for (let index = movingIndex + 1; index < ordered.length; index += 1) {
+    const entry = ordered[index]
+    placed.set(entry.id, { ...entry.grid, x: trailingX, y: candidate.y })
+    trailingX += entry.grid.w
+  }
+
+  const positioned = ordered.map((entry) => ({ element: entry, grid: placed.get(entry.id) ?? entry.grid }))
+  const minX = Math.min(...positioned.map((entry) => entry.grid.x))
+  if (minX < 1) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, x: entry.grid.x + (1 - minX) }
+  }
+
+  const maxX = Math.max(...positioned.map((entry) => entry.grid.x + entry.grid.w - 1))
+  if (maxX > 16) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, x: entry.grid.x - (maxX - 16) }
+  }
+
+  return positioned
+}
+
+function positionVerticalMixedRun(
+  ordered: LayoutElement[],
+  movingId: string,
+  candidate: BoardList['grid']
+): { element: LayoutElement; grid: BoardList['grid'] }[] {
+  const movingIndex = ordered.findIndex((entry) => entry.id === movingId)
+  const placed = new Map<string, BoardList['grid']>()
+  placed.set(movingId, { ...candidate })
+
+  let nextY = candidate.y
+  for (let index = movingIndex - 1; index >= 0; index -= 1) {
+    const entry = ordered[index]
+    nextY -= entry.grid.h
+    placed.set(entry.id, { ...entry.grid, x: candidate.x, y: nextY })
+  }
+
+  let trailingY = candidate.y + candidate.h
+  for (let index = movingIndex + 1; index < ordered.length; index += 1) {
+    const entry = ordered[index]
+    placed.set(entry.id, { ...entry.grid, x: candidate.x, y: trailingY })
+    trailingY += entry.grid.h
+  }
+
+  const positioned = ordered.map((entry) => ({ element: entry, grid: placed.get(entry.id) ?? entry.grid }))
+  const minY = Math.min(...positioned.map((entry) => entry.grid.y))
+  if (minY < 1) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, y: entry.grid.y + (1 - minY) }
+  }
+
+  const maxY = Math.max(...positioned.map((entry) => entry.grid.y + entry.grid.h - 1))
+  if (maxY > 8) {
+    for (const entry of positioned) entry.grid = { ...entry.grid, y: entry.grid.y - (maxY - 8) }
+  }
+
+  return positioned
+}
+
+function validatePositionedRun(positioned: { list: BoardList; grid: BoardList['grid'] }[], occupiedExternal: BoardList['grid'][]): boolean {
+  for (let index = 0; index < positioned.length; index += 1) {
+    const entry = positioned[index]
+    if (!validDisplayGrid(entry.grid)) return false
+    const occupied = [...occupiedExternal, ...positioned.filter((_, otherIndex) => otherIndex !== index).map((item) => item.grid)]
+    if (!canPlaceAgainst(entry.grid, occupied)) return false
+  }
+  return true
+}
+
+function validateWidgetPositionedRun(
+  positioned: { widget: BoardWidget; grid: BoardWidget['grid'] }[],
+  occupiedExternal: BoardList['grid'][]
+): boolean {
+  for (let index = 0; index < positioned.length; index += 1) {
+    const entry = positioned[index]
+    if (!validWidgetGrid(entry.grid)) return false
+    const occupied = [...occupiedExternal, ...positioned.filter((_, otherIndex) => otherIndex !== index).map((item) => item.grid)]
+    if (!canPlaceAgainst(entry.grid, occupied)) return false
+  }
+  return true
+}
+
+function validateMixedPositionedRun(
+  positioned: { element: LayoutElement; grid: BoardList['grid'] }[],
+  occupiedExternal: BoardList['grid'][]
+): boolean {
+  for (let index = 0; index < positioned.length; index += 1) {
+    const entry = positioned[index]
+    const valid = entry.element.kind === 'list' ? validDisplayGrid(entry.grid) : validWidgetGrid(entry.grid)
+    if (!valid) return false
+    const occupied = [...occupiedExternal, ...positioned.filter((_, otherIndex) => otherIndex !== index).map((item) => item.grid)]
+    if (!canPlaceAgainst(entry.grid, occupied)) return false
+  }
+  return true
+}
+
+function positionedResult(
+  movingListId: string,
+  positioned: { list: BoardList; grid: BoardList['grid'] }[]
+): { grid: BoardList['grid']; moved: { list: BoardList; grid: BoardList['grid'] }[] } {
+  const moving = positioned.find((entry) => entry.list.id === movingListId)
+  return {
+    grid: moving?.grid ?? positioned[0].grid,
+    moved: positioned
+      .filter((entry) => entry.list.id !== movingListId && !sameGridPosition(entry.grid, entry.list.grid))
+      .map((entry) => ({ list: entry.list, grid: entry.grid }))
+  }
+}
+
+function widgetPositionedResult(
+  movingWidgetId: string,
+  positioned: { widget: BoardWidget; grid: BoardWidget['grid'] }[]
+): { grid: BoardWidget['grid']; moved: { widget: BoardWidget; grid: BoardWidget['grid'] }[] } {
+  const moving = positioned.find((entry) => entry.widget.id === movingWidgetId)
+  return {
+    grid: moving?.grid ?? positioned[0].grid,
+    moved: positioned
+      .filter((entry) => entry.widget.id !== movingWidgetId && !sameGridPosition(entry.grid, entry.widget.grid))
+      .map((entry) => ({ widget: entry.widget, grid: entry.grid }))
+  }
+}
+
+function mixedPositionedResult(
+  movingId: string,
+  positioned: { element: LayoutElement; grid: BoardList['grid'] }[]
+): MixedLayoutChange {
+  const moving = positioned.find((entry) => entry.element.id === movingId)
+  return {
+    grid: moving?.grid ?? positioned[0].grid,
+    movedLists: positioned
+      .filter((entry) => entry.element.kind === 'list' && entry.element.id !== movingId && !sameGridPosition(entry.grid, entry.element.grid))
+      .map((entry) => ({ list: (entry.element as Extract<LayoutElement, { kind: 'list' }>).list, grid: entry.grid })),
+    movedWidgets: positioned
+      .filter((entry) => entry.element.kind === 'widget' && entry.element.id !== movingId && !sameGridPosition(entry.grid, entry.element.grid))
+      .map((entry) => ({ widget: (entry.element as Extract<LayoutElement, { kind: 'widget' }>).widget, grid: entry.grid }))
+  }
 }
 
 function moveGrid(grid: BoardList['grid'], dx: number, dy: number): BoardList['grid'] {
@@ -3822,6 +5919,18 @@ function moveGrid(grid: BoardList['grid'], dx: number, dy: number): BoardList['g
     ...grid,
     x: clamp(grid.x + dx, 1, 17 - grid.w),
     y: clamp(grid.y + dy, 1, 9 - grid.h)
+  }
+}
+
+function pointerMoveGrid(grid: BoardList['grid'], rect: DOMRect, pointerX: number, pointerY: number): BoardList['grid'] {
+  const unitW = rect.width / 16
+  const unitH = rect.height / 8
+  const centeredX = Math.round((pointerX - rect.left) / unitW - grid.w / 2 + 0.5) + 1
+  const centeredY = Math.round((pointerY - rect.top) / unitH - grid.h / 2 + 0.5) + 1
+  return {
+    ...grid,
+    x: clamp(centeredX, 1, 17 - grid.w),
+    y: clamp(centeredY, 1, 9 - grid.h)
   }
 }
 
@@ -3853,29 +5962,94 @@ function moveWidgetGrid(grid: BoardWidget['grid'], dx: number, dy: number): Boar
   }
 }
 
+function pointerMoveWidgetGrid(grid: BoardWidget['grid'], rect: DOMRect, pointerX: number, pointerY: number): BoardWidget['grid'] {
+  const unitW = rect.width / 16
+  const unitH = rect.height / 8
+  const centeredX = Math.round((pointerX - rect.left) / unitW - grid.w / 2 + 0.5) + 1
+  const centeredY = Math.round((pointerY - rect.top) / unitH - grid.h / 2 + 0.5) + 1
+  return {
+    ...grid,
+    x: clamp(centeredX, 1, 17 - grid.w),
+    y: clamp(centeredY, 1, 9 - grid.h)
+  }
+}
+
+function pointerMoveWidgetGridWithOffset(
+  grid: BoardWidget['grid'],
+  rect: DOMRect,
+  pointerX: number,
+  pointerY: number,
+  offsetX: number,
+  offsetY: number
+): BoardWidget['grid'] {
+  const unitW = rect.width / 16
+  const unitH = rect.height / 8
+  const left = pointerX - rect.left - offsetX
+  const top = pointerY - rect.top - offsetY
+  const x = Math.round(left / unitW) + 1
+  const y = Math.round(top / unitH) + 1
+  return {
+    ...grid,
+    x: clamp(x, 1, 17 - grid.w),
+    y: clamp(y, 1, 9 - grid.h)
+  }
+}
+
 function resizeWidgetGrid(
   grid: BoardWidget['grid'],
+  type: WidgetType,
+  config: BoardWidgetConfig,
   handle: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw',
   dx: number,
   dy: number
 ): BoardWidget['grid'] {
-  let next = { ...grid }
-  if (handle.includes('e')) next.w = clamp(grid.w + dx, 2, 17 - grid.x)
-  if (handle.includes('s')) next.h = clamp(grid.h + dy, 2, 9 - grid.y)
+  let raw = { ...grid }
+  if (handle.includes('e')) raw.w = clamp(grid.w + dx, 1, 17 - grid.x)
+  if (handle.includes('s')) raw.h = clamp(grid.h + dy, 1, 9 - grid.y)
   if (handle.includes('w')) {
-    const newX = clamp(grid.x + dx, 1, grid.x + grid.w - 2)
-    next = { ...next, x: newX, w: grid.w + (grid.x - newX) }
+    const newX = clamp(grid.x + dx, 1, grid.x + grid.w - 1)
+    raw = { ...raw, x: newX, w: grid.w + (grid.x - newX) }
   }
   if (handle.includes('n')) {
-    const newY = clamp(grid.y + dy, 1, grid.y + grid.h - 2)
-    next = { ...next, y: newY, h: grid.h + (grid.y - newY) }
+    const newY = clamp(grid.y + dy, 1, grid.y + grid.h - 1)
+    raw = { ...raw, y: newY, h: grid.h + (grid.y - newY) }
   }
-  return next
+
+  const spec = widgetAspectSpec(type, config)
+  const scaleBounds = widgetScaleBounds(spec)
+  const widthDrivenScale = raw.w / spec.ratioW
+  const heightDrivenScale = raw.h / spec.ratioH
+  const desiredScale =
+    handle === 'e' || handle === 'w'
+      ? widthDrivenScale
+      : handle === 'n' || handle === 's'
+        ? heightDrivenScale
+        : Math.max(widthDrivenScale, heightDrivenScale)
+
+  const maxWidth = handle.includes('w') ? grid.x + grid.w - 1 : 17 - grid.x
+  const maxHeight = handle.includes('n') ? grid.y + grid.h - 1 : 9 - grid.y
+  const maxScale = Math.max(
+    scaleBounds.min,
+    Math.min(scaleBounds.max, Math.floor(maxWidth / spec.ratioW), Math.floor(maxHeight / spec.ratioH))
+  )
+  const scale = clamp(Math.round(desiredScale), scaleBounds.min, maxScale)
+  const sized = widgetGridForScale(spec, scale)
+  const x = handle.includes('w') ? grid.x + grid.w - sized.w : grid.x
+  const y = handle.includes('n') ? grid.y + grid.h - sized.h : grid.y
+
+  return {
+    x: clamp(x, 1, 17 - sized.w),
+    y: clamp(y, 1, 9 - sized.h),
+    ...sized
+  }
 }
 
-function normalizeWidgetDisplayGrid(grid: BoardWidget['grid']): BoardWidget['grid'] {
-  const w = clamp(grid.w, 2, 16)
-  const h = clamp(grid.h, 2, 8)
+function normalizeWidgetDisplayGrid(grid: BoardWidget['grid'], type: WidgetType, config: BoardWidgetConfig): BoardWidget['grid'] {
+  const spec = widgetAspectSpec(type, config)
+  const scaleBounds = widgetScaleBounds(spec)
+  const desiredScale = Math.max(grid.w / spec.ratioW, grid.h / spec.ratioH)
+  const scale = clamp(Math.round(desiredScale), scaleBounds.min, scaleBounds.max)
+  const { w, h } = widgetGridForScale(spec, scale)
   return {
     x: clamp(grid.x, 1, 17 - w),
     y: clamp(grid.y, 1, 9 - h),
@@ -3884,8 +6058,15 @@ function normalizeWidgetDisplayGrid(grid: BoardWidget['grid']): BoardWidget['gri
   }
 }
 
-function canPlaceWidgetGrid(grid: BoardWidget['grid'], lists: BoardList[], widgets: BoardWidget[], currentWidgetId: string): boolean {
-  const normalized = normalizeWidgetDisplayGrid(grid)
+function canPlaceWidgetGrid(
+  grid: BoardWidget['grid'],
+  lists: BoardList[],
+  widgets: BoardWidget[],
+  currentWidgetId: string,
+  type: WidgetType,
+  config: BoardWidgetConfig
+): boolean {
+  const normalized = normalizeWidgetDisplayGrid(grid, type, config)
   return (
     !lists.some((list) => list.displayEnabled && gridsOverlap(normalized, list.grid)) &&
     !widgets.some((widget) => widget.displayEnabled && widget.id !== currentWidgetId && gridsOverlap(normalized, widget.grid))
@@ -3901,9 +6082,17 @@ function visibleColumns(list: BoardList): ListColumn[] {
   )
 }
 
+function isComputedTemplateColumn(list: BoardList, column: ListColumn): boolean {
+  return list.templateType === 'shopping_list' && normalizeColumnName(column.name) === 'cost'
+}
+
+function editableItemColumns(list: BoardList): ListColumn[] {
+  return visibleColumns(list).filter((column) => !isComputedTemplateColumn(list, column))
+}
+
 function boardVisibleColumns(list: BoardList): ListColumn[] {
   if (list.templateType === 'birthday_calendar') {
-    return birthdayCoreColumns(list).filter((column) => column.name !== 'Birth Year')
+    return birthdayCoreColumns(list).filter((column) => !isBirthdayBirthYearColumn(column))
   }
   return visibleColumns(list).filter((column) => column.showOnBoard)
 }
@@ -3928,6 +6117,38 @@ function itemTitle(item: BoardItem, list: BoardList): string {
   return String(item.values[nameColumn?.id] ?? item.displayCode)
 }
 
+function normalizeColumnName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+}
+
+const summaryCountTextColumns = new Set(['item name', 'task', 'product', 'entry', 'title', 'name'].map((name) => normalizeColumnName(name)))
+const summaryDateColumns = new Set(['deadline', 'needed by', 'appointment date', 'birthday', 'start'].map((name) => normalizeColumnName(name)))
+const nonSummaryNumericColumns = new Set(['year of birth', 'birth year', '% done'].map((name) => normalizeColumnName(name)))
+
+function supportsListSummaryForColumn(column: Pick<ListColumn, 'name' | 'type' | 'role'>): boolean {
+  const normalizedName = normalizeColumnName(column.name)
+  if (column.role === 'deadline') return true
+  if (column.type === 'text') return summaryCountTextColumns.has(normalizedName)
+  if (column.type === 'currency') return normalizedName !== 'price / pc'
+  if (column.type === 'integer' || column.type === 'decimal') return !nonSummaryNumericColumns.has(normalizedName)
+  if (column.type === 'date') return summaryDateColumns.has(normalizedName)
+  return false
+}
+
+function supportsBoardSummaryForColumn(column: Pick<ListColumn, 'name' | 'type' | 'role'>): boolean {
+  return supportsListSummaryForColumn(column)
+}
+
+function inferredBoardSummaryAggregation(column: Pick<ListColumn, 'type' | 'role'>): AggregationMethod {
+  if (column.role === 'deadline' || column.type === 'date') return 'next_due'
+  if (column.type === 'currency' || column.type === 'integer' || column.type === 'decimal') return 'sum'
+  return 'count'
+}
+
 function nextDueLabel(list: BoardList): ReactElement {
   if (!list.dueDateColumnId) return <em>Next due date: <strong>-</strong></em>
   const deadlines = list.items
@@ -3943,7 +6164,15 @@ function nextDueLabel(list: BoardList): ReactElement {
   const diff = upcoming.getTime() - now
   const prefix = diff < 0 ? 'overdue by' : 'in'
   const tone = deadlineToneFromDiff(diff)
-  return <em>Next due date: <strong className={`deadline-text ${deadlineClass(tone)}`}>{prefix} {compactDuration(Math.abs(diff))}</strong></em>
+  const deadlineColumn = list.columns.find((column) => column.id === list.dueDateColumnId)
+  const overdueCount = list.items.filter((item) => item.isOverdue).length
+  return (
+    <em>
+      Next due date:{' '}
+      <strong className={`deadline-text ${deadlineClass(tone)}`}>{prefix} {compactDuration(Math.abs(diff))}</strong>
+      {deadlineColumn?.listSummaryEligible && overdueCount > 0 ? <strong className="deadline-text deadline-overdue"> • {overdueCount} overdue</strong> : null}
+    </em>
+  )
 }
 
 function compactDuration(milliseconds: number): string {
@@ -4110,10 +6339,15 @@ function defaultSortDirection(column: ListColumn): Exclude<ListSortDirection, 'm
 
 function defaultChoiceConfig(name: string): ChoiceConfig {
   const priority = name.toLowerCase().includes('priority')
-  const labels = priority ? ['Highest', 'High', 'Medium', 'Low', 'Lowest'] : ['Option 1', 'Option 2', 'Option 3']
+  const wishmeter = name.toLowerCase().includes('wishmeter')
+  const labels = wishmeter
+    ? ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Asking for a friend...']
+    : priority
+      ? ['Highest', 'High', 'Medium', 'Low', 'Lowest']
+      : ['Option 1', 'Option 2', 'Option 3']
   return {
     selection: 'single',
-    ranked: priority,
+    ranked: priority || wishmeter,
     options: labels.map((label, index) => ({ id: choiceId(label, index), label, rank: index + 1 }))
   }
 }
@@ -4172,7 +6406,19 @@ type BoardDisplayColumn =
   | { kind: 'birthday_turning'; key: string; label: string }
 
 function birthdayCoreColumns(list: BoardList): ListColumn[] {
-  return visibleColumns(list).filter((column) => column.name === 'Person Name' || column.name === 'Birthday' || column.name === 'Birth Year')
+  return visibleColumns(list).filter((column) => {
+    const normalized = normalizeColumnName(column.name)
+    return normalized === 'name' || normalized === 'person name' || normalized === 'birthday' || normalized === 'year of birth' || normalized === 'birth year'
+  })
+}
+
+function isBirthdayDateColumn(column: ListColumn): boolean {
+  return normalizeColumnName(column.name) === 'birthday'
+}
+
+function isBirthdayBirthYearColumn(column: ListColumn): boolean {
+  const normalized = normalizeColumnName(column.name)
+  return normalized === 'birth year' || normalized === 'year of birth'
 }
 
 function birthdayBoardColumns(list: BoardList, columns: ListColumn[]): BoardDisplayColumn[] {
@@ -4180,14 +6426,17 @@ function birthdayBoardColumns(list: BoardList, columns: ListColumn[]): BoardDisp
   const core = birthdayCoreColumns(list)
   return [
     ...core
-      .filter((column) => column.name !== 'Birth Year')
+      .filter((column) => {
+        const normalized = normalizeColumnName(column.name)
+        return normalized !== 'birth year' && normalized !== 'year of birth'
+      })
       .map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column })),
     { kind: 'birthday_turning', key: 'birthday-turning', label: 'Turning' }
   ]
 }
 
 function birthdayFilteredItems(list: BoardList, now = new Date()): BoardItem[] {
-  const birthdayColumn = birthdayCoreColumns(list).find((column) => column.name === 'Birthday')
+  const birthdayColumn = birthdayCoreColumns(list).find((column) => isBirthdayDateColumn(column))
   if (!birthdayColumn) return list.items
   const mode = list.templateConfig.birthday?.boardView ?? 'this_month'
   const end = birthdayRangeEnd(now, mode)
@@ -4229,8 +6478,8 @@ function birthdayOccurrenceDate(value: FieldValue | undefined, now = new Date())
 }
 
 function birthdayTurningLabel(item: BoardItem, list: BoardList): string {
-  const birthYearColumn = birthdayCoreColumns(list).find((column) => column.name === 'Birth Year')
-  const birthdayColumn = birthdayCoreColumns(list).find((column) => column.name === 'Birthday')
+  const birthYearColumn = birthdayCoreColumns(list).find((column) => isBirthdayBirthYearColumn(column))
+  const birthdayColumn = birthdayCoreColumns(list).find((column) => isBirthdayDateColumn(column))
   const year = birthYearColumn ? Number(item.values[birthYearColumn.id]) : NaN
   const occurrence = birthdayColumn ? birthdayOccurrenceDate(item.values[birthdayColumn.id]) : null
   if (!Number.isFinite(year) || !occurrence) return '-'
@@ -4238,7 +6487,7 @@ function birthdayTurningLabel(item: BoardItem, list: BoardList): string {
 }
 
 function formatBirthdayAwareCellValue(item: BoardItem, column: ListColumn, list: BoardList): string | ReactElement {
-  if (list.templateType === 'birthday_calendar' && column.name === 'Birthday') {
+  if (list.templateType === 'birthday_calendar' && isBirthdayDateColumn(column)) {
     const occurrence = birthdayOccurrenceDate(item.values[column.id])
     return occurrence ? formatBirthdayMonthDay(occurrence) : '-'
   }
@@ -4277,7 +6526,7 @@ function collectDaySummaryEntries(snapshot: BoardSnapshot, mode: 'today' | 'next
 
   for (const list of snapshot.lists) {
     if (list.templateType === 'birthday_calendar') {
-      const birthdayColumn = birthdayCoreColumns(list).find((column) => column.name === 'Birthday')
+      const birthdayColumn = birthdayCoreColumns(list).find((column) => isBirthdayDateColumn(column))
       for (const item of list.items) {
         const occurrence = birthdayColumn ? birthdayOccurrenceDate(item.values[birthdayColumn.id], start) : null
         if (!occurrence || occurrence < start || occurrence > end) continue
