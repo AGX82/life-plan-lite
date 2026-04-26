@@ -1,6 +1,7 @@
-export type ColumnType = 'text' | 'integer' | 'decimal' | 'currency' | 'date' | 'boolean' | 'choice' | 'hyperlink'
+export type ColumnType = 'text' | 'integer' | 'decimal' | 'currency' | 'duration' | 'date' | 'boolean' | 'choice' | 'hyperlink'
 
 export type ListSortDirection = 'manual' | 'asc' | 'desc'
+export type ColumnSortOrder = 'default' | 'manual' | 'name' | 'field_type' | 'required' | 'visibility'
 
 export type PublicationStatus = 'draft' | 'published' | 'dirty'
 
@@ -12,8 +13,9 @@ export type AggregationMethod = 'sum' | 'count' | 'active_count' | 'completed_co
 export type ColumnRole = 'deadline'
 
 export type DateDisplayFormat = 'date' | 'datetime' | 'time'
+export type DurationDisplayFormat = 'days_hours' | 'hours'
 
-export type RecurrenceMode = 'none' | 'daily' | 'weekly' | 'biweekly' | 'custom_weekdays'
+export type RecurrenceMode = 'none' | 'daily' | 'weekly' | 'interval_weeks' | 'monthly' | 'interval_months' | 'custom_weekdays'
 
 export type CurrencyCode = 'RON' | 'EUR' | 'USD' | 'GBP' | 'CNY' | 'JPY' | 'CAD' | 'AUD' | 'CHF' | 'PLN'
 export type WidgetType = 'clock' | 'weather' | 'word_of_day' | 'world_clocks' | 'countdown'
@@ -25,7 +27,7 @@ export type ListTemplateType =
   | 'health'
   | 'trips_events'
   | 'birthday_calendar'
-export type BirthdayBoardView = 'this_week' | 'this_month' | 'next_10_days' | 'next_2_months' | 'all'
+export type BirthdayBoardView = 'this_week' | 'this_month' | 'next_10_days' | 'next_30_days' | 'next_2_months' | 'all'
 
 export type ListTemplateConfig = {
   birthday?: {
@@ -83,6 +85,7 @@ export type DateFieldValue = {
   value: string
   recurrence: RecurrenceMode
   recurrenceDays: number[]
+  recurrenceInterval: number
 }
 
 export type FieldValue = string | number | boolean | string[] | DateFieldValue | null
@@ -101,6 +104,7 @@ export type ListColumn = {
   role: ColumnRole | null
   choiceConfig: ChoiceConfig | null
   dateDisplayFormat: DateDisplayFormat
+  durationDisplayFormat: DurationDisplayFormat
   recurrence: RecurrenceMode
   recurrenceDays: number[]
   currencyCode: CurrencyCode
@@ -132,6 +136,7 @@ export type BoardList = {
   dueDateEnabled: boolean
   dueDateColumnId: string | null
   deadlineMandatory: boolean
+  columnSortOrder: ColumnSortOrder
   sortColumnId: string | null
   sortDirection: ListSortDirection
   displayEnabled: boolean
@@ -139,6 +144,7 @@ export type BoardList = {
   showDependenciesOnBoard: boolean
   showCreatedAtOnBoard: boolean
   showCreatedByOnBoard: boolean
+  showStatusOnBoard: boolean
   columns: ListColumn[]
   groups: ItemGroup[]
   items: BoardItem[]
@@ -236,6 +242,7 @@ export type AppTheme = 'black_glass_blue' | 'liquid_gunmetal' | 'midnight_clear'
 export type AppSettings = {
   closeConfirmationMode: CloseConfirmationMode
   theme: AppTheme
+  addColumnOnTopByBoard: Record<string, boolean>
 }
 
 export type AdminModeRequestResult = {
@@ -342,6 +349,7 @@ export type UpdateListInput = {
   dueDateEnabled: boolean
   dueDateColumnId: string | null
   deadlineMandatory: boolean
+  columnSortOrder: ColumnSortOrder
   sortColumnId: string | null
   sortDirection: ListSortDirection
   displayEnabled: boolean
@@ -349,6 +357,7 @@ export type UpdateListInput = {
   showDependenciesOnBoard: boolean
   showCreatedAtOnBoard: boolean
   showCreatedByOnBoard: boolean
+  showStatusOnBoard: boolean
 }
 
 export type UpdateListGridInput = {
@@ -367,10 +376,13 @@ export type CreateColumnInput = {
   type: ColumnType
   choiceConfig?: ChoiceConfig | null
   dateDisplayFormat?: DateDisplayFormat
+  durationDisplayFormat?: DurationDisplayFormat
   recurrence?: RecurrenceMode
   recurrenceDays?: number[]
   currencyCode?: CurrencyCode
   showOnBoard?: boolean
+  addOnTop?: boolean
+  columnSortOrder?: ColumnSortOrder
 }
 
 export type CreateWidgetInput = {
@@ -418,10 +430,12 @@ export type UpdateColumnInput = {
   boardSummaryEligible: boolean
   choiceConfig?: ChoiceConfig | null
   dateDisplayFormat?: DateDisplayFormat
+  durationDisplayFormat?: DurationDisplayFormat
   recurrence?: RecurrenceMode
   recurrenceDays?: number[]
   currencyCode?: CurrencyCode
   showOnBoard?: boolean
+  order?: number
 }
 
 export type CloseItemInput = {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { DbClient } from './client'
 
 export function migrate(client: DbClient): void {
@@ -38,6 +39,7 @@ export function migrate(client: DbClient): void {
       due_date_enabled INTEGER NOT NULL DEFAULT 0,
       due_date_column_id TEXT,
       deadline_mandatory INTEGER NOT NULL DEFAULT 0,
+      column_sort_order TEXT NOT NULL DEFAULT 'default',
       sort_column_id TEXT,
       sort_direction TEXT NOT NULL DEFAULT 'manual',
       display_enabled INTEGER NOT NULL DEFAULT 1,
@@ -45,6 +47,7 @@ export function migrate(client: DbClient): void {
       show_dependencies_on_board INTEGER NOT NULL DEFAULT 1,
       show_created_at_on_board INTEGER NOT NULL DEFAULT 0,
       show_created_by_on_board INTEGER NOT NULL DEFAULT 0,
+      show_status_on_board INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(board_id, code)
@@ -67,7 +70,7 @@ export function migrate(client: DbClient): void {
       id TEXT PRIMARY KEY,
       list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      column_type TEXT NOT NULL CHECK(column_type IN ('text', 'integer', 'decimal', 'currency', 'date', 'boolean', 'choice', 'hyperlink')),
+      column_type TEXT NOT NULL CHECK(column_type IN ('text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink')),
       sort_order INTEGER NOT NULL,
       is_required INTEGER NOT NULL DEFAULT 0,
       max_length INTEGER,
@@ -178,17 +181,60 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'boards', 'description', "TEXT NOT NULL DEFAULT ''")
   addColumnIfMissing(client, 'boards', 'owner', "TEXT NOT NULL DEFAULT ''")
   rebuildListColumnsForRichTypesIfNeeded(client)
+  client.database.exec(`
+    UPDATE list_columns
+    SET is_summary_eligible = 1,
+        is_list_summary_eligible = 1,
+        is_board_summary_eligible = 1
+    WHERE id IN (
+      SELECT c.id
+      FROM list_columns c
+      JOIN lists l ON l.id = c.list_id
+      WHERE l.list_type = 'todo'
+        AND lower(c.name) IN ('task', 'task name')
+        AND c.column_type = 'text'
+    );
+
+    UPDATE item_field_values
+    SET value_number = value_number * 60
+    WHERE value_number IS NOT NULL
+      AND column_id IN (
+        SELECT c.id
+        FROM list_columns c
+        JOIN lists l ON l.id = c.list_id
+        WHERE l.list_type = 'todo'
+          AND lower(c.name) = 'effort'
+          AND c.column_type IN ('integer', 'decimal')
+      );
+
+    UPDATE list_columns
+    SET column_type = 'duration',
+        is_summary_eligible = 1,
+        is_list_summary_eligible = 1,
+        is_board_summary_eligible = 1,
+        display_format = '{"durationDisplayFormat":"days_hours"}'
+    WHERE id IN (
+      SELECT c.id
+      FROM list_columns c
+      JOIN lists l ON l.id = c.list_id
+      WHERE l.list_type = 'todo'
+        AND lower(c.name) = 'effort'
+        AND c.column_type IN ('integer', 'decimal')
+    );
+  `)
   addColumnIfMissing(client, 'lists', 'deadline_mandatory', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'lists', 'list_type', "TEXT NOT NULL DEFAULT 'custom'")
   addColumnIfMissing(client, 'lists', 'list_config', 'TEXT')
   client.database.exec("UPDATE lists SET list_type = 'custom' WHERE list_type = 'standard';")
   addColumnIfMissing(client, 'lists', 'sort_column_id', 'TEXT')
   addColumnIfMissing(client, 'lists', 'sort_direction', "TEXT NOT NULL DEFAULT 'manual'")
+  addColumnIfMissing(client, 'lists', 'column_sort_order', "TEXT NOT NULL DEFAULT 'default'")
   addColumnIfMissing(client, 'lists', 'display_enabled', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(client, 'lists', 'show_item_id_on_board', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(client, 'lists', 'show_dependencies_on_board', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(client, 'lists', 'show_created_at_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'lists', 'show_created_by_on_board', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(client, 'lists', 'show_status_on_board', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(client, 'item_groups', 'display_config', 'TEXT')
   addColumnIfMissing(client, 'list_columns', 'is_list_summary_eligible', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'list_columns', 'is_board_summary_eligible', 'INTEGER NOT NULL DEFAULT 0')
@@ -215,6 +261,194 @@ export function migrate(client: DbClient): void {
     WHERE id IN (SELECT due_date_column_id FROM lists WHERE due_date_column_id IS NOT NULL)
       AND (display_format IS NULL OR display_format = '');
   `)
+  runMigrationOnce(client, 2026042601, () => applyTemplateDefaultMigrations(client))
+  runMigrationOnce(client, 2026042602, () => applyBirthdayCalendarSortMigration(client))
+}
+
+function runMigrationOnce(client: DbClient, version: number, migrateOnce: () => void): void {
+  const existing = client.database.prepare('SELECT version FROM schema_migrations WHERE version = ?').get<{ version: number }>(version)
+  if (existing) return
+  migrateOnce()
+  client.database.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(version, new Date().toISOString())
+}
+
+function applyTemplateDefaultMigrations(client: DbClient): void {
+  const now = new Date().toISOString()
+  const typeChoiceConfig = {
+    selection: 'single',
+    ranked: false,
+    options: ['Personal Time', 'Event', 'Work Trip', 'Work Event', 'Other'].map((label, index) => ({
+      id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      label,
+      rank: index + 1
+    }))
+  }
+  const wishmeterConfig = {
+    selection: 'single',
+    ranked: true,
+    options: ["It's so fluffy I'm gonna die!", 'My precious!', 'Asking for a friend...', 'Gotta get me one of those!', 'Shut up and take my money!'].map((label, index) => ({
+      id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      label,
+      rank: index + 1
+    }))
+  }
+
+  client.database.exec(`
+    UPDATE list_columns
+    SET is_summary_eligible = 0,
+        is_list_summary_eligible = 0,
+        is_board_summary_eligible = 0
+    WHERE list_id IN (
+      SELECT id FROM lists WHERE list_type IN ('todo', 'shopping_list', 'wishlist', 'health', 'trips_events', 'birthday_calendar')
+    );
+
+    UPDATE list_columns
+    SET is_summary_eligible = 1,
+        is_list_summary_eligible = 1,
+        is_board_summary_eligible = 1
+    WHERE id IN (
+      SELECT c.id
+      FROM list_columns c
+      JOIN lists l ON l.id = c.list_id
+      WHERE l.list_type = 'todo'
+        AND lower(c.name) IN ('task', 'task name', 'deadline', 'effort')
+    );
+
+    UPDATE lists
+    SET show_item_id_on_board = 0,
+        show_dependencies_on_board = 0,
+        show_status_on_board = CASE WHEN list_type = 'todo' THEN 1 ELSE show_status_on_board END
+    WHERE list_type IN ('todo', 'shopping_list', 'wishlist', 'health', 'trips_events', 'birthday_calendar');
+
+    UPDATE lists
+    SET due_date_enabled = 0,
+        due_date_column_id = NULL,
+        deadline_mandatory = 0
+    WHERE list_type = 'health';
+
+    UPDATE list_columns
+    SET name = 'Mentions'
+    WHERE id IN (
+      SELECT c.id
+      FROM list_columns c
+      JOIN lists l ON l.id = c.list_id
+      WHERE l.list_type = 'health'
+        AND lower(c.name) = 'frequency'
+    );
+  `)
+
+  setColumnDisplay(client, 'todo', ['People', 'Location'], false)
+  setColumnDisplay(client, 'todo', ['% Done'], true)
+  setColumnDisplay(client, 'shopping_list', ['Link'], false)
+  setColumnDisplay(client, 'wishlist', ['Description'], false)
+  setColumnDisplay(client, 'trips_events', ['Topic / Theme', 'Location'], false)
+  setColumnDisplay(client, 'birthday_calendar', ['Location'], false)
+
+  setColumnFormat(client, 'shopping_list', 'Needed By', { role: 'deadline', dateDisplayFormat: 'date' })
+  setColumnFormat(client, 'wishlist', 'Wishmeter', { choiceConfig: wishmeterConfig })
+  setColumnFormat(client, 'trips_events', 'Type', { choiceConfig: typeChoiceConfig })
+
+  client.database
+    .prepare(
+      `UPDATE list_columns
+       SET column_type = 'choice'
+       WHERE id IN (
+         SELECT c.id
+         FROM list_columns c
+         JOIN lists l ON l.id = c.list_id
+         WHERE l.list_type = 'trips_events'
+           AND lower(c.name) = 'type'
+       )`
+    )
+    .run()
+
+  ensureWishlistPriceColumns(client, now)
+  updateSortColumn(client, 'todo', 'Priority', 'asc')
+  updateSortColumn(client, 'shopping_list', 'Needed By', 'asc')
+  updateSortColumn(client, 'wishlist', 'Wishmeter', 'asc')
+  updateSortColumn(client, 'health', 'Appointment Date', 'asc')
+  updateSortColumn(client, 'trips_events', 'Start', 'asc')
+  updateSortColumn(client, 'birthday_calendar', 'Birthday', 'asc')
+}
+
+function applyBirthdayCalendarSortMigration(client: DbClient): void {
+  updateSortColumn(client, 'birthday_calendar', 'Birthday', 'asc')
+}
+
+function setColumnDisplay(client: DbClient, listType: string, names: string[], showOnBoard: boolean): void {
+  const format = showOnBoard ? null : JSON.stringify({ showOnBoard: false })
+  const placeholders = names.map(() => '?').join(', ')
+  client.database
+    .prepare(
+      `UPDATE list_columns
+       SET display_format = ?
+       WHERE id IN (
+         SELECT c.id
+         FROM list_columns c
+         JOIN lists l ON l.id = c.list_id
+         WHERE l.list_type = ?
+           AND lower(c.name) IN (${placeholders})
+       )`
+    )
+    .run(format, listType, ...names.map((name) => name.toLowerCase()))
+}
+
+function setColumnFormat(client: DbClient, listType: string, name: string, format: Record<string, unknown>): void {
+  client.database
+    .prepare(
+      `UPDATE list_columns
+       SET display_format = ?
+       WHERE id IN (
+         SELECT c.id
+         FROM list_columns c
+         JOIN lists l ON l.id = c.list_id
+         WHERE l.list_type = ?
+           AND lower(c.name) = ?
+       )`
+    )
+    .run(JSON.stringify(format), listType, name.toLowerCase())
+}
+
+function updateSortColumn(client: DbClient, listType: string, columnName: string, direction: string): void {
+  client.database
+    .prepare(
+      `UPDATE lists
+       SET sort_column_id = (
+             SELECT c.id
+             FROM list_columns c
+             WHERE c.list_id = lists.id
+               AND lower(c.name) = ?
+             ORDER BY c.sort_order
+             LIMIT 1
+           ),
+           sort_direction = ?
+       WHERE list_type = ?
+         AND EXISTS (
+           SELECT 1
+           FROM list_columns c
+           WHERE c.list_id = lists.id
+             AND lower(c.name) = ?
+         )`
+    )
+    .run(columnName.toLowerCase(), direction, listType, columnName.toLowerCase())
+}
+
+function ensureWishlistPriceColumns(client: DbClient, now: string): void {
+  const wishlistLists = client.database.prepare("SELECT id FROM lists WHERE list_type = 'wishlist'").all<{ id: string }>()
+  for (const list of wishlistLists) {
+    const existing = client.database
+      .prepare("SELECT id FROM list_columns WHERE list_id = ? AND lower(name) = 'price'")
+      .get<{ id: string }>(list.id)
+    if (existing) continue
+    client.database.prepare('UPDATE list_columns SET sort_order = sort_order + 1 WHERE list_id = ? AND sort_order >= 3').run(list.id)
+    client.database
+      .prepare(
+        `INSERT INTO list_columns
+           (id, list_id, name, column_type, sort_order, is_required, max_length, is_summary_eligible, is_list_summary_eligible, is_board_summary_eligible, display_format, is_system, created_at, updated_at)
+         VALUES (?, ?, 'Price', 'currency', 3, 0, NULL, 0, 0, 0, NULL, 0, ?, ?)`
+      )
+      .run(randomUUID(), list.id, now, now)
+  }
 }
 
 function rebuildBoardWidgetsForNewTypesIfNeeded(client: DbClient): void {
@@ -297,7 +531,7 @@ function rebuildListColumnsForRichTypesIfNeeded(client: DbClient): void {
   const table = client.database
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'list_columns'")
     .get<{ sql: string }>()
-  if (table?.sql.includes("'choice'") && table.sql.includes("'hyperlink'")) return
+  if (table?.sql.includes("'choice'") && table.sql.includes("'hyperlink'") && table.sql.includes("'duration'")) return
 
   client.database.exec(`
     PRAGMA foreign_keys = OFF;
@@ -306,7 +540,7 @@ function rebuildListColumnsForRichTypesIfNeeded(client: DbClient): void {
       id TEXT PRIMARY KEY,
       list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      column_type TEXT NOT NULL CHECK(column_type IN ('text', 'integer', 'decimal', 'currency', 'date', 'boolean', 'choice', 'hyperlink')),
+      column_type TEXT NOT NULL CHECK(column_type IN ('text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink')),
       sort_order INTEGER NOT NULL,
       is_required INTEGER NOT NULL DEFAULT 0,
       max_length INTEGER,

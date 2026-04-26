@@ -48,11 +48,11 @@ The app should feel like a practical personal operating board: compact, readable
 
 ## Field And Template Decisions
 
-- Supported field types include text, integer, decimal, currency, boolean, date, choice, hyperlink, and deadline behavior.
+- Supported field types include text, integer, decimal, currency, duration, boolean, date, choice, hyperlink, and deadline behavior.
 - Deadline is implemented as special date behavior on a list.
 - Date fields can display date, date+time, or time-only.
 - Time-only date fields can support item-level recurrence.
-- Recurrence supports none, daily, weekly, biweekly, and selected weekdays.
+- Recurrence supports none, daily, weekly, interval weeks, monthly, interval months, and selected weekdays.
 - Currency fields support practical common currencies including RON, EUR, USD, GBP, CNY, JPY, CAD, AUD, CHF, and PLN.
 - Hyperlink fields open through the default browser and should only allow safe external protocols.
 - List templates currently include custom, to-do, shopping list, wishlist, health, trips/events, and birthday calendar.
@@ -64,7 +64,7 @@ The app should feel like a practical personal operating board: compact, readable
 
 - Board summary slots are now five slots, indexed 0 through 4.
 - Columns have separate list-summary and board-summary eligibility.
-- Each list may expose up to two list summary fields.
+- Each list may expose up to three list summary fields.
 - Each list may expose up to five board summary fields.
 - Supported board aggregation methods include `sum`, `count`, `active_count`, `completed_count`, `sum_active`, and `next_due`.
 - Date/deadline board summaries infer `next_due`.
@@ -81,10 +81,92 @@ Date: 2026-04-26
 - Fixed schema and migration support for `next_due` summary slots.
 - Made `updateBoard` optionally save summary slots in the same transaction as board metadata.
 - Kept `updateSummarySlots` available for direct summary-only saves.
+- Board Summary edits should keep the user on the Board Summary tab after saving.
+- Board system summary labels such as `Open Tasks` and `Archived Items` are reserved for their explicit Board source options.
+- User-defined board summary slots should not infer system behavior from a typed label.
 - Fixed several mutations so inactive-board editing remains anchored on the affected board snapshot.
 - Updated README language from four summary slots to five board summary slots.
 - Verified with `npm run typecheck` and `npm run build`.
 - Committed stabilization checkpoint as `6ba9222 Stabilize board templates and summaries`.
+
+## List Editing UX Decisions
+
+Date: 2026-04-26
+
+- List-level actions must be available from every list editing tab.
+- `Save List` and `Delete List` belong in the list editor header, on the same row as the tabs and aligned to the right.
+- Inline field Save buttons are quick shortcuts for one-row edits.
+- Global `Save List` supersedes inline saves and must commit all pending list edits made since the last save, including field visibility/configuration changes made in List Structure.
+- System column visibility toggles in the list editor are local edits until `Save List` is used.
+- Deadline display format is user-configurable. Users may choose Date or Date + Time for the deadline field.
+- Time-only deadline fields are not part of the intended deadline behavior.
+- Date-only deadlines are valid. When deadline calculations need a time, a date-only deadline resolves to `00:00` on that date.
+
+## To Do And Summary Refinement Decisions
+
+Date: 2026-04-26
+
+- To Do task title fields should be list-summary and board-summary eligible so task counts can be explicit and configurable.
+- `Task Name` is a count-summary field name. `Task` remains supported for existing lists.
+- To Do lists need three list-level summary signals by default: task count, deadline status, and effort.
+- The list-summary field cap is therefore three fields per list.
+- Effort is a duration, not a decimal/int quantity.
+- Duration values are stored internally as minutes.
+- Duration entry should support `hh:mm` style input.
+- Duration display supports two modes:
+  - `days_hours`: compact `dd:hh:mm` when duration is at least 24 hours, otherwise `h:mm`.
+  - `hours`: total `h:mm`, useful for users who prefer seeing `100:00`.
+- List summaries should visibly render on displayed list headers instead of existing only as configuration.
+
+## Board Content Tree UX Decisions
+
+Date: 2026-04-26
+
+- The Board Content Management tree should keep section creation actions attached to their sections.
+- `New List` belongs in the Lists section header, aligned right from the section label.
+- `New Widget` belongs in the Widgets section header, aligned right from the section label.
+- The explicit `Edit Board` action is redundant because selecting/clicking the board already opens board editing.
+- Section headers may use very subtle top/bottom separators and a faint shade to clarify hierarchy without making the pane decorative.
+
+## List Tab Action Placement Decisions
+
+Date: 2026-04-26
+
+- Actions should live in the tab where their target object is managed.
+- `Add Item` and `Add Group` belong in the List Contents tab, above the items table header.
+- `Add Column` belongs in the List Structure tab, above the column table header.
+- In List Structure, the add-column row and column table header stay fixed; only the list of existing fields scrolls.
+- Trying to add a column without a name should focus the column-name field and show the informational notice `Please enter column name`.
+- New columns support an `Add on top` option. When selected, the new field is inserted at the top regardless of the current field ordering mode.
+- `Add on top` is a persistent per-board preference. When the user toggles it, that state becomes the board default for future column additions across lists and app restarts until changed again.
+- Lists have a field ordering mode used by the List Structure tab and board display: Default, Manual, By Name, By Field Type, By Required, and By Visibility.
+- Manual field ordering uses one-based row position controls and a push-down reorder model.
+- Non-manual field ordering rewrites persisted column order from the selected rule; new columns without `Add on top` are placed according to that rule.
+- List Properties should keep list-level properties and list transfer controls, not item/group/column creation.
+- Item creation/editing dialogs should render in front of the full app window and open centered both horizontally and vertically.
+- List editor grid state must stay synchronized with board-layout changes so a later Save List does not restore stale minimum dimensions.
+
+## Template Finalization Decisions
+
+Date: 2026-04-26
+
+- Template defaults should apply both to newly created lists and, where feasible, to existing template-based lists through migration.
+- To Do defaults: sort by Priority highest rank first, prefer a 6x4 board footprint, hide Item ID, Dependencies, People, and Location, and show `% Done`.
+- `% Done` remains stored as an integer for now, but it is displayed as a percentage value.
+- To Do summary defaults are Task count, Deadline, and Effort. Other template summaries are disabled by default unless explicitly configured later.
+- Shopping List uses its deadline column as `Needed By`; the list editor explains this label mapping near the deadline setting.
+- Shopping List defaults: sort by Needed By oldest first, prefer 4x4, and hide Item ID, Dependencies, and Link.
+- Wishlist defaults: sort by Wishmeter highest rank first, prefer 6x4, hide Item ID, Dependencies, and Description, include Price as a currency field, and use the five-level Wishmeter scale including `Gotta get me one of those!`.
+- Health defaults: deadline disabled, sort by Appointment Date oldest first, prefer 5x4, hide Item ID and Dependencies, and rename Frequency to Mentions.
+- Health recurrence options include Every x weeks, Monthly, and Every x months. Interval recurrence stores a numeric interval.
+- Trips & Events defaults: sort by Start oldest first, hide Item ID, Dependencies, Topic / Theme, and Location, and make Type a non-ranked Choice field.
+- Birthday Calendar defaults: hide Item ID, Dependencies, and Location, prefer 6x4, add a Next 30 days board-view option, and treat birthdays as perpetual month/day occurrences.
+- Birthday Calendar sort is locked to the Birthday field. Sorting must compare the next month/day occurrence, ignoring the stored year, so the board remains ordered as a perpetual calendar.
+- Protected Birthday Calendar core fields cannot be structurally changed or deleted, but users may still change safe configuration such as summary eligibility and board visibility.
+- Item Save is the user-facing commit action for item edits; explicit item publishing is not part of the current workflow.
+- World Clock widgets can contain 2 to 16 clocks. Width is one board unit per clock and height is fixed at two units.
+- World Clock time zones should be type-searchable from supported system time zones when available.
+- World Clock visual style expansion is deferred until the user provides design directions.
 
 ## Development Practice Decisions
 
