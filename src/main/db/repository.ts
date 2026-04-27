@@ -72,7 +72,8 @@ const BIRTHDAY_PROTECTED_COLUMN_NAMES = new Set(['name', 'person name', 'birthda
 const DEFAULT_APP_SETTINGS: AppSettings = {
   closeConfirmationMode: 'with_comments',
   theme: 'midnight_clear',
-  addColumnOnTopByBoard: {}
+  addColumnOnTopByBoard: {},
+  wizardCompleted: false
 }
 
 const DEFAULT_PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
@@ -389,130 +390,47 @@ export class LifePlanRepository {
     const existing = this.client.database.prepare('SELECT COUNT(*) AS count FROM boards').get<{ count: number }>()
     if (existing && existing.count > 0) return
 
+    this.createFirstRunBoard()
+  }
+
+  resetAppToFirstRun(): BoardSnapshot {
+    this.transaction(() => {
+      this.run('DELETE FROM dependencies')
+      this.run('DELETE FROM item_field_values')
+      this.run('DELETE FROM items')
+      this.run('DELETE FROM item_groups')
+      this.run('DELETE FROM list_columns')
+      this.run('DELETE FROM bottom_bar_widget_configs')
+      this.run('DELETE FROM board_widgets')
+      this.run('DELETE FROM item_archives')
+      this.run('DELETE FROM lists')
+      this.run('DELETE FROM boards')
+      this.run('DELETE FROM users')
+      this.run('DELETE FROM display_configs')
+      this.run('DELETE FROM app_settings')
+      this.createFirstRunBoard()
+    })
+    return this.getActiveBoardSnapshot('admin')
+  }
+
+  private createFirstRunBoard(): void {
     const now = new Date().toISOString()
     const userId = randomUUID()
     const boardId = randomUUID()
 
-    this.transaction(() => {
-      this.run(
-        'INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)',
-        userId,
-        'Local User',
-        now,
-        now
-      )
-      this.run(
-        'INSERT INTO boards (id, user_id, name, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)',
-        boardId,
-        userId,
-        'Life Plan Lite',
-        now,
-        now
-      )
-      this.run(
-        'INSERT INTO display_configs (id, active_board_id, display_mode, updated_at) VALUES (?, ?, ?, ?)',
-        randomUUID(),
-        boardId,
-        'single-screen',
-        now
-      )
-
-      const todo = this.createSeedList(boardId, 'To Do', 'L01', 0, { x: 1, y: 1, w: 8, h: 4 }, true)
-      const shopping = this.createSeedList(boardId, 'Shopping List', 'L02', 1, { x: 9, y: 1, w: 8, h: 4 }, false)
-      const house = this.createSeedList(boardId, 'House Setup', 'L03', 2, { x: 1, y: 5, w: 16, h: 3 }, true)
-
-      const todoName = this.createSeedColumn(todo, 'Item Name', 'text', 0, true, 120, false, false, true)
-      const todoDue = this.createSeedColumn(
-        todo,
-        'Deadline',
-        'date',
-        1,
-        false,
-        null,
-        true,
-        false,
-        true,
-        JSON.stringify({ role: 'deadline', dateDisplayFormat: 'datetime' })
-      )
-      const todoEffort = this.createSeedColumn(todo, 'Effort', 'duration', 2, false, null, true, true, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, true, 'days_hours'))
-      this.setDueDateColumn(todo, todoDue)
-
-      const shoppingName = this.createSeedColumn(shopping, 'Item Name', 'text', 0, true, 120, false, false, true)
-      const shoppingPrice = this.createSeedColumn(shopping, 'Price', 'currency', 1, false, null, false, false, false)
-      const shoppingBought = this.createSeedColumn(shopping, 'Bought', 'boolean', 2, false, null, false, false, false)
-
-      const houseName = this.createSeedColumn(house, 'Item Name', 'text', 0, true, 120, false, false, true)
-      const houseDue = this.createSeedColumn(
-        house,
-        'Deadline',
-        'date',
-        1,
-        false,
-        null,
-        true,
-        false,
-        true,
-        JSON.stringify({ role: 'deadline', dateDisplayFormat: 'datetime' })
-      )
-      const houseBudget = this.createSeedColumn(house, 'Budget', 'currency', 2, false, null, false, false, false)
-      this.setDueDateColumn(house, houseDue)
-
-      const moveIn = this.createSeedItem(house, 1, 'published', {
-        [houseName]: 'Move into new house',
-        [houseDue]: this.offsetDate(5),
-        [houseBudget]: 0
-      })
-      const furniture = this.createSeedItem(house, 2, 'draft', {
-        [houseName]: 'Buy furniture',
-        [houseDue]: this.offsetDate(14),
-        [houseBudget]: 2200
-      })
-      const reviewBudget = this.createSeedItem(todo, 1, 'published', {
-        [todoName]: 'Review monthly plan',
-        [todoDue]: this.offsetDate(-1),
-        [todoEffort]: 60
-      })
-      this.createSeedItem(todo, 2, 'draft', {
-        [todoName]: 'Book utility setup',
-        [todoDue]: this.offsetDate(3),
-        [todoEffort]: 120
-      })
-      this.createSeedItem(shopping, 1, 'published', {
-        [shoppingName]: 'Kitchen starter kit',
-        [shoppingPrice]: 180,
-        [shoppingBought]: false
-      })
-      this.createSeedItem(shopping, 2, 'published', {
-        [shoppingName]: 'Cleaning supplies',
-        [shoppingPrice]: 65,
-        [shoppingBought]: false
-      })
-
-      this.run(
-        'INSERT INTO dependencies (id, source_item_id, target_item_id, dependency_type, created_at) VALUES (?, ?, ?, ?, ?)',
-        randomUUID(),
-        furniture,
-        moveIn,
-        'prerequisite',
-        now
-      )
-      this.run(
-        'INSERT INTO dependencies (id, source_item_id, target_item_id, dependency_type, created_at) VALUES (?, ?, ?, ?, ?)',
-        randomUUID(),
-        reviewBudget,
-        moveIn,
-        'prerequisite',
-        now
-      )
-
-      this.createSeedSummary(boardId, 0, 'Open Tasks', null, null, 'open_tasks')
-      this.createSeedSummary(boardId, 1, 'Board Items', null, null, 'board_items')
-      this.createSeedSummary(boardId, 2, 'Total Purchases', null, null, 'total_purchases')
-      this.createSeedSummary(boardId, 3, 'Archived Items', null, null, 'archived_items')
-      for (let slot = 4; slot < BOARD_SUMMARY_SLOT_COUNT; slot += 1) {
-        this.createSeedSummary(boardId, slot, '', null, null, 'count')
-      }
-    })
+    this.run('INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)', userId, 'Local User', now, now)
+    this.run(
+      'INSERT INTO boards (id, user_id, name, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)',
+      boardId,
+      userId,
+      'Life Plan Lite',
+      now,
+      now
+    )
+    this.run('INSERT INTO display_configs (id, active_board_id, display_mode, updated_at) VALUES (?, ?, ?, ?)', randomUUID(), boardId, 'single-screen', now)
+    for (let slot = 0; slot < BOARD_SUMMARY_SLOT_COUNT; slot += 1) {
+      this.createSeedSummary(boardId, slot, '', null, null, 'count')
+    }
   }
 
   listBoards(): BoardSummary[] {
@@ -547,11 +465,17 @@ export class LifePlanRepository {
     if (!row?.value_json) return DEFAULT_APP_SETTINGS
 
     try {
-      const parsed = JSON.parse(row.value_json) as { closeConfirmationMode?: CloseConfirmationMode; theme?: AppTheme; addColumnOnTopByBoard?: Record<string, unknown> }
+      const parsed = JSON.parse(row.value_json) as {
+        closeConfirmationMode?: CloseConfirmationMode
+        theme?: AppTheme
+        addColumnOnTopByBoard?: Record<string, unknown>
+        wizardCompleted?: unknown
+      }
       return {
         closeConfirmationMode: this.normalizeCloseConfirmationMode(parsed.closeConfirmationMode),
         theme: this.normalizeTheme(parsed.theme),
-        addColumnOnTopByBoard: this.normalizeBooleanMap(parsed.addColumnOnTopByBoard)
+        addColumnOnTopByBoard: this.normalizeBooleanMap(parsed.addColumnOnTopByBoard),
+        wizardCompleted: parsed.wizardCompleted === true
       }
     } catch {
       return DEFAULT_APP_SETTINGS
@@ -562,7 +486,8 @@ export class LifePlanRepository {
     const normalized: AppSettings = {
       closeConfirmationMode: this.normalizeCloseConfirmationMode(settings.closeConfirmationMode),
       theme: this.normalizeTheme(settings.theme),
-      addColumnOnTopByBoard: this.normalizeBooleanMap(settings.addColumnOnTopByBoard)
+      addColumnOnTopByBoard: this.normalizeBooleanMap(settings.addColumnOnTopByBoard),
+      wizardCompleted: settings.wizardCompleted === true
     }
     this.run(
       `INSERT INTO app_settings (key, value_json, updated_at)

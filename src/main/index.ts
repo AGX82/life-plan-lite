@@ -267,6 +267,7 @@ function registerIpc(): void {
   ipcMain.handle('boards:update', (_event, input: UpdateBoardInput) => handleMutation(repository.updateBoard.bind(repository))(input))
   ipcMain.handle('boards:delete', (_event, input) => handleMutation(repository.deleteBoard.bind(repository))(input))
   ipcMain.handle('boards:duplicate', (_event, input) => handleMutation(repository.duplicateBoard.bind(repository))(input))
+  ipcMain.handle('app:resetToFirstRun', () => handleMutation(repository.resetAppToFirstRun.bind(repository))())
   ipcMain.handle('board:updateLayouts', (_event, input: UpdateBoardLayoutsInput) =>
     handleMutation(repository.updateBoardLayouts.bind(repository))(input)
   )

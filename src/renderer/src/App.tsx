@@ -175,6 +175,44 @@ const listTemplateOptions: Array<{ value: ListTemplateType; label: string; descr
   { value: 'birthday_calendar', label: 'Birthday Calendar', description: 'Birthdays with turning age, location and gift-task action.' },
   { value: 'custom', label: 'Build Custom List', description: 'Start with a single title field and shape the rest yourself.' }
 ]
+type WizardTemplateType = Exclude<ListTemplateType, 'custom'>
+type WizardMode = 'firstRun' | 'quickAdd' | 'newBoard' | 'reset'
+type WizardStepId = 'mode' | 'welcome' | 'templates' | 'lists' | 'specifics' | 'sorting' | 'finalTouches' | 'widgets' | 'done'
+type WizardListDraft = {
+  id: string
+  templateType: WizardTemplateType
+  name: string
+  sortField: string
+  sortDirection: ListSortDirection
+  displayEnabled: boolean
+  dueDateEnabled: boolean
+  deadlineMandatory: boolean
+}
+type WizardWidgetDraft = {
+  id: string
+  name: string
+  type: WidgetType
+  displayEnabled: boolean
+  layout: string
+}
+type WizardGrid = { x: number; y: number; w: number; h: number }
+type WizardLayoutPlan = {
+  listGrids: Map<string, WizardGrid>
+  widgetGrids: Map<string, WizardGrid>
+}
+type WizardData = {
+  mode: WizardMode
+  targetBoardId: string | null
+  userName: string
+  boardName: string
+  listDrafts: WizardListDraft[]
+  useStoreList: boolean
+  storeText: string
+  birthdayBoardView: BirthdayBoardView
+  widgets: WizardWidgetDraft[]
+}
+const wizardTemplateOptions = listTemplateOptions.filter((option): option is { value: WizardTemplateType; label: string; description: string } => option.value !== 'custom')
+const wizardDefaultTemplates: WizardTemplateType[] = ['todo', 'shopping_list', 'wishlist', 'birthday_calendar']
 const listBehaviorOptions: Array<{ value: ListBehavior; label: string }> = [
   { value: 'tasks', label: 'Task List' },
   { value: 'purchases', label: 'Purchases' },
@@ -199,6 +237,13 @@ const birthdayBoardViewOptions: Array<{ value: BirthdayBoardView; label: string 
   { value: 'next_2_months', label: 'Next 2 months' },
   { value: 'all', label: 'All birthdays' }
 ]
+const wizardWidgetLayoutOptions: Record<WidgetType, string[]> = {
+  clock: ['Digital with color', 'Digital'],
+  weather: ['Compact', 'Detailed'],
+  word_of_day: ['Compact', 'Detailed'],
+  world_clocks: ['Digital', 'Analogue'],
+  countdown: ['Compact', 'Detailed']
+}
 const fallbackWorldClockTimeZones = [
   'Europe/Bucharest',
   'Europe/London',
@@ -230,9 +275,10 @@ export function App(): ReactElement {
   const [previewSnapshot, setPreviewSnapshot] = useState<BoardSnapshot | null>(null)
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [displayState, setDisplayState] = useState<DisplayState | null>(null)
-  const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments', theme: 'midnight_clear', addColumnOnTopByBoard: {} })
+  const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments', theme: 'midnight_clear', addColumnOnTopByBoard: {}, wizardCompleted: false })
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const editingBoardId = useRef<string | null>(null)
 
@@ -250,6 +296,7 @@ export function App(): ReactElement {
     setBoards(nextBoards)
     setDisplayState(nextDisplayState)
     setAppSettings(nextAppSettings)
+    if (nextRoute === 'admin' && !nextAppSettings.wizardCompleted) setWizardOpen(true)
     setSelectedNode((current) => (current && nodeExists(current, nextSnapshot) ? current : { kind: 'board', id: nextSnapshot.id }))
   }
 
@@ -283,6 +330,156 @@ export function App(): ReactElement {
     } finally {
       setBusy(false)
     }
+  }
+
+  async function markWizardComplete(mode: WizardMode): Promise<void> {
+    if (mode === 'firstRun') {
+      const result = await runAction(async () => {
+        const resetSnapshot = await window.lpl.resetAppToFirstRun()
+        await window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true })
+        return resetSnapshot
+      })
+      if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+      setWizardOpen(false)
+      return
+    }
+    await runAction(() => window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true }))
+    setWizardOpen(false)
+  }
+
+  async function applyWizard(data: WizardData): Promise<BoardSnapshot | undefined> {
+    const result = await runAction(async () => {
+      const resetSnapshot = data.mode === 'reset' ? await window.lpl.resetAppToFirstRun() : null
+      const baseSnapshot = resetSnapshot ?? snapshot
+      if (!baseSnapshot) throw new Error('No board is available for the wizard setup.')
+      const reuseInitialSeedBoard =
+        (data.mode === 'firstRun' || data.mode === 'reset') &&
+        (!appSettings.wizardCompleted || data.mode === 'reset') &&
+        ((resetSnapshot ? [resetSnapshot] : boards).length === 1) &&
+        baseSnapshot.name === 'Life Plan Lite'
+      let nextSnapshot =
+        data.mode === 'quickAdd' && data.targetBoardId
+          ? await window.lpl.getBoardSnapshot(data.targetBoardId, 'admin')
+          : reuseInitialSeedBoard
+            ? await window.lpl.updateBoard({
+                boardId: baseSnapshot.id,
+                name: data.boardName,
+                description: '',
+                owner: data.userName,
+                summarySlots: defaultWizardSummarySlots()
+              })
+            : await window.lpl.createBoard({ name: data.boardName })
+      if (data.mode !== 'quickAdd' && !reuseInitialSeedBoard) {
+        nextSnapshot = await window.lpl.updateBoard({
+          boardId: nextSnapshot.id,
+          name: data.boardName,
+          description: '',
+          owner: data.userName,
+          summarySlots: defaultWizardSummarySlots()
+        })
+      }
+      if (data.mode !== 'quickAdd') nextSnapshot = await window.lpl.setActiveBoard(nextSnapshot.id)
+      if (reuseInitialSeedBoard) {
+        for (const list of [...nextSnapshot.lists]) {
+          nextSnapshot = await window.lpl.deleteList(list.id)
+        }
+        for (const widget of [...nextSnapshot.widgets]) {
+          nextSnapshot = await window.lpl.deleteWidget(widget.id)
+        }
+      }
+      const baseOccupied =
+        data.mode === 'quickAdd'
+          ? [
+              ...nextSnapshot.lists.filter((list) => list.displayEnabled).map((list) => list.grid),
+              ...nextSnapshot.widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
+            ]
+          : []
+      const layoutPlan = planWizardBoardLayout(data.listDrafts, data.widgets, baseOccupied)
+      const listLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['lists'] = []
+      const widgetLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['widgets'] = []
+
+      for (const draft of data.listDrafts) {
+        const beforeIds = new Set(nextSnapshot.lists.map((list) => list.id))
+        nextSnapshot = await window.lpl.createList({
+          boardId: nextSnapshot.id,
+          name: draft.name,
+          templateType: draft.templateType
+        })
+        const createdList = nextSnapshot.lists.find((list) => !beforeIds.has(list.id)) ?? newestList(nextSnapshot)
+        if (!createdList) continue
+        const configuredList = configureWizardList(createdList, draft, data, null)
+        nextSnapshot = await window.lpl.updateList(configuredList)
+        const updatedList = nextSnapshot.lists.find((list) => list.id === createdList.id)
+        if (updatedList) {
+          const plannedGrid = layoutPlan.listGrids.get(draft.id)
+          if (plannedGrid) listLayoutUpdates.push({ listId: updatedList.id, grid: plannedGrid })
+          if (data.useStoreList && draft.templateType === 'shopping_list') {
+            const storeColumn = updatedList.columns.find((column) => normalizeColumnName(column.name) === 'store')
+            const storeOptions = wizardStoreOptions(data.storeText)
+            if (storeColumn && storeOptions.length > 0) {
+              nextSnapshot = await window.lpl.updateColumn({
+                columnId: storeColumn.id,
+                name: storeColumn.name,
+                type: 'choice',
+                required: storeColumn.required,
+                maxLength: storeColumn.maxLength,
+                listSummaryEligible: storeColumn.listSummaryEligible,
+                boardSummaryEligible: storeColumn.boardSummaryEligible,
+                choiceConfig: {
+                  selection: 'single',
+                  ranked: false,
+                  options: storeOptions.map((label, index) => ({ id: choiceId(label, index), label, rank: index + 1 }))
+                },
+                dateDisplayFormat: storeColumn.dateDisplayFormat,
+                durationDisplayFormat: storeColumn.durationDisplayFormat,
+                recurrence: storeColumn.recurrence,
+                recurrenceDays: storeColumn.recurrenceDays,
+                currencyCode: storeColumn.currencyCode,
+                showOnBoard: storeColumn.showOnBoard,
+                order: storeColumn.order
+              })
+            }
+          }
+        }
+      }
+
+      for (const widgetDraft of data.widgets) {
+        const beforeIds = new Set(nextSnapshot.widgets.map((widget) => widget.id))
+        nextSnapshot = await window.lpl.createWidget({
+          boardId: nextSnapshot.id,
+          type: widgetDraft.type,
+          name: widgetDraft.name
+        })
+        const createdWidget = nextSnapshot.widgets.find((widget) => !beforeIds.has(widget.id)) ?? newestWidget(nextSnapshot)
+        if (!createdWidget) continue
+        nextSnapshot = await window.lpl.updateWidget({
+          widgetId: createdWidget.id,
+          type: widgetDraft.type,
+          name: widgetDraft.name,
+          displayEnabled: widgetDraft.displayEnabled,
+          grid: createdWidget.grid,
+          config: wizardWidgetConfig(widgetDraft, createdWidget.config)
+        })
+        const plannedGrid = layoutPlan.widgetGrids.get(widgetDraft.id)
+        if (plannedGrid) widgetLayoutUpdates.push({ widgetId: createdWidget.id, grid: plannedGrid })
+      }
+
+      if (listLayoutUpdates.length > 0 || widgetLayoutUpdates.length > 0) {
+        nextSnapshot = await window.lpl.updateBoardLayouts({
+          lists: listLayoutUpdates,
+          widgets: widgetLayoutUpdates
+        })
+      }
+
+      await window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true })
+      return nextSnapshot
+    })
+    if (result && 'lists' in result) {
+      setSelectedNode({ kind: 'board', id: result.id })
+      setWizardOpen(true)
+      return result
+    }
+    return undefined
   }
 
   useEffect(() => {
@@ -338,11 +535,16 @@ export function App(): ReactElement {
       appThemeClass={currentThemeClass}
       previewSnapshot={previewSnapshot ?? snapshot}
       runAction={runAction}
+      wizardOpen={wizardOpen}
       onSelectBoard={(boardId) => {
         editingBoardId.current = boardId
         setSelectedNode({ kind: 'board', id: boardId })
         load('admin', boardId)
       }}
+      onApplyWizard={applyWizard}
+      onCloseWizard={() => setWizardOpen(false)}
+      onMarkWizardComplete={markWizardComplete}
+      onOpenWizard={() => setWizardOpen(true)}
       selectedNode={selectedNode ?? { kind: 'board', id: snapshot.id }}
       setSelectedNode={setSelectedNode}
       snapshot={snapshot}
@@ -359,7 +561,12 @@ function AdminApp({
   globalMessageDialog,
   previewSnapshot,
   runAction,
+  wizardOpen,
   onSelectBoard,
+  onApplyWizard,
+  onCloseWizard,
+  onMarkWizardComplete,
+  onOpenWizard,
   selectedNode,
   setGlobalMessageDialog,
   setSelectedNode,
@@ -373,7 +580,12 @@ function AdminApp({
   globalMessageDialog: { title: string; message: string } | null
   previewSnapshot: BoardSnapshot
   runAction: RunAction
+  wizardOpen: boolean
   onSelectBoard: (boardId: string) => void
+  onApplyWizard: (data: WizardData) => Promise<BoardSnapshot | undefined>
+  onCloseWizard: () => void
+  onMarkWizardComplete: (mode: WizardMode) => Promise<void>
+  onOpenWizard: () => void
   selectedNode: SelectedNode
   setGlobalMessageDialog: Dispatch<SetStateAction<{ title: string; message: string } | null>>
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
@@ -434,6 +646,10 @@ function AdminApp({
           </div>
         </section>
         <div className="side-actions">
+          <button className="icon-button wide" disabled={busy} onClick={onOpenWizard} type="button">
+            <Settings2 size={18} />
+            LPL Wizard
+          </button>
           <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
           <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
             <ExternalLink size={18} />
@@ -572,7 +788,507 @@ function AdminApp({
           onClose={() => setGlobalMessageDialog(null)}
         />
       )}
+      {wizardOpen && (
+        <ConfigurationWizard
+          boards={boards}
+          busy={busy}
+          firstRun={!appSettings.wizardCompleted}
+          onApply={onApplyWizard}
+          onClose={onCloseWizard}
+          onMarkComplete={onMarkWizardComplete}
+          setGlobalMessageDialog={setGlobalMessageDialog}
+          snapshot={snapshot}
+        />
+      )}
     </main>
+  )
+}
+
+function ConfigurationWizard({
+  boards,
+  busy,
+  firstRun,
+  onApply,
+  onClose,
+  onMarkComplete,
+  setGlobalMessageDialog,
+  snapshot
+}: {
+  boards: BoardSummary[]
+  busy: boolean
+  firstRun: boolean
+  onApply: (data: WizardData) => Promise<BoardSnapshot | undefined>
+  onClose: () => void
+  onMarkComplete: (mode: WizardMode) => Promise<void>
+  setGlobalMessageDialog: Dispatch<SetStateAction<{ title: string; message: string } | null>>
+  snapshot: BoardSnapshot
+}): ReactElement {
+  const [mode, setMode] = useState<WizardMode>(firstRun ? 'firstRun' : 'newBoard')
+  const [targetBoardId, setTargetBoardId] = useState(() => boards.find((board) => board.active)?.id ?? snapshot.id)
+  const [step, setStep] = useState<WizardStepId>(firstRun ? 'welcome' : 'mode')
+  const [userName, setUserName] = useState('User')
+  const [boardName, setBoardName] = useState('My Life Plan Lite')
+  const [boardNameTouched, setBoardNameTouched] = useState(false)
+  const [selectedTemplates, setSelectedTemplates] = useState<WizardTemplateType[]>(wizardDefaultTemplates)
+  const [listDrafts, setListDrafts] = useState<WizardListDraft[]>(() => wizardDefaultTemplates.map((templateType) => createWizardListDraft(templateType)))
+  const [useStoreList, setUseStoreList] = useState(false)
+  const [storeText, setStoreText] = useState('')
+  const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>('next_30_days')
+  const [widgets, setWidgets] = useState<WizardWidgetDraft[]>([])
+  const [skipDialogOpen, setSkipDialogOpen] = useState(false)
+  const steps = wizardSteps(listDrafts)
+  const currentStepIndex = Math.max(0, steps.indexOf(step))
+  const hasShopping = listDrafts.some((list) => list.templateType === 'shopping_list')
+  const hasBirthdays = listDrafts.some((list) => list.templateType === 'birthday_calendar')
+
+  function wizardData(): WizardData {
+    return {
+      mode,
+      targetBoardId: mode === 'quickAdd' ? targetBoardId : null,
+      userName: userName.trim() || 'User',
+      boardName: boardName.trim() || 'My Life Plan Lite',
+      listDrafts,
+      useStoreList: hasShopping && useStoreList,
+      storeText,
+      birthdayBoardView,
+      widgets
+    }
+  }
+
+  function startWizardMode(nextMode: WizardMode): void {
+    setMode(nextMode)
+    if (nextMode === 'quickAdd') {
+      setStep('templates')
+      setBoardNameTouched(true)
+      return
+    }
+    setStep('welcome')
+    setBoardNameTouched(false)
+    if (nextMode === 'reset') {
+      setBoardName('My Life Plan Lite')
+    } else {
+      setBoardName(userName.trim() && userName.trim().toLowerCase() !== 'user' ? `${userName.trim()}'s Life Plan Lite` : 'My Life Plan Lite')
+    }
+  }
+
+  function setUser(value: string): void {
+    setUserName(value)
+    if (!boardNameTouched) {
+      const trimmed = value.trim()
+      setBoardName(trimmed && trimmed.toLowerCase() !== 'user' ? `${trimmed}'s Life Plan Lite` : 'My Life Plan Lite')
+    }
+  }
+
+  function toggleTemplate(templateType: WizardTemplateType): void {
+    setSelectedTemplates((current) => {
+      const selected = current.includes(templateType)
+      const next = selected ? current.filter((value) => value !== templateType) : [...current, templateType]
+      setListDrafts((drafts) => {
+        if (selected) return drafts.filter((draft) => draft.templateType !== templateType)
+        return [...drafts, createWizardListDraft(templateType)]
+      })
+      return next
+    })
+  }
+
+  function updateListDraft(id: string, patch: Partial<WizardListDraft>): void {
+    setListDrafts((current) => current.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)))
+  }
+
+  function addListDraft(templateType: WizardTemplateType): void {
+    if (listDrafts.length >= 16) {
+      setGlobalMessageDialog({ title: 'List limit reached', message: 'You can display a maximum of 16 lists on a single board.' })
+      return
+    }
+    setListDrafts((current) => [...current, createWizardListDraft(templateType, current.filter((draft) => draft.templateType === templateType).length + 1)])
+  }
+
+  function updateWidgetDraft(id: string, patch: Partial<WizardWidgetDraft>): void {
+    setWidgets((current) =>
+      current.map((widget) => {
+        if (widget.id !== id) return widget
+        const type = patch.type ?? widget.type
+        const layoutOptions = wizardWidgetLayoutOptions[type]
+        const layout = patch.layout ?? (patch.type && !layoutOptions.includes(widget.layout) ? layoutOptions[0] : widget.layout)
+        return { ...widget, ...patch, type, layout }
+      })
+    )
+  }
+
+  function addWidgetDraft(): void {
+    setWidgets((current) => [...current, createWizardWidgetDraft('New Widget', 'clock')])
+  }
+
+  function deleteWidgetDraft(id: string): void {
+    setWidgets((current) => current.filter((widget) => widget.id !== id))
+  }
+
+  function resetForAnotherBoard(): void {
+    setMode('newBoard')
+    setStep('welcome')
+    setBoardNameTouched(false)
+    setBoardName(userName.trim() && userName.trim().toLowerCase() !== 'user' ? `${userName.trim()}'s Life Plan Lite` : 'My Life Plan Lite')
+  }
+
+  async function finishWizard(): Promise<void> {
+    setSkipDialogOpen(false)
+    if (listDrafts.length === 0) {
+      setGlobalMessageDialog({ title: 'Choose at least one list', message: 'Please select at least one list type before finishing the wizard.' })
+      setStep('templates')
+      return
+    }
+    const result = await onApply(wizardData())
+    if (result) setStep('done')
+  }
+
+  function goNext(): void {
+    if (step === 'templates' && selectedTemplates.length === 0) {
+      setGlobalMessageDialog({ title: 'Choose at least one list', message: 'Please select at least one list type to include in your board.' })
+      return
+    }
+    const nextStep = steps[currentStepIndex + 1]
+    if (nextStep) setStep(nextStep)
+  }
+
+  const backplate = (
+    <div className="wizard-brand-panel">
+      <img alt="Life Plan Lite" className="wizard-logo" src={lplLogo} />
+    </div>
+  )
+
+  return (
+    <div className="wizard-backdrop" role="presentation">
+      <div aria-modal="true" className="wizard-card" role="dialog">
+        <div className="wizard-body">
+          {backplate}
+          <div className="wizard-content">
+            {step === 'mode' && (
+              <section className="wizard-panel">
+                <h2>What would you like the wizard to do?</h2>
+                <p>Use the wizard to quickly add structure without going through each list tab manually.</p>
+                <div className="wizard-mode-grid">
+                  <button className="wizard-mode-card" onClick={() => startWizardMode('quickAdd')} type="button">
+                    <strong>Quick-add lists</strong>
+                    <small>Add several configured lists to an existing board.</small>
+                    <select disabled={busy} onClick={(event) => event.stopPropagation()} onChange={(event) => setTargetBoardId(event.target.value)} value={targetBoardId}>
+                      {boards.map((board) => (
+                        <option key={board.id} value={board.id}>
+                          {board.name}{board.active ? ' (active)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </button>
+                  <button className="wizard-mode-card" onClick={() => startWizardMode('newBoard')} type="button">
+                    <strong>Create a new board</strong>
+                    <small>Build a new board without touching existing boards or data.</small>
+                  </button>
+                  <button className="wizard-mode-card danger" onClick={() => startWizardMode('reset')} type="button">
+                    <strong>Reset to first run</strong>
+                    <small>Clear all boards and data, then rebuild from the wizard.</small>
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {step === 'welcome' && (
+              <section className="wizard-panel">
+                <h2>{mode === 'firstRun' ? 'Hello and welcome to Life Plan Lite!' : mode === 'reset' ? 'Let’s rebuild Life Plan Lite!' : 'Let’s configure a new board!'}</h2>
+                <p>
+                  {mode === 'firstRun'
+                    ? 'Let’s take a moment to configure your app! This quick setup tutorial will help you understand the key features and functionalities of LPL and guide you through the process of creating your first board.'
+                    : mode === 'reset'
+                      ? 'This will reset the app to first-run state when you finish the wizard. Existing boards, items, widgets, archive entries and app settings will be cleared.'
+                      : 'Let’s create another board using the same quick configuration flow. Existing boards and data will not be changed.'}
+                </p>
+                <p className="wizard-lead">Let&apos;s start with the basics:</p>
+                <div className="wizard-form-grid">
+                  <label>
+                    <span>Who is using this board?</span>
+                    <input disabled={busy} onChange={(event) => setUser(event.target.value)} value={userName} />
+                  </label>
+                  <label>
+                    <span>How would you like the board to be called?</span>
+                    <input
+                      disabled={busy}
+                      onChange={(event) => {
+                        setBoardNameTouched(true)
+                        setBoardName(event.target.value)
+                      }}
+                      value={boardName}
+                    />
+                  </label>
+                </div>
+              </section>
+            )}
+
+            {step === 'templates' && (
+              <section className="wizard-panel">
+                <h2>Let&apos;s chose the list types you plan to use!</h2>
+                <p>Please select from the option below the types of lists you want to be included in your board:</p>
+                <div className="wizard-template-grid">
+                  {wizardTemplateOptions.map((option) => {
+                    const selected = selectedTemplates.includes(option.value)
+                    return (
+                      <button className={selected ? 'wizard-template-card selected' : 'wizard-template-card'} key={option.value} onClick={() => toggleTemplate(option.value)} type="button">
+                        <span className="wizard-check">{selected ? <Check size={13} /> : null}</span>
+                        <span>
+                          <strong>{option.label}</strong>
+                          <small>{option.description}</small>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="wizard-note">You can always add more lists based on those templates at a later point, in the LPL Edit Menu</p>
+              </section>
+            )}
+
+            {step === 'lists' && (
+              <section className="wizard-panel">
+                <h2>Let&apos;s define and name your lists!</h2>
+                <p>You can choose to create one or more lists of each type by clicking the &quot;+&quot; next to the list.</p>
+                <div className="wizard-table-scroll">
+                  <div className="wizard-table two-col">
+                    <strong>List Type</strong>
+                    <strong>List Name</strong>
+                    <span />
+                    {listDrafts.map((draft, index) => {
+                      const firstOfType = listDrafts.findIndex((candidate) => candidate.templateType === draft.templateType) === index
+                      return (
+                        <div className="wizard-table-row" key={draft.id}>
+                          <input disabled readOnly value={wizardTemplateLabel(draft.templateType)} />
+                          <input disabled={busy} onChange={(event) => updateListDraft(draft.id, { name: event.target.value })} value={draft.name} />
+                          {firstOfType ? (
+                            <button className="wizard-round-button" disabled={busy || listDrafts.length >= 16} onClick={() => addListDraft(draft.templateType)} title="Add another list of this type" type="button">
+                              <Plus size={14} />
+                            </button>
+                          ) : (
+                            <span />
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                <p className="wizard-note">Note: You can create as many lists as you like, but you can only have a maximum of 16 lists displayed at any time in a single board</p>
+              </section>
+            )}
+
+            {step === 'specifics' && (
+              <section className="wizard-panel">
+                <h2>A couple list-specific settings...</h2>
+                {hasShopping && (
+                  <div className="wizard-question-block">
+                    <p className="wizard-question">Do you want to define a list of stores to be used with the Shopping List?</p>
+                    <p className="wizard-helper">Having this list defined doesn&apos;t force you to always add a store or to only use entries from this field. It just makes it easier to build some quick lists per store. You can always change this option later, in the Edit Panel - List Structure.</p>
+                    <div className="wizard-radio-row">
+                      <label className="wizard-radio">
+                        <input checked={useStoreList} disabled={busy} onChange={() => setUseStoreList(true)} type="radio" />
+                        <span>Yes</span>
+                      </label>
+                      <textarea disabled={busy || !useStoreList} onChange={(event) => setStoreText(event.target.value)} value={storeText} />
+                      <label className="wizard-radio">
+                        <input checked={!useStoreList} disabled={busy} onChange={() => setUseStoreList(false)} type="radio" />
+                        <span>No, maybe later</span>
+                      </label>
+                    </div>
+                    <p className="wizard-note compact">Please add one item per row</p>
+                  </div>
+                )}
+                {hasBirthdays && (
+                  <div className="wizard-question-block">
+                    <p className="wizard-question">What interval do you want to use for upcoming birthdays?</p>
+                    <select disabled={busy} onChange={(event) => setBirthdayBoardView(event.target.value as BirthdayBoardView)} value={birthdayBoardView}>
+                      {birthdayBoardViewOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="wizard-note compact">You can always change this option later, in the Edit Panel - List Structure</p>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {step === 'sorting' && (
+              <section className="wizard-panel">
+                <h2>Let&apos;s also define the sort order for you lists</h2>
+                <p>Define the default ordering criteria for each list.</p>
+                <div className="wizard-table-scroll">
+                  <div className="wizard-table three-col">
+                    <strong>List Name</strong>
+                    <strong>Sort by</strong>
+                    <strong>Sorting Order</strong>
+                    {listDrafts.map((draft) => {
+                      const options = wizardSortOptions(draft.templateType)
+                      const birthdayLocked = draft.templateType === 'birthday_calendar'
+                      return (
+                        <div className="wizard-table-row" key={draft.id}>
+                          <input disabled readOnly value={draft.name} />
+                          <select disabled={busy || birthdayLocked} onChange={(event) => updateListDraft(draft.id, { sortField: event.target.value, sortDirection: wizardDefaultSortDirection(draft.templateType, event.target.value) })} value={draft.sortField}>
+                            {options.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <select disabled={busy || birthdayLocked || draft.sortField === 'manual'} onChange={(event) => updateListDraft(draft.id, { sortDirection: event.target.value as ListSortDirection })} value={draft.sortDirection}>
+                            {wizardSortDirectionOptions(draft.templateType, draft.sortField).map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                <p className="wizard-note">You can always change this options later, in the Edit Panel - List Structure</p>
+              </section>
+            )}
+
+            {step === 'finalTouches' && (
+              <section className="wizard-panel">
+                <h2>Almost there, a couple of final touches!</h2>
+                <p>Please select which of the defined lists you want displayed in the board, for which we should enable the “deadline” field and whether this field should be mandatory</p>
+                <div className="wizard-table-scroll">
+                  <div className="wizard-table final-col">
+                    {listDrafts.map((draft) => {
+                      const deadlineEnabled = wizardDeadlineApplicable(draft.templateType)
+                      return (
+                        <div className="wizard-table-row" key={draft.id}>
+                          <input disabled readOnly value={draft.name} />
+                          <label className="wizard-inline-check">
+                            <input checked={draft.displayEnabled} disabled={busy} onChange={(event) => updateListDraft(draft.id, { displayEnabled: event.target.checked })} type="checkbox" />
+                            <span>Show</span>
+                          </label>
+                          {deadlineEnabled ? (
+                            <label className="wizard-inline-check">
+                              <input checked={draft.dueDateEnabled} disabled={busy} onChange={(event) => updateListDraft(draft.id, { dueDateEnabled: event.target.checked, deadlineMandatory: event.target.checked ? draft.deadlineMandatory : false })} type="checkbox" />
+                              <span>Deadline Enabled</span>
+                            </label>
+                          ) : (
+                            <span className="wizard-na">n/a</span>
+                          )}
+                          {deadlineEnabled ? (
+                            <label className="wizard-inline-check">
+                              <input checked={draft.deadlineMandatory} disabled={busy || !draft.dueDateEnabled} onChange={(event) => updateListDraft(draft.id, { deadlineMandatory: event.target.checked })} type="checkbox" />
+                              <span>Deadline Mandatory</span>
+                            </label>
+                          ) : (
+                            <span className="wizard-na">n/a</span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                <p className="wizard-note">Note: the deadline field for the shopping list is labeled as “Needed by” but it shares the same functionality as other deadline fields.</p>
+              </section>
+            )}
+
+            {step === 'widgets' && (
+              <section className="wizard-panel">
+                <h2>Widgets! They&apos;re Here!</h2>
+                <p>Want to spruce-up your boards? Add some widgets!</p>
+                <button className="wizard-add-button" disabled={busy} onClick={addWidgetDraft} type="button">Add Widget</button>
+                <p className="wizard-lead">Widgets in you Board:</p>
+                {widgets.length > 0 ? (
+                  <div className="wizard-table widget-col">
+                    <strong>Name</strong>
+                    <strong>Type</strong>
+                    <strong>Layout</strong>
+                    <strong>Show</strong>
+                    <span />
+                    {widgets.map((widget) => (
+                      <div className="wizard-table-row" key={widget.id}>
+                        <input disabled={busy} onChange={(event) => updateWidgetDraft(widget.id, { name: event.target.value })} value={widget.name} />
+                        <select disabled={busy} onChange={(event) => updateWidgetDraft(widget.id, { type: event.target.value as WidgetType })} value={widget.type}>
+                          {widgetTypes.map((type) => (
+                            <option key={type.value} value={type.value}>
+                              {type.label}
+                            </option>
+                          ))}
+                        </select>
+                        <select disabled={busy} onChange={(event) => updateWidgetDraft(widget.id, { layout: event.target.value })} value={widget.layout}>
+                          {wizardWidgetLayoutOptions[widget.type].map((layout) => (
+                            <option key={layout} value={layout}>
+                              {layout}
+                            </option>
+                          ))}
+                        </select>
+                        <label className="wizard-inline-check">
+                          <input checked={widget.displayEnabled} disabled={busy} onChange={(event) => updateWidgetDraft(widget.id, { displayEnabled: event.target.checked })} type="checkbox" />
+                          <span>Show</span>
+                        </label>
+                        <button className="wizard-round-button danger" disabled={busy} onClick={() => deleteWidgetDraft(widget.id)} title="Delete widget" type="button">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="wizard-note">No widgets selected yet. Use Add Widget if you want to include one on this board.</p>
+                )}
+              </section>
+            )}
+
+            {step === 'done' && (
+              <section className="wizard-panel">
+                <h2>We&apos;re all done!</h2>
+                <p>
+                  Congratulations, your first board in configured and saved!<br />
+                  You can now start using your board and building a <strong>Life <span>Plan</span> Lite!</strong>
+                </p>
+                <p>Remember, you can always run this wizard again to build new boards, or even to completely reset your LPL to first run state cleaning all the boards and data.</p>
+                <div className="wizard-done-actions">
+                  <p>Before closing, do you want to create one more board now?</p>
+                  <button className="icon-button" disabled={busy} onClick={resetForAnotherBoard} type="button">Let&apos;s build one more board</button>
+                  <button className="primary-button" disabled={busy} onClick={onClose} type="button">Let&apos;s get Life <span>Planning</span>!</button>
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
+        {step === 'mode' && (
+          <footer className="wizard-footer single">
+            <button className="wizard-skip" disabled={busy} onClick={onClose} type="button">Close Wizard</button>
+          </footer>
+        )}
+        {step !== 'done' && step !== 'mode' && (
+          <footer className="wizard-footer">
+            <button className="wizard-skip" disabled={busy} onClick={() => setSkipDialogOpen(true)} type="button">Skip Configuration Wizard</button>
+            {step === 'widgets' ? (
+              <button className="primary-button wizard-next" disabled={busy} onClick={() => void finishWizard()} type="button">Finish</button>
+            ) : (
+              <button className="primary-button wizard-next" disabled={busy} onClick={goNext} type="button">Next</button>
+            )}
+          </footer>
+        )}
+      </div>
+      {skipDialogOpen && (
+        <div className="modal-backdrop nested" onClick={() => setSkipDialogOpen(false)} role="presentation">
+          <div aria-modal="true" className="modal-card message-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Wizard</p>
+                <h3>Close Configuration Wizard?</h3>
+              </div>
+            </div>
+            <div className="modal-body">
+              <p>You can apply the information entered so far and create the board now, or close the wizard without applying anything.</p>
+            </div>
+            <div className="modal-actions">
+              <button className="icon-button" disabled={busy} onClick={() => setSkipDialogOpen(false)} type="button">Continue Wizard</button>
+              <button className="icon-button" disabled={busy} onClick={() => void onMarkComplete(mode)} type="button">Close Without Applying</button>
+              <button className="primary-button" disabled={busy} onClick={() => void finishWizard()} type="button">Apply Current Setup</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -6918,6 +7634,260 @@ function listTemplateConfigForSave(templateType: ListTemplateType, behavior: Lis
     behavior: templateType === 'custom' ? behavior : defaultListBehavior(templateType),
     ...(templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {})
   }
+}
+
+function wizardSteps(listDrafts: WizardListDraft[]): WizardStepId[] {
+  const needsSpecifics = listDrafts.some((list) => list.templateType === 'shopping_list' || list.templateType === 'birthday_calendar')
+  return needsSpecifics
+    ? ['welcome', 'templates', 'lists', 'specifics', 'sorting', 'finalTouches', 'widgets', 'done']
+    : ['welcome', 'templates', 'lists', 'sorting', 'finalTouches', 'widgets', 'done']
+}
+
+function wizardId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function wizardTemplateLabel(templateType: WizardTemplateType): string {
+  return wizardTemplateOptions.find((option) => option.value === templateType)?.label ?? 'List'
+}
+
+function wizardDefaultListName(templateType: WizardTemplateType, count = 1): string {
+  if (templateType === 'todo') return count > 1 ? `To Do ${count}` : 'My “To Do” List'
+  if (templateType === 'shopping_list') return count > 1 ? `Shopping List ${count}` : 'Shopping List'
+  if (templateType === 'wishlist') return count > 1 ? `Wishlist ${count}` : 'Wishlist'
+  if (templateType === 'health') return count > 1 ? `Health ${count}` : 'Health'
+  if (templateType === 'trips_events') return count > 1 ? `Trips & Events ${count}` : 'Trips & Events'
+  return count > 1 ? `Birthday Calendar ${count}` : 'My Friend’s Birthdays'
+}
+
+function createWizardListDraft(templateType: WizardTemplateType, count = 1): WizardListDraft {
+  const defaultSort = wizardDefaultSortField(templateType)
+  return {
+    id: wizardId('wizard-list'),
+    templateType,
+    name: wizardDefaultListName(templateType, count),
+    sortField: defaultSort,
+    sortDirection: wizardDefaultSortDirection(templateType, defaultSort),
+    displayEnabled: true,
+    dueDateEnabled: wizardDeadlineApplicable(templateType),
+    deadlineMandatory: false
+  }
+}
+
+function createWizardWidgetDraft(name: string, type: WidgetType): WizardWidgetDraft {
+  return {
+    id: wizardId('wizard-widget'),
+    name,
+    type,
+    displayEnabled: true,
+    layout: wizardWidgetLayoutOptions[type][0]
+  }
+}
+
+function wizardDeadlineApplicable(templateType: WizardTemplateType): boolean {
+  return templateType === 'todo' || templateType === 'shopping_list'
+}
+
+function wizardDefaultSortField(templateType: WizardTemplateType): string {
+  if (templateType === 'todo') return 'Priority'
+  if (templateType === 'shopping_list') return 'Needed By'
+  if (templateType === 'wishlist') return 'Wishmeter'
+  if (templateType === 'health') return 'Appointment Date'
+  if (templateType === 'trips_events') return 'Start'
+  return 'Birthday'
+}
+
+function wizardSortOptions(templateType: WizardTemplateType): Array<{ value: string; label: string }> {
+  if (templateType === 'todo') return ['Priority', 'Deadline', 'Effort', 'Task Name', 'manual'].map(wizardSortOption)
+  if (templateType === 'shopping_list') return ['Needed By', 'Product', 'Store', 'Cost', 'manual'].map(wizardSortOption)
+  if (templateType === 'wishlist') return ['Wishmeter', 'Price', 'Product', 'manual'].map(wizardSortOption)
+  if (templateType === 'health') return ['Appointment Date', 'Entry', 'manual'].map(wizardSortOption)
+  if (templateType === 'trips_events') return ['Start', 'End', 'Type', 'Title', 'manual'].map(wizardSortOption)
+  return [{ value: 'Birthday', label: 'Birthday' }]
+}
+
+function wizardSortOption(value: string): { value: string; label: string } {
+  return { value, label: value === 'manual' ? 'Manual' : value }
+}
+
+function wizardDefaultSortDirection(templateType: WizardTemplateType, field: string): ListSortDirection {
+  if (field === 'manual') return 'manual'
+  if (templateType === 'todo' && field === 'Priority') return 'asc'
+  if (templateType === 'wishlist' && field === 'Wishmeter') return 'asc'
+  if (['Deadline', 'Needed By', 'Appointment Date', 'Start', 'End', 'Birthday'].includes(field)) return 'asc'
+  if (['Effort', 'Cost', 'Price'].includes(field)) return 'desc'
+  return 'asc'
+}
+
+function wizardSortDirectionOptions(templateType: WizardTemplateType, field: string): Array<{ value: Exclude<ListSortDirection, 'manual'>; label: string }> | Array<{ value: ListSortDirection; label: string }> {
+  if (field === 'manual') return [{ value: 'manual', label: 'Manual' }]
+  if (templateType === 'todo' && field === 'Priority') {
+    return [
+      { value: 'asc', label: 'Higher Priority on Top' },
+      { value: 'desc', label: 'Lower Priority on Top' }
+    ]
+  }
+  if (templateType === 'wishlist' && field === 'Wishmeter') {
+    return [
+      { value: 'asc', label: 'Most Desired on Top' },
+      { value: 'desc', label: 'Least Desired on Top' }
+    ]
+  }
+  if (['Deadline', 'Needed By', 'Appointment Date', 'Start', 'End', 'Birthday'].includes(field)) {
+    return [
+      { value: 'asc', label: 'Soonest to Farthest' },
+      { value: 'desc', label: 'Farthest to Soonest' }
+    ]
+  }
+  if (['Effort', 'Cost', 'Price'].includes(field)) {
+    return [
+      { value: 'desc', label: 'Highest to Lowest' },
+      { value: 'asc', label: 'Lowest to Highest' }
+    ]
+  }
+  return [
+    { value: 'asc', label: 'A to Z' },
+    { value: 'desc', label: 'Z to A' }
+  ]
+}
+
+function defaultWizardSummarySlots(): NonNullable<Parameters<typeof window.lpl.updateBoard>[0]['summarySlots']> {
+  const systemSlots: Array<{ label: string; aggregationMethod: AggregationMethod }> = [
+    { label: 'Open Tasks', aggregationMethod: 'open_tasks' },
+    { label: 'Board Items', aggregationMethod: 'board_items' },
+    { label: 'Total Purchases', aggregationMethod: 'total_purchases' },
+    { label: 'Overdue Items', aggregationMethod: 'overdue_items' }
+  ]
+  return Array.from({ length: 8 }, (_, slotIndex) => {
+    const system = systemSlots[slotIndex]
+    return {
+      slotIndex,
+      label: system?.label ?? '',
+      sourceListId: null,
+      sourceColumnId: null,
+      aggregationMethod: system?.aggregationMethod ?? 'count'
+    }
+  })
+}
+
+function configureWizardList(
+  list: BoardList,
+  draft: WizardListDraft,
+  data: WizardData,
+  grid: WizardGrid | null
+): Parameters<typeof window.lpl.updateList>[0] {
+  const sortColumn = draft.sortField === 'manual' ? null : list.columns.find((column) => normalizeColumnName(column.name) === normalizeColumnName(draft.sortField))
+  const templateConfig = listTemplateConfigForSave(list.templateType, defaultListBehavior(list.templateType), data.birthdayBoardView)
+  const birthdayCalendar = draft.templateType === 'birthday_calendar'
+  return {
+    ...listInput(list),
+    name: draft.name.trim() || wizardDefaultListName(draft.templateType),
+    templateConfig,
+    grid: grid ?? { x: 0, y: 0, w: 0, h: 0 },
+    dueDateEnabled: birthdayCalendar ? false : draft.dueDateEnabled,
+    dueDateColumnId: list.dueDateColumnId,
+    deadlineMandatory: birthdayCalendar ? false : draft.deadlineMandatory,
+    sortColumnId: sortColumn?.id ?? null,
+    sortDirection: sortColumn ? draft.sortDirection : 'manual',
+    displayEnabled: Boolean(grid && draft.displayEnabled)
+  }
+}
+
+function planWizardBoardLayout(listDrafts: WizardListDraft[], widgets: WizardWidgetDraft[], baseOccupied: WizardGrid[] = []): WizardLayoutPlan {
+  type LayoutElement = {
+    id: string
+    kind: 'list' | 'widget'
+    sizes: Array<{ w: number; h: number }>
+  }
+  const elements: LayoutElement[] = [
+    ...listDrafts
+      .filter((draft) => draft.displayEnabled)
+      .map((draft) => ({ id: draft.id, kind: 'list' as const, sizes: wizardPreferredGrids(draft.templateType) })),
+    ...widgets
+      .filter((widget) => widget.displayEnabled)
+      .map((widget) => ({ id: widget.id, kind: 'widget' as const, sizes: [wizardWidgetGridSize(widget)] }))
+  ].sort((a, b) => b.sizes[0].w * b.sizes[0].h - a.sizes[0].w * a.sizes[0].h)
+
+  const assignments = new Map<string, WizardGrid>()
+  const occupied: WizardGrid[] = [...baseOccupied]
+
+  function place(index: number): boolean {
+    const element = elements[index]
+    if (!element) return true
+    for (const size of element.sizes) {
+      for (let y = 1; y <= 9 - size.h; y += 1) {
+        for (let x = 1; x <= 17 - size.w; x += 1) {
+          const candidate = { x, y, ...size }
+          if (occupied.some((grid) => gridsOverlap(grid, candidate))) continue
+          occupied.push(candidate)
+          assignments.set(element.id, candidate)
+          if (place(index + 1)) return true
+          assignments.delete(element.id)
+          occupied.pop()
+        }
+      }
+    }
+    return false
+  }
+
+  if (!place(0)) {
+    throw new Error('There is not enough board space for the selected visible lists and widgets. Hide one or more items, or reduce the number of widgets.')
+  }
+
+  const listGrids = new Map<string, WizardGrid>()
+  const widgetGrids = new Map<string, WizardGrid>()
+  for (const element of elements) {
+    const grid = assignments.get(element.id)
+    if (!grid) continue
+    if (element.kind === 'list') listGrids.set(element.id, grid)
+    else widgetGrids.set(element.id, grid)
+  }
+  return { listGrids, widgetGrids }
+}
+
+function wizardPreferredGrids(templateType: WizardTemplateType): Array<{ w: number; h: number }> {
+  if (templateType === 'todo') return [{ w: 6, h: 4 }, { w: 6, h: 3 }, { w: 6, h: 2 }, { w: 5, h: 4 }, { w: 5, h: 3 }, { w: 5, h: 2 }, { w: 4, h: 3 }, { w: 4, h: 2 }]
+  if (templateType === 'shopping_list') return [{ w: 4, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
+  if (templateType === 'health') return [{ w: 5, h: 4 }, { w: 5, h: 3 }, { w: 4, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
+  return [{ w: 6, h: 4 }, { w: 6, h: 3 }, { w: 5, h: 4 }, { w: 5, h: 3 }, { w: 4, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
+}
+
+function wizardWidgetGridSize(widget: WizardWidgetDraft): { w: number; h: number } {
+  if (widget.type === 'word_of_day') return { w: 3, h: 2 }
+  return { w: 2, h: 2 }
+}
+
+function wizardStoreOptions(text: string): string[] {
+  const seen = new Set<string>()
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => {
+      const key = line.toLowerCase()
+      if (!line || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+function wizardWidgetConfig(draft: WizardWidgetDraft, existing: BoardWidgetConfig): BoardWidgetConfig {
+  if (draft.type === 'world_clocks') {
+    return {
+      ...existing,
+      worldClocks: {
+        locations: existing.worldClocks?.locations ?? [
+          { id: 'bucharest', label: 'Bucharest', timeZone: 'Europe/Bucharest' },
+          { id: 'new-york', label: 'New York', timeZone: 'America/New_York' }
+        ],
+        showSeconds: existing.worldClocks?.showSeconds ?? false,
+        style: draft.layout === 'Analogue' ? 'analogue' : 'digital'
+      }
+    }
+  }
+  if (draft.type === 'clock') {
+    return { ...existing, clock: { showSeconds: existing.clock?.showSeconds ?? draft.layout === 'Digital with color' } }
+  }
+  return existing
 }
 
 type BoardDisplayColumn =

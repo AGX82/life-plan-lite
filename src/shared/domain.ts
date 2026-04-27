@@ -259,6 +259,7 @@ export type AppSettings = {
   closeConfirmationMode: CloseConfirmationMode
   theme: AppTheme
   addColumnOnTopByBoard: Record<string, boolean>
+  wizardCompleted: boolean
 }
 
 export type AdminModeRequestResult = {
@@ -487,6 +488,7 @@ export type LplApi = {
   updateSummarySlots: (input: UpdateSummarySlotsInput) => Promise<BoardSnapshot>
   deleteBoard: (input: DeleteBoardInput) => Promise<BoardSnapshot>
   duplicateBoard: (input: DuplicateBoardInput) => Promise<BoardSnapshot>
+  resetAppToFirstRun: () => Promise<BoardSnapshot>
   createList: (input: CreateListInput) => Promise<BoardSnapshot>
   updateList: (input: UpdateListInput) => Promise<BoardSnapshot>
   updateListLayouts: (input: UpdateListGridInput[]) => Promise<BoardSnapshot>

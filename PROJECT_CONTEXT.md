@@ -2,7 +2,7 @@
 
 This is the living project context for Life Plan Lite. Use it to record product decisions, behavior rules, requirement changes, rationale, and development choices that should guide future work.
 
-Last updated: 2026-04-26
+Last updated: 2026-04-27
 
 ## Product Intent
 
@@ -176,9 +176,42 @@ Date: 2026-04-26
 - Birthday Calendar sort is locked to the Birthday field. Sorting must compare the next month/day occurrence, ignoring the stored year, so the board remains ordered as a perpetual calendar.
 - Protected Birthday Calendar core fields cannot be structurally changed or deleted, but users may still change safe configuration such as summary eligibility and board visibility.
 - Item Save is the user-facing commit action for item edits; explicit item publishing is not part of the current workflow.
+
+## Configuration Wizard Decisions
+
+Date: 2026-04-27
+
+- The wizard screen mockups take priority over the earlier written wizard notes when there are wording, layout, or field mismatches.
+- The wizard follows a clean, low-density flow with one or two decisions per page and a persistent `Skip Configuration Wizard` action in the footer until completion.
+- App settings now track `wizardCompleted`; when false in admin mode, the wizard opens automatically as the startup configuration flow.
+- The left rail includes an `LPL Wizard` button above the board visibility control so users can run the wizard later to create another board.
+- First-run wizard completion reuses and clears the initial seeded `Life Plan Lite` board instead of leaving demo data behind.
+- After first run, the wizard starts with a mode choice: quick-add lists to an existing board, create a new board without changing existing data, or reset the app to first-run state.
+- Quick-add mode starts at template selection and appends configured lists/widgets to the selected existing board without changing which board is active.
+- New-board mode starts at board naming with copy tailored for an app that is already in use.
+- Reset mode starts at board naming, then clears boards, lists, items, widgets, archives, users, display config, and app settings only when the wizard is finished/applied.
+- The wizard creates no database records until Finish, unless the user closes the wizard and explicitly chooses to apply the current setup.
+- Closing the wizard offers three choices: continue the wizard, close without applying, or apply the current setup. Closing without applying discards wizard inputs; on first run it leaves an empty first-run board, while later use preserves existing boards/data unchanged.
+- Wizard-created boards use standard list templates, existing validation, standard summary slots, and the same update APIs as normal app editing.
+- Wizard list placement uses each template's preferred size cascade and finds the first available board area; lists that cannot be placed are created but not displayed.
+- If Shopping List store choices are configured in the wizard, the created Shopping List `Store` field is converted to a non-ranked choice field using one store per line.
+- Birthday Calendar wizard interval maps to the existing birthday board-view setting.
+- Wizard Shopping List store choices and widget rows must be empty by default in clean builds; screenshot sample data is only illustrative.
+- Wizard widgets can be added, removed, and independently marked shown/hidden before Finish.
+- Wizard layout planning treats visible lists and widgets as one combined board layout before applying changes, instead of placing widgets into leftover space after lists.
 - World Clock widgets can contain 2 to 16 clocks. Width is one board unit per clock and height is fixed at two units.
 - World Clock time zones should be type-searchable from supported system time zones when available.
 - World Clock visual style expansion is deferred until the user provides design directions.
+
+## Packaging Decisions
+
+Date: 2026-04-27
+
+- Distribution builds must be clean by default: no development database, seed database, screenshot sample data, store examples, or widget examples are packaged.
+- The repository may retain local seed-data utilities for development, but the `dist:win` package configuration must not include `resources/seed-data`.
+- A clean first run creates only an empty `Life Plan Lite` board and opens the wizard in Admin Mode.
+- The Windows executable uses `build/icon.ico`, generated from the app logo PNG while preserving the logo aspect ratio inside a square icon.
+- Before clean packaging/testing that might affect local app data, back up the current user database/config so the dev environment can be restored.
 
 ## Development Practice Decisions
 
@@ -190,7 +223,7 @@ Date: 2026-04-26
 
 ## Open Next Areas
 
-- Add or refine final functionality before declaring `v0.10`.
+- Run one final clean-package smoke test before declaring `v1.0.0`.
 - Add automated tests around repository behavior and layout placement.
 - Continue refining admin density, readability, and workflow efficiency.
 - Improve layout interactions with swapping/repacking where it adds real usability.

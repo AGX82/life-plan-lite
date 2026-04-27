@@ -49,6 +49,7 @@ const api: LplApi = {
   updateSummarySlots: (input: UpdateSummarySlotsInput) => ipcRenderer.invoke('boards:updateSummarySlots', input),
   deleteBoard: (input: DeleteBoardInput) => ipcRenderer.invoke('boards:delete', input),
   duplicateBoard: (input: DuplicateBoardInput) => ipcRenderer.invoke('boards:duplicate', input),
+  resetAppToFirstRun: () => ipcRenderer.invoke('app:resetToFirstRun'),
   createList: (input: CreateListInput) => ipcRenderer.invoke('lists:create', input),
   updateList: (input: UpdateListInput) => ipcRenderer.invoke('lists:update', input),
   updateListLayouts: (input: UpdateListGridInput[]) => ipcRenderer.invoke('lists:updateLayouts', input),
