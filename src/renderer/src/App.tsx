@@ -368,7 +368,11 @@ export function App(): ReactElement {
         await window.lpl.updateAppSettings({ ...defaultAppSettings, wizardCompleted: true, tutorialCompleted: false })
         return resetSnapshot
       })
-      if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+      if (result && 'lists' in result) {
+        editingBoardId.current = result.id
+        setSelectedNode({ kind: 'board', id: result.id })
+        await load('admin', result.id)
+      }
       setWizardOpen(false)
       return
     }
@@ -386,7 +390,11 @@ export function App(): ReactElement {
       await window.lpl.updateAppSettings({ ...defaultAppSettings, wizardCompleted: true, tutorialCompleted: false })
       return resetSnapshot
     })
-    if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+    if (result && 'lists' in result) {
+      editingBoardId.current = result.id
+      setSelectedNode({ kind: 'board', id: result.id })
+      await load('admin', result.id)
+    }
     return result && 'lists' in result ? result : undefined
   }
 
@@ -537,6 +545,7 @@ export function App(): ReactElement {
       }
     })
     if (result && 'lists' in result) {
+      editingBoardId.current = result.id
       setSelectedNode({ kind: 'board', id: result.id })
       if ((data.mode === 'firstRun' || data.mode === 'reset') && !appSettings.tutorialCompleted) setLaunchTutorialAfterWizard(true)
       setWizardOpen(true)
@@ -1506,9 +1515,13 @@ function GuidedTutorial({
 
   const highlightStyle = tutorialHighlightStyle(targetRect)
   const cardStyle = tutorialCardStyle(targetRect)
+  const maskStyles = tutorialMaskStyles(targetRect)
 
   return (
     <div className="tutorial-overlay" role="presentation">
+      {maskStyles.map((style, index) => (
+        <div className="tutorial-mask" key={index} style={style} />
+      ))}
       {highlightStyle && <div className="tutorial-highlight" style={highlightStyle} />}
       <section aria-modal="true" className="tutorial-card" role="dialog" style={cardStyle}>
         <div className="tutorial-card-body">
@@ -1632,28 +1645,82 @@ function tutorialHighlightStyle(rect: DOMRect | null): CSSProperties | undefined
 
 function tutorialCardStyle(rect: DOMRect | null): CSSProperties {
   const cardWidth = Math.min(380, window.innerWidth - 32)
+  const cardHeight = 270
   if (!rect) {
     return {
-      top: Math.max(24, Math.round((window.innerHeight - 260) / 2)),
+      top: Math.max(24, Math.round((window.innerHeight - cardHeight) / 2)),
       left: Math.max(16, Math.round((window.innerWidth - cardWidth) / 2)),
       width: cardWidth
     }
   }
 
   const margin = 16
-  const preferredTop = rect.bottom + 18
-  const fallbackTop = rect.top - 250
-  const top =
-    preferredTop + 250 <= window.innerHeight - margin
-      ? preferredTop
-      : Math.max(margin, Math.min(window.innerHeight - 250 - margin, fallbackTop))
-  const left = rect.left + cardWidth <= window.innerWidth - margin ? rect.left : Math.max(margin, rect.right - cardWidth)
+  const gap = 18
+  const belowSpace = window.innerHeight - rect.bottom - margin
+  const aboveSpace = rect.top - margin
+  const rightSpace = window.innerWidth - rect.right - margin
+  const leftSpace = rect.left - margin
+
+  if (belowSpace >= cardHeight) {
+    return {
+      top: rect.bottom + gap,
+      left: clamp(rect.left, margin, window.innerWidth - cardWidth - margin),
+      width: cardWidth
+    }
+  }
+
+  if (aboveSpace >= cardHeight) {
+    return {
+      top: rect.top - cardHeight - gap,
+      left: clamp(rect.left, margin, window.innerWidth - cardWidth - margin),
+      width: cardWidth
+    }
+  }
+
+  if (rightSpace >= cardWidth) {
+    return {
+      top: clamp(rect.top, margin, window.innerHeight - cardHeight - margin),
+      left: rect.right + gap,
+      width: cardWidth
+    }
+  }
+
+  if (leftSpace >= cardWidth) {
+    return {
+      top: clamp(rect.top, margin, window.innerHeight - cardHeight - margin),
+      left: rect.left - cardWidth - gap,
+      width: cardWidth
+    }
+  }
 
   return {
-    top,
-    left: Math.max(margin, Math.min(window.innerWidth - cardWidth - margin, left)),
+    top: Math.max(margin, Math.round((window.innerHeight - cardHeight) / 2)),
+    left: Math.max(margin, Math.round((window.innerWidth - cardWidth) / 2)),
     width: cardWidth
   }
+}
+
+function tutorialMaskStyles(rect: DOMRect | null): CSSProperties[] {
+  const base: CSSProperties = {
+    position: 'fixed',
+    background: 'rgba(0, 3, 6, 0.78)',
+    backdropFilter: 'blur(6px) saturate(94%)'
+  }
+  if (!rect) {
+    return [{ ...base, inset: 0 }]
+  }
+  const padding = 8
+  const top = Math.max(0, rect.top - padding)
+  const left = Math.max(0, rect.left - padding)
+  const right = Math.min(window.innerWidth, rect.right + padding)
+  const bottom = Math.min(window.innerHeight, rect.bottom + padding)
+
+  return [
+    { ...base, top: 0, left: 0, width: '100vw', height: top },
+    { ...base, top, left: 0, width: left, height: Math.max(0, bottom - top) },
+    { ...base, top, left: right, width: Math.max(0, window.innerWidth - right), height: Math.max(0, bottom - top) },
+    { ...base, top: bottom, left: 0, width: '100vw', height: Math.max(0, window.innerHeight - bottom) }
+  ]
 }
 
 function BoardRailContextMenu({
@@ -5226,8 +5293,9 @@ function ClockWidget({ compact, widget }: { compact: boolean; widget: BoardWidge
 }
 
 function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  const [state, setState] = useState<{ loading: boolean; text: string; detail: string }>({
+  const [state, setState] = useState<{ loading: boolean; kicker: string; text: string; detail: string }>({
     loading: true,
+    kicker: 'Current location',
     text: 'Loading weather',
     detail: 'Requesting current location...'
   })
@@ -5236,10 +5304,10 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
     let cancelled = false
     async function loadWeather(): Promise<void> {
       try {
-        const position = await requestWeatherPosition()
+        const location = await resolveWeatherLocation()
         const unit = widget.config.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
         const response = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${position.coords.latitude}&longitude=${position.coords.longitude}&current=temperature_2m,apparent_temperature,weather_code,is_day&temperature_unit=${unit}&timezone=auto`
+          `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,apparent_temperature,weather_code,is_day&temperature_unit=${unit}&timezone=auto`
         )
         if (!response.ok) throw new Error(`weather-http-${response.status}`)
         const payload = (await response.json()) as {
@@ -5251,6 +5319,7 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
         const unitSymbol = unit === 'fahrenheit' ? 'F' : 'C'
         setState({
           loading: false,
+          kicker: location.kicker,
           text: `${Math.round(current.temperature_2m)}°${unitSymbol}`,
           detail: `${weatherCodeLabel(current.weather_code ?? 0, current.is_day === 1)} · Feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)}°${unitSymbol}`
         })
@@ -5258,6 +5327,7 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
         if (cancelled) return
         setState({
           loading: false,
+          kicker: 'Weather',
           text: 'Weather unavailable',
           detail: weatherUnavailableDetail(error)
         })
@@ -5273,7 +5343,7 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
 
   return (
     <div className={`widget-content weather-widget ${compact ? 'compact-widget' : ''}`}>
-      <span className="widget-kicker">Current location</span>
+      <span className="widget-kicker">{state.kicker}</span>
       <strong>{state.text}</strong>
       <p>{state.loading ? 'Updating…' : state.detail}</p>
     </div>
@@ -8809,15 +8879,55 @@ async function requestWeatherPosition(): Promise<GeolocationPosition> {
   )
 }
 
+async function resolveWeatherLocation(): Promise<{ latitude: number; longitude: number; kicker: string }> {
+  try {
+    const position = await requestWeatherPosition()
+    return {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      kicker: 'Current location'
+    }
+  } catch (error) {
+    return requestApproximateWeatherLocation(error)
+  }
+}
+
+async function requestApproximateWeatherLocation(previousError: unknown): Promise<{ latitude: number; longitude: number; kicker: string }> {
+  try {
+    const response = await fetch('https://ipapi.co/json/')
+    if (!response.ok) throw new Error(`ip-location-http-${response.status}`)
+    const payload = (await response.json()) as {
+      latitude?: number
+      longitude?: number
+      city?: string
+      region?: string
+      country_name?: string
+    }
+    if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) throw new Error('ip-location-missing')
+    const locationLabel = [payload.city, payload.region || payload.country_name].filter(Boolean).join(', ')
+    return {
+      latitude: Number(payload.latitude),
+      longitude: Number(payload.longitude),
+      kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
+    }
+  } catch (fallbackError) {
+    if (previousError instanceof Error) throw previousError
+    throw fallbackError
+  }
+}
+
 function weatherUnavailableDetail(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'code' in error) {
     const code = Number((error as { code?: unknown }).code)
-    if (code === 1) return 'Location access is blocked. Allow location for Life Plan Lite or Windows, then refresh the widget.'
-    if (code === 2) return 'Current location could not be determined. Check location services and try again.'
-    if (code === 3) return 'Location lookup timed out. Check connectivity and try again.'
+    if (code === 1) return 'Location access is blocked and approximate lookup was unavailable. Check permissions or connectivity and try again.'
+    if (code === 2) return 'Current location could not be determined and approximate lookup was unavailable. Check location services and try again.'
+    if (code === 3) return 'Location lookup timed out and approximate lookup was unavailable. Check connectivity and try again.'
   }
   if (error instanceof Error && error.message.startsWith('weather-http-')) {
     return 'The weather service did not respond successfully. Please try again in a moment.'
+  }
+  if (error instanceof Error && error.message.startsWith('ip-location-http-')) {
+    return 'Approximate location lookup failed. Check connectivity and try again.'
   }
   return 'Location permission or weather service unavailable.'
 }

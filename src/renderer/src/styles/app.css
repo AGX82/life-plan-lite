@@ -755,8 +755,12 @@ td {
   position: fixed;
   inset: 0;
   z-index: 95;
-  background: rgba(0, 3, 6, 0.78);
-  backdrop-filter: blur(6px) saturate(94%);
+  pointer-events: none;
+}
+
+.tutorial-mask {
+  z-index: 95;
+  pointer-events: none;
 }
 
 .tutorial-highlight {
@@ -781,6 +785,7 @@ td {
     var(--color-panel-deep);
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .tutorial-card-body {
