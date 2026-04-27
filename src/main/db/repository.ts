@@ -4153,14 +4153,20 @@ export class LifePlanRepository {
 
     const listUpdateMap = new Map(listUpdates.map((entry) => [entry.listId, entry.grid]))
     const widgetUpdateMap = new Map(widgetUpdates.map((entry) => [entry.widgetId, entry.grid]))
-    const finalListGrids = listRows.map((row) => ({
-      id: row.id,
-      grid: listUpdateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }
-    }))
-    const finalWidgetGrids = widgetRows.map((row) => ({
-      id: row.id,
-      grid: widgetUpdateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }
-    }))
+    const finalListGridMap = new Map(
+      listRows.map((row) => [row.id, listUpdateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }])
+    )
+    for (const entry of listUpdates) {
+      if (!finalListGridMap.has(entry.listId)) finalListGridMap.set(entry.listId, entry.grid)
+    }
+    const finalWidgetGridMap = new Map(
+      widgetRows.map((row) => [row.id, widgetUpdateMap.get(row.id) ?? { x: row.grid_x, y: row.grid_y, w: row.grid_w, h: row.grid_h }])
+    )
+    for (const entry of widgetUpdates) {
+      if (!finalWidgetGridMap.has(entry.widgetId)) finalWidgetGridMap.set(entry.widgetId, entry.grid)
+    }
+    const finalListGrids = [...finalListGridMap.entries()].map(([id, grid]) => ({ id, grid }))
+    const finalWidgetGrids = [...finalWidgetGridMap.entries()].map(([id, grid]) => ({ id, grid }))
 
     for (const entry of finalListGrids) {
       const { grid } = entry

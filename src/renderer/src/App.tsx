@@ -357,122 +357,138 @@ export function App(): ReactElement {
         (!appSettings.wizardCompleted || data.mode === 'reset') &&
         ((resetSnapshot ? [resetSnapshot] : boards).length === 1) &&
         baseSnapshot.name === 'Life Plan Lite'
-      let nextSnapshot =
-        data.mode === 'quickAdd' && data.targetBoardId
-          ? await window.lpl.getBoardSnapshot(data.targetBoardId, 'admin')
-          : reuseInitialSeedBoard
-            ? await window.lpl.updateBoard({
-                boardId: baseSnapshot.id,
-                name: data.boardName,
-                description: '',
-                owner: data.userName,
-                summarySlots: defaultWizardSummarySlots()
-              })
-            : await window.lpl.createBoard({ name: data.boardName })
-      if (data.mode !== 'quickAdd' && !reuseInitialSeedBoard) {
-        nextSnapshot = await window.lpl.updateBoard({
-          boardId: nextSnapshot.id,
-          name: data.boardName,
-          description: '',
-          owner: data.userName,
-          summarySlots: defaultWizardSummarySlots()
-        })
-      }
-      if (data.mode !== 'quickAdd') nextSnapshot = await window.lpl.setActiveBoard(nextSnapshot.id)
-      if (reuseInitialSeedBoard) {
-        for (const list of [...nextSnapshot.lists]) {
-          nextSnapshot = await window.lpl.deleteList(list.id)
-        }
-        for (const widget of [...nextSnapshot.widgets]) {
-          nextSnapshot = await window.lpl.deleteWidget(widget.id)
-        }
-      }
-      const baseOccupied =
-        data.mode === 'quickAdd'
-          ? [
-              ...nextSnapshot.lists.filter((list) => list.displayEnabled).map((list) => list.grid),
-              ...nextSnapshot.widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
-            ]
-          : []
-      const layoutPlan = planWizardBoardLayout(data.listDrafts, data.widgets, baseOccupied)
-      const listLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['lists'] = []
-      const widgetLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['widgets'] = []
+      let createdBoardId: string | null = null
 
-      for (const draft of data.listDrafts) {
-        const beforeIds = new Set(nextSnapshot.lists.map((list) => list.id))
-        nextSnapshot = await window.lpl.createList({
-          boardId: nextSnapshot.id,
-          name: draft.name,
-          templateType: draft.templateType
-        })
-        const createdList = nextSnapshot.lists.find((list) => !beforeIds.has(list.id)) ?? newestList(nextSnapshot)
-        if (!createdList) continue
-        const configuredList = configureWizardList(createdList, draft, data, null)
-        nextSnapshot = await window.lpl.updateList(configuredList)
-        const updatedList = nextSnapshot.lists.find((list) => list.id === createdList.id)
-        if (updatedList) {
-          const plannedGrid = layoutPlan.listGrids.get(draft.id)
-          if (plannedGrid) listLayoutUpdates.push({ listId: updatedList.id, grid: plannedGrid })
-          if (data.useStoreList && draft.templateType === 'shopping_list') {
-            const storeColumn = updatedList.columns.find((column) => normalizeColumnName(column.name) === 'store')
-            const storeOptions = wizardStoreOptions(data.storeText)
-            if (storeColumn && storeOptions.length > 0) {
-              nextSnapshot = await window.lpl.updateColumn({
-                columnId: storeColumn.id,
-                name: storeColumn.name,
-                type: 'choice',
-                required: storeColumn.required,
-                maxLength: storeColumn.maxLength,
-                listSummaryEligible: storeColumn.listSummaryEligible,
-                boardSummaryEligible: storeColumn.boardSummaryEligible,
-                choiceConfig: {
-                  selection: 'single',
-                  ranked: false,
-                  options: storeOptions.map((label, index) => ({ id: choiceId(label, index), label, rank: index + 1 }))
-                },
-                dateDisplayFormat: storeColumn.dateDisplayFormat,
-                durationDisplayFormat: storeColumn.durationDisplayFormat,
-                recurrence: storeColumn.recurrence,
-                recurrenceDays: storeColumn.recurrenceDays,
-                currencyCode: storeColumn.currencyCode,
-                showOnBoard: storeColumn.showOnBoard,
-                order: storeColumn.order
-              })
+      try {
+        let nextSnapshot =
+          data.mode === 'quickAdd' && data.targetBoardId
+            ? await window.lpl.getBoardSnapshot(data.targetBoardId, 'admin')
+            : reuseInitialSeedBoard
+              ? await window.lpl.updateBoard({
+                  boardId: baseSnapshot.id,
+                  name: data.boardName,
+                  description: '',
+                  owner: data.userName,
+                  summarySlots: defaultWizardSummarySlots()
+                })
+              : await window.lpl.createBoard({ name: data.boardName })
+        if (!reuseInitialSeedBoard && data.mode !== 'quickAdd') createdBoardId = nextSnapshot.id
+        if (data.mode !== 'quickAdd' && !reuseInitialSeedBoard) {
+          nextSnapshot = await window.lpl.updateBoard({
+            boardId: nextSnapshot.id,
+            name: data.boardName,
+            description: '',
+            owner: data.userName,
+            summarySlots: defaultWizardSummarySlots()
+          })
+        }
+        if (reuseInitialSeedBoard) {
+          for (const list of [...nextSnapshot.lists]) {
+            nextSnapshot = await window.lpl.deleteList(list.id)
+          }
+          for (const widget of [...nextSnapshot.widgets]) {
+            nextSnapshot = await window.lpl.deleteWidget(widget.id)
+          }
+        }
+        const baseOccupied =
+          data.mode === 'quickAdd'
+            ? [
+                ...nextSnapshot.lists.filter((list) => list.displayEnabled).map((list) => list.grid),
+                ...nextSnapshot.widgets.filter((widget) => widget.displayEnabled).map((widget) => widget.grid)
+              ]
+            : []
+        const layoutPlan = planWizardBoardLayout(data.listDrafts, data.widgets, baseOccupied)
+        const listLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['lists'] = []
+        const widgetLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['widgets'] = []
+
+        for (const draft of data.listDrafts) {
+          const beforeIds = new Set(nextSnapshot.lists.map((list) => list.id))
+          nextSnapshot = await window.lpl.createList({
+            boardId: nextSnapshot.id,
+            name: draft.name,
+            templateType: draft.templateType
+          })
+          const createdList = nextSnapshot.lists.find((list) => !beforeIds.has(list.id)) ?? newestList(nextSnapshot)
+          if (!createdList) continue
+          const configuredList = configureWizardList(createdList, draft, data, null)
+          nextSnapshot = await window.lpl.updateList(configuredList)
+          const updatedList = nextSnapshot.lists.find((list) => list.id === createdList.id)
+          if (updatedList) {
+            const plannedGrid = layoutPlan.listGrids.get(draft.id)
+            if (plannedGrid) listLayoutUpdates.push({ listId: updatedList.id, grid: plannedGrid })
+            if (data.useStoreList && draft.templateType === 'shopping_list') {
+              const storeColumn = updatedList.columns.find((column) => normalizeColumnName(column.name) === 'store')
+              const storeOptions = wizardStoreOptions(data.storeText)
+              if (storeColumn && storeOptions.length > 0) {
+                nextSnapshot = await window.lpl.updateColumn({
+                  columnId: storeColumn.id,
+                  name: storeColumn.name,
+                  type: 'choice',
+                  required: storeColumn.required,
+                  maxLength: storeColumn.maxLength,
+                  listSummaryEligible: storeColumn.listSummaryEligible,
+                  boardSummaryEligible: storeColumn.boardSummaryEligible,
+                  choiceConfig: {
+                    selection: 'single',
+                    ranked: false,
+                    options: storeOptions.map((label, index) => ({ id: choiceId(label, index), label, rank: index + 1 }))
+                  },
+                  dateDisplayFormat: storeColumn.dateDisplayFormat,
+                  durationDisplayFormat: storeColumn.durationDisplayFormat,
+                  recurrence: storeColumn.recurrence,
+                  recurrenceDays: storeColumn.recurrenceDays,
+                  currencyCode: storeColumn.currencyCode,
+                  showOnBoard: storeColumn.showOnBoard,
+                  order: storeColumn.order
+                })
+              }
             }
           }
         }
-      }
 
-      for (const widgetDraft of data.widgets) {
-        const beforeIds = new Set(nextSnapshot.widgets.map((widget) => widget.id))
-        nextSnapshot = await window.lpl.createWidget({
-          boardId: nextSnapshot.id,
-          type: widgetDraft.type,
-          name: widgetDraft.name
-        })
-        const createdWidget = nextSnapshot.widgets.find((widget) => !beforeIds.has(widget.id)) ?? newestWidget(nextSnapshot)
-        if (!createdWidget) continue
-        nextSnapshot = await window.lpl.updateWidget({
-          widgetId: createdWidget.id,
-          type: widgetDraft.type,
-          name: widgetDraft.name,
-          displayEnabled: widgetDraft.displayEnabled,
-          grid: createdWidget.grid,
-          config: wizardWidgetConfig(widgetDraft, createdWidget.config)
-        })
-        const plannedGrid = layoutPlan.widgetGrids.get(widgetDraft.id)
-        if (plannedGrid) widgetLayoutUpdates.push({ widgetId: createdWidget.id, grid: plannedGrid })
-      }
+        for (const widgetDraft of data.widgets) {
+          const beforeIds = new Set(nextSnapshot.widgets.map((widget) => widget.id))
+          nextSnapshot = await window.lpl.createWidget({
+            boardId: nextSnapshot.id,
+            type: widgetDraft.type,
+            name: widgetDraft.name
+          })
+          const createdWidget = nextSnapshot.widgets.find((widget) => !beforeIds.has(widget.id)) ?? newestWidget(nextSnapshot)
+          if (!createdWidget) continue
+          const config = wizardWidgetConfig(widgetDraft, createdWidget.config)
+          nextSnapshot = await window.lpl.updateWidget({
+            widgetId: createdWidget.id,
+            type: widgetDraft.type,
+            name: widgetDraft.name,
+            displayEnabled: false,
+            grid: { x: 0, y: 0, w: 0, h: 0 },
+            config
+          })
+          const plannedGrid = layoutPlan.widgetGrids.get(widgetDraft.id)
+          if (plannedGrid) widgetLayoutUpdates.push({ widgetId: createdWidget.id, grid: plannedGrid })
+        }
 
-      if (listLayoutUpdates.length > 0 || widgetLayoutUpdates.length > 0) {
-        nextSnapshot = await window.lpl.updateBoardLayouts({
-          lists: listLayoutUpdates,
-          widgets: widgetLayoutUpdates
-        })
-      }
+        if (listLayoutUpdates.length > 0 || widgetLayoutUpdates.length > 0) {
+          nextSnapshot = await window.lpl.updateBoardLayouts({
+            lists: listLayoutUpdates,
+            widgets: widgetLayoutUpdates
+          })
+        }
 
-      await window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true })
-      return nextSnapshot
+        if (data.mode !== 'quickAdd' && !reuseInitialSeedBoard) {
+          nextSnapshot = await window.lpl.setActiveBoard(nextSnapshot.id)
+        }
+
+        await window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true })
+        return nextSnapshot
+      } catch (error) {
+        if (createdBoardId) {
+          try {
+            await window.lpl.deleteBoard({ boardId: createdBoardId, keepBoardId: baseSnapshot.id })
+          } catch {}
+        }
+        throw error
+      }
     })
     if (result && 'lists' in result) {
       setSelectedNode({ kind: 'board', id: result.id })
@@ -900,7 +916,15 @@ function ConfigurationWizard({
       setGlobalMessageDialog({ title: 'List limit reached', message: 'You can display a maximum of 16 lists on a single board.' })
       return
     }
-    setListDrafts((current) => [...current, createWizardListDraft(templateType, current.filter((draft) => draft.templateType === templateType).length + 1)])
+    setListDrafts((current) => {
+      const nextDraft = createWizardListDraft(templateType, current.filter((draft) => draft.templateType === templateType).length + 1)
+      const lastMatchingIndex = [...current].reverse().findIndex((draft) => draft.templateType === templateType)
+      if (lastMatchingIndex < 0) return [...current, nextDraft]
+      const insertAt = current.length - lastMatchingIndex
+      const next = [...current]
+      next.splice(insertAt, 0, nextDraft)
+      return next
+    })
   }
 
   function updateWidgetDraft(id: string, patch: Partial<WizardWidgetDraft>): void {
@@ -7853,6 +7877,7 @@ function wizardPreferredGrids(templateType: WizardTemplateType): Array<{ w: numb
 }
 
 function wizardWidgetGridSize(widget: WizardWidgetDraft): { w: number; h: number } {
+  if (widget.type === 'world_clocks') return { w: 2, h: 2 }
   if (widget.type === 'word_of_day') return { w: 3, h: 2 }
   return { w: 2, h: 2 }
 }
@@ -7875,7 +7900,7 @@ function wizardWidgetConfig(draft: WizardWidgetDraft, existing: BoardWidgetConfi
     return {
       ...existing,
       worldClocks: {
-        locations: existing.worldClocks?.locations ?? [
+        locations: [
           { id: 'bucharest', label: 'Bucharest', timeZone: 'Europe/Bucharest' },
           { id: 'new-york', label: 'New York', timeZone: 'America/New_York' }
         ],

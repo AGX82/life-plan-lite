@@ -199,7 +199,12 @@ Date: 2026-04-27
 - Wizard Shopping List store choices and widget rows must be empty by default in clean builds; screenshot sample data is only illustrative.
 - Wizard widgets can be added, removed, and independently marked shown/hidden before Finish.
 - Wizard layout planning treats visible lists and widgets as one combined board layout before applying changes, instead of placing widgets into leftover space after lists.
+- Wizard final layout validation must include newly created hidden lists/widgets that are about to be shown; batch placement cannot validate only currently visible board elements.
+- If wizard creation of a brand new board fails partway through, the partially created board should be cleaned up instead of being left behind as an inactive orphan.
+- Adding another list from page 3 inserts the new entry directly under the last list of that same type, not at the bottom of the full list.
+- Page 4 store-choice radio controls should render as normal small radio buttons, not as large boxed inputs.
 - World Clock widgets can contain 2 to 16 clocks. Width is one board unit per clock and height is fixed at two units.
+- Wizard-created World Clock widgets default to two clocks so their size matches the layout assumptions and the intended first-run experience.
 - World Clock time zones should be type-searchable from supported system time zones when available.
 - World Clock visual style expansion is deferred until the user provides design directions.
 
