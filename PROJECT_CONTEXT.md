@@ -216,6 +216,15 @@ Date: 2026-04-27
 - The electron-builder portable executable uses a `portable-data` folder beside the `.exe` when the portable runtime exposes `PORTABLE_EXECUTABLE_DIR`.
 - Before clean packaging/testing that might affect local app data, back up the current user database/config so the dev environment can be restored.
 
+## Release Decisions
+
+Date: 2026-04-27
+
+- `v1.0.0` is the first major release of Life Plan Lite and is considered safe for real use from the portable Windows executable.
+- The release-safe production artifact is the electron-builder portable wrapper executable, not the unpacked `win-unpacked` app binary.
+- After tagging a stable release, ongoing work continues on a development version string rather than the next final semantic version.
+- Post-`v1.0.0` development starts from `1.1.0-dev`.
+
 ## Development Practice Decisions
 
 - Record future behavior, requirement, and rationale decisions in this file as they are made.
