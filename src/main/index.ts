@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen, session, shell } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createDbClient } from './db/client'
@@ -319,7 +319,19 @@ function registerIpc(): void {
   })
 }
 
+function configurePermissionHandling(): void {
+  const defaultSession = session.defaultSession
+  defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    if (permission === 'geolocation') return true
+    return false
+  })
+  defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'geolocation')
+  })
+}
+
 app.whenReady().then(() => {
+  configurePermissionHandling()
   const client = createDbClient(app.getPath('userData'))
   migrate(client)
   repository = new LifePlanRepository(client)

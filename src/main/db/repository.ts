@@ -73,7 +73,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   closeConfirmationMode: 'with_comments',
   theme: 'midnight_clear',
   addColumnOnTopByBoard: {},
-  wizardCompleted: false
+  wizardCompleted: false,
+  tutorialCompleted: false
 }
 
 const DEFAULT_PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
@@ -470,12 +471,14 @@ export class LifePlanRepository {
         theme?: AppTheme
         addColumnOnTopByBoard?: Record<string, unknown>
         wizardCompleted?: unknown
+        tutorialCompleted?: unknown
       }
       return {
         closeConfirmationMode: this.normalizeCloseConfirmationMode(parsed.closeConfirmationMode),
         theme: this.normalizeTheme(parsed.theme),
         addColumnOnTopByBoard: this.normalizeBooleanMap(parsed.addColumnOnTopByBoard),
-        wizardCompleted: parsed.wizardCompleted === true
+        wizardCompleted: parsed.wizardCompleted === true,
+        tutorialCompleted: parsed.tutorialCompleted === true
       }
     } catch {
       return DEFAULT_APP_SETTINGS
@@ -487,7 +490,8 @@ export class LifePlanRepository {
       closeConfirmationMode: this.normalizeCloseConfirmationMode(settings.closeConfirmationMode),
       theme: this.normalizeTheme(settings.theme),
       addColumnOnTopByBoard: this.normalizeBooleanMap(settings.addColumnOnTopByBoard),
-      wizardCompleted: settings.wizardCompleted === true
+      wizardCompleted: settings.wizardCompleted === true,
+      tutorialCompleted: settings.tutorialCompleted === true
     }
     this.run(
       `INSERT INTO app_settings (key, value_json, updated_at)

@@ -260,6 +260,7 @@ export type AppSettings = {
   theme: AppTheme
   addColumnOnTopByBoard: Record<string, boolean>
   wizardCompleted: boolean
+  tutorialCompleted: boolean
 }
 
 export type AdminModeRequestResult = {

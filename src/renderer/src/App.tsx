@@ -26,7 +26,7 @@ import {
   X
 } from 'lucide-react'
 import { FormEvent, PointerEvent, useEffect, useRef, useState } from 'react'
-import type { Dispatch, ReactElement, SetStateAction } from 'react'
+import type { CSSProperties, Dispatch, ReactElement, SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import lplLogo from './assets/lpl_logo.png'
 import type {
@@ -122,6 +122,25 @@ type PromptDialogState = {
   onConfirm: (value: string) => void | Promise<void>
 } | null
 
+type TutorialTargetId =
+  | 'boards-list'
+  | 'wizard-launch'
+  | 'tree'
+  | 'edit-panel'
+  | 'list-editor-tabs'
+  | 'live-layout'
+  | 'app-settings'
+  | 'display-target'
+  | 'show-board'
+
+type TutorialStep = {
+  id: string
+  targetId: TutorialTargetId
+  title: string
+  body: string
+  selection?: SelectedNode
+}
+
 const columnTypes: ColumnType[] = ['text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink']
 const columnSortOrderOptions: Array<{ value: ColumnSortOrder; label: string }> = [
   { value: 'default', label: 'Default' },
@@ -150,6 +169,13 @@ const themeOptions: Array<{ value: AppTheme; label: string; className: string }>
   { value: 'liquid_gunmetal', label: 'Liquid Gunmetal', className: 'theme-liquid-gunmetal' },
   { value: 'black_glass_blue', label: 'Black Glass Blue', className: 'theme-black-glass-blue' }
 ]
+const defaultAppSettings: AppSettings = {
+  closeConfirmationMode: 'with_comments',
+  theme: 'midnight_clear',
+  addColumnOnTopByBoard: {},
+  wizardCompleted: false,
+  tutorialCompleted: false
+}
 const weekdayLabels = [
   { short: 'S', long: 'Sun' },
   { short: 'M', long: 'Mon' },
@@ -275,12 +301,15 @@ export function App(): ReactElement {
   const [previewSnapshot, setPreviewSnapshot] = useState<BoardSnapshot | null>(null)
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [displayState, setDisplayState] = useState<DisplayState | null>(null)
-  const [appSettings, setAppSettings] = useState<AppSettings>({ closeConfirmationMode: 'with_comments', theme: 'midnight_clear', addColumnOnTopByBoard: {}, wizardCompleted: false })
+  const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [launchTutorialAfterWizard, setLaunchTutorialAfterWizard] = useState(false)
   const [busy, setBusy] = useState(false)
   const editingBoardId = useRef<string | null>(null)
+  const tutorialReturnSelection = useRef<SelectedNode | null>(null)
 
   async function load(nextRoute = route, boardId = editingBoardId.current): Promise<void> {
     const [nextSnapshot, nextPreviewSnapshot, nextBoards, nextDisplayState, nextAppSettings] = await Promise.all([
@@ -336,10 +365,14 @@ export function App(): ReactElement {
     if (mode === 'firstRun') {
       const result = await runAction(async () => {
         const resetSnapshot = await window.lpl.resetAppToFirstRun()
-        await window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true })
+        await window.lpl.updateAppSettings({ ...defaultAppSettings, wizardCompleted: true, tutorialCompleted: false })
         return resetSnapshot
       })
       if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+      setWizardOpen(false)
+      return
+    }
+    if (mode === 'reset') {
       setWizardOpen(false)
       return
     }
@@ -347,15 +380,24 @@ export function App(): ReactElement {
     setWizardOpen(false)
   }
 
+  async function prepareWizardReset(): Promise<BoardSnapshot | undefined> {
+    const result = await runAction(async () => {
+      const resetSnapshot = await window.lpl.resetAppToFirstRun()
+      await window.lpl.updateAppSettings({ ...defaultAppSettings, wizardCompleted: true, tutorialCompleted: false })
+      return resetSnapshot
+    })
+    if (result && 'lists' in result) setSelectedNode({ kind: 'board', id: result.id })
+    return result && 'lists' in result ? result : undefined
+  }
+
   async function applyWizard(data: WizardData): Promise<BoardSnapshot | undefined> {
     const result = await runAction(async () => {
-      const resetSnapshot = data.mode === 'reset' ? await window.lpl.resetAppToFirstRun() : null
-      const baseSnapshot = resetSnapshot ?? snapshot
+      const baseSnapshot = snapshot
       if (!baseSnapshot) throw new Error('No board is available for the wizard setup.')
       const reuseInitialSeedBoard =
         (data.mode === 'firstRun' || data.mode === 'reset') &&
         (!appSettings.wizardCompleted || data.mode === 'reset') &&
-        ((resetSnapshot ? [resetSnapshot] : boards).length === 1) &&
+        boards.length === 1 &&
         baseSnapshot.name === 'Life Plan Lite'
       let createdBoardId: string | null = null
 
@@ -496,10 +538,24 @@ export function App(): ReactElement {
     })
     if (result && 'lists' in result) {
       setSelectedNode({ kind: 'board', id: result.id })
+      if ((data.mode === 'firstRun' || data.mode === 'reset') && !appSettings.tutorialCompleted) setLaunchTutorialAfterWizard(true)
       setWizardOpen(true)
       return result
     }
     return undefined
+  }
+
+  function openTutorial(): void {
+    tutorialReturnSelection.current = selectedNode ?? (snapshot ? { kind: 'board', id: snapshot.id } : null)
+    setTutorialOpen(true)
+  }
+
+  async function closeTutorial(): Promise<void> {
+    await runAction(() => window.lpl.updateAppSettings({ ...appSettings, tutorialCompleted: true }))
+    setTutorialOpen(false)
+    const returnSelection = tutorialReturnSelection.current
+    tutorialReturnSelection.current = null
+    if (returnSelection) setSelectedNode(returnSelection)
   }
 
   useEffect(() => {
@@ -555,6 +611,7 @@ export function App(): ReactElement {
       appThemeClass={currentThemeClass}
       previewSnapshot={previewSnapshot ?? snapshot}
       runAction={runAction}
+      tutorialOpen={tutorialOpen}
       wizardOpen={wizardOpen}
       onSelectBoard={(boardId) => {
         editingBoardId.current = boardId
@@ -562,9 +619,20 @@ export function App(): ReactElement {
         load('admin', boardId)
       }}
       onApplyWizard={applyWizard}
-      onCloseWizard={() => setWizardOpen(false)}
+      onCloseTutorial={() => void closeTutorial()}
+      onCloseWizard={() => {
+        setWizardOpen(false)
+        if (launchTutorialAfterWizard && !appSettings.tutorialCompleted) {
+          setLaunchTutorialAfterWizard(false)
+          openTutorial()
+          return
+        }
+        setLaunchTutorialAfterWizard(false)
+      }}
       onMarkWizardComplete={markWizardComplete}
+      onOpenTutorial={openTutorial}
       onOpenWizard={() => setWizardOpen(true)}
+      onPrepareWizardReset={prepareWizardReset}
       selectedNode={selectedNode ?? { kind: 'board', id: snapshot.id }}
       setSelectedNode={setSelectedNode}
       snapshot={snapshot}
@@ -581,12 +649,16 @@ function AdminApp({
   globalMessageDialog,
   previewSnapshot,
   runAction,
+  tutorialOpen,
   wizardOpen,
   onSelectBoard,
   onApplyWizard,
+  onCloseTutorial,
   onCloseWizard,
   onMarkWizardComplete,
+  onOpenTutorial,
   onOpenWizard,
+  onPrepareWizardReset,
   selectedNode,
   setGlobalMessageDialog,
   setSelectedNode,
@@ -600,12 +672,16 @@ function AdminApp({
   globalMessageDialog: { title: string; message: string } | null
   previewSnapshot: BoardSnapshot
   runAction: RunAction
+  tutorialOpen: boolean
   wizardOpen: boolean
   onSelectBoard: (boardId: string) => void
   onApplyWizard: (data: WizardData) => Promise<BoardSnapshot | undefined>
+  onCloseTutorial: () => void
   onCloseWizard: () => void
   onMarkWizardComplete: (mode: WizardMode) => Promise<void>
+  onOpenTutorial: () => void
   onOpenWizard: () => void
+  onPrepareWizardReset: () => Promise<BoardSnapshot | undefined>
   selectedNode: SelectedNode
   setGlobalMessageDialog: Dispatch<SetStateAction<{ title: string; message: string } | null>>
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
@@ -628,7 +704,7 @@ function AdminApp({
         <div className="side-brand" aria-label="Life Plan Lite">
           <img alt="Life Plan Lite" className="side-brand-image" src={lplLogo} />
         </div>
-        <section className="side-board-section">
+        <section className="side-board-section" data-tutorial-id="boards-list">
           <p className="side-section-label">Available Boards</p>
           <div className="board-list">
             {boards.map((board) => (
@@ -666,9 +742,13 @@ function AdminApp({
           </div>
         </section>
         <div className="side-actions">
-          <button className="icon-button wide" disabled={busy} onClick={onOpenWizard} type="button">
+          <button className="icon-button wide" data-tutorial-id="wizard-launch" disabled={busy} onClick={onOpenWizard} type="button">
             <Settings2 size={18} />
             LPL Wizard
+          </button>
+          <button className="icon-button wide" disabled={busy} onClick={onOpenTutorial} type="button">
+            <BookOpenText size={18} />
+            Tutorial
           </button>
           <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
           <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
@@ -691,9 +771,9 @@ function AdminApp({
         </header>
 
         <div className="admin-content redesigned">
-          <NavigationTree
-            boards={boards}
-            onRequestNewList={() => setNewListDialogOpen(true)}
+            <NavigationTree
+              boards={boards}
+              onRequestNewList={() => setNewListDialogOpen(true)}
             onContextMenu={setContextMenu}
             runAction={runAction}
             selectedNode={selectedNode}
@@ -702,7 +782,7 @@ function AdminApp({
           />
 
           <section className="admin-workspace">
-            <div className="workspace-edit">
+            <div className="workspace-edit" data-tutorial-id="edit-panel">
               <header className="pane-heading workspace-heading">
                 <div className="pane-heading-inline">
                   <h3>Edit Panel</h3>
@@ -816,10 +896,12 @@ function AdminApp({
           onApply={onApplyWizard}
           onClose={onCloseWizard}
           onMarkComplete={onMarkWizardComplete}
+          onPrepareReset={onPrepareWizardReset}
           setGlobalMessageDialog={setGlobalMessageDialog}
           snapshot={snapshot}
         />
       )}
+      {tutorialOpen && <GuidedTutorial onClose={onCloseTutorial} selectedNode={selectedNode} setSelectedNode={setSelectedNode} snapshot={snapshot} />}
     </main>
   )
 }
@@ -831,6 +913,7 @@ function ConfigurationWizard({
   onApply,
   onClose,
   onMarkComplete,
+  onPrepareReset,
   setGlobalMessageDialog,
   snapshot
 }: {
@@ -840,6 +923,7 @@ function ConfigurationWizard({
   onApply: (data: WizardData) => Promise<BoardSnapshot | undefined>
   onClose: () => void
   onMarkComplete: (mode: WizardMode) => Promise<void>
+  onPrepareReset: () => Promise<BoardSnapshot | undefined>
   setGlobalMessageDialog: Dispatch<SetStateAction<{ title: string; message: string } | null>>
   snapshot: BoardSnapshot
 }): ReactElement {
@@ -856,6 +940,8 @@ function ConfigurationWizard({
   const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>('next_30_days')
   const [widgets, setWidgets] = useState<WizardWidgetDraft[]>([])
   const [skipDialogOpen, setSkipDialogOpen] = useState(false)
+  const [resetPrepared, setResetPrepared] = useState(false)
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const steps = wizardSteps(listDrafts)
   const currentStepIndex = Math.max(0, steps.indexOf(step))
   const hasShopping = listDrafts.some((list) => list.templateType === 'shopping_list')
@@ -876,7 +962,12 @@ function ConfigurationWizard({
   }
 
   function startWizardMode(nextMode: WizardMode): void {
+    if (nextMode === 'reset') {
+      setResetConfirmOpen(true)
+      return
+    }
     setMode(nextMode)
+    setResetPrepared(false)
     if (nextMode === 'quickAdd') {
       setStep('templates')
       setBoardNameTouched(true)
@@ -884,11 +975,18 @@ function ConfigurationWizard({
     }
     setStep('welcome')
     setBoardNameTouched(false)
-    if (nextMode === 'reset') {
-      setBoardName('My Life Plan Lite')
-    } else {
-      setBoardName(userName.trim() && userName.trim().toLowerCase() !== 'user' ? `${userName.trim()}'s Life Plan Lite` : 'My Life Plan Lite')
-    }
+    setBoardName(userName.trim() && userName.trim().toLowerCase() !== 'user' ? `${userName.trim()}'s Life Plan Lite` : 'My Life Plan Lite')
+  }
+
+  async function confirmResetMode(): Promise<void> {
+    const result = await onPrepareReset()
+    if (!result) return
+    setResetConfirmOpen(false)
+    setResetPrepared(true)
+    setMode('reset')
+    setStep('welcome')
+    setBoardNameTouched(false)
+    setBoardName('My Life Plan Lite')
   }
 
   function setUser(value: string): void {
@@ -1012,7 +1110,7 @@ function ConfigurationWizard({
                   </button>
                   <button className="wizard-mode-card danger" onClick={() => startWizardMode('reset')} type="button">
                     <strong>Reset to first run</strong>
-                    <small>Clear all boards and data, then rebuild from the wizard.</small>
+                    <small>Clear all boards and data after confirmation, then rebuild or leave the app empty.</small>
                   </button>
                 </div>
               </section>
@@ -1025,7 +1123,7 @@ function ConfigurationWizard({
                   {mode === 'firstRun'
                     ? 'Let’s take a moment to configure your app! This quick setup tutorial will help you understand the key features and functionalities of LPL and guide you through the process of creating your first board.'
                     : mode === 'reset'
-                      ? 'This will reset the app to first-run state when you finish the wizard. Existing boards, items, widgets, archive entries and app settings will be cleared.'
+                      ? 'The app has already been cleared to first-run state. You can rebuild from the wizard now, close it and configure the board manually, or come back to the wizard later.'
                       : 'Let’s create another board using the same quick configuration flow. Existing boards and data will not be changed.'}
                 </p>
                 <p className="wizard-lead">Let&apos;s start with the basics:</p>
@@ -1306,18 +1404,256 @@ function ConfigurationWizard({
               </div>
             </div>
             <div className="modal-body">
-              <p>You can apply the information entered so far and create the board now, or close the wizard without applying anything.</p>
+              <p>
+                {mode === 'reset' && resetPrepared
+                  ? 'The reset has already been applied. You can finish rebuilding now, or close the wizard and leave the app empty for manual setup later.'
+                  : 'You can apply the information entered so far and create the board now, or close the wizard without applying anything.'}
+              </p>
             </div>
             <div className="modal-actions">
               <button className="icon-button" disabled={busy} onClick={() => setSkipDialogOpen(false)} type="button">Continue Wizard</button>
-              <button className="icon-button" disabled={busy} onClick={() => void onMarkComplete(mode)} type="button">Close Without Applying</button>
+              <button className="icon-button" disabled={busy} onClick={() => void onMarkComplete(mode)} type="button">
+                {mode === 'reset' && resetPrepared ? 'Close Wizard' : 'Close Without Applying'}
+              </button>
               <button className="primary-button" disabled={busy} onClick={() => void finishWizard()} type="button">Apply Current Setup</button>
             </div>
           </div>
         </div>
       )}
+      {resetConfirmOpen && (
+        <ConfirmActionModal
+          busy={busy}
+          confirmLabel="Reset App"
+          destructive
+          message="This will permanently delete all existing boards, lists, items, widgets, archive entries, and app settings. The app will then return to an empty first-run state. Continue?"
+          onCancel={() => setResetConfirmOpen(false)}
+          onConfirm={() => void confirmResetMode()}
+          title="Reset Life Plan Lite?"
+        />
+      )}
     </div>
   )
+}
+
+function GuidedTutorial({
+  onClose,
+  selectedNode,
+  setSelectedNode,
+  snapshot
+}: {
+  onClose: () => void
+  selectedNode: SelectedNode
+  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
+  snapshot: BoardSnapshot
+}): ReactElement {
+  const steps = tutorialSteps(snapshot)
+  const [stepIndex, setStepIndex] = useState(0)
+  const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
+  const step = steps[Math.min(stepIndex, steps.length - 1)]
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+      if (event.key === 'ArrowRight' && stepIndex < steps.length - 1) setStepIndex((current) => current + 1)
+      if (event.key === 'ArrowLeft' && stepIndex > 0) setStepIndex((current) => current - 1)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, stepIndex, steps.length])
+
+  useEffect(() => {
+    if (!step) return
+    if (step.selection && !sameSelectedNode(selectedNode, step.selection)) {
+      setSelectedNode(step.selection)
+    }
+
+    const updateTarget = (): void => {
+      const target = document.querySelector<HTMLElement>(`[data-tutorial-id="${step.targetId}"]`)
+      if (!target) {
+        setTargetRect(null)
+        return
+      }
+      target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      setTargetRect(target.getBoundingClientRect())
+    }
+
+    const timer = window.setTimeout(updateTarget, 120)
+    window.addEventListener('resize', updateTarget)
+    window.addEventListener('scroll', updateTarget, true)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('resize', updateTarget)
+      window.removeEventListener('scroll', updateTarget, true)
+    }
+  }, [selectedNode, setSelectedNode, step])
+
+  if (!step) {
+    return (
+      <div className="tutorial-overlay" role="presentation">
+        <section aria-modal="true" className="tutorial-card" role="dialog">
+          <div className="tutorial-card-body">
+            <p className="eyebrow">Tutorial</p>
+            <h3>Nothing to show yet</h3>
+            <p>The guided tour needs an admin workspace to point at.</p>
+          </div>
+          <div className="tutorial-actions">
+            <button className="primary-button" onClick={onClose} type="button">Close Tutorial</button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  const highlightStyle = tutorialHighlightStyle(targetRect)
+  const cardStyle = tutorialCardStyle(targetRect)
+
+  return (
+    <div className="tutorial-overlay" role="presentation">
+      {highlightStyle && <div className="tutorial-highlight" style={highlightStyle} />}
+      <section aria-modal="true" className="tutorial-card" role="dialog" style={cardStyle}>
+        <div className="tutorial-card-body">
+          <p className="eyebrow">Tutorial</p>
+          <div className="tutorial-progress">
+            <span>Step {stepIndex + 1} of {steps.length}</span>
+          </div>
+          <h3>{step.title}</h3>
+          <p>{step.body}</p>
+        </div>
+        <div className="tutorial-actions">
+          <button className="icon-button" onClick={onClose} type="button">Skip Tutorial</button>
+          <div className="tutorial-actions-right">
+            <button className="icon-button" disabled={stepIndex === 0} onClick={() => setStepIndex((current) => Math.max(0, current - 1))} type="button">Back</button>
+            {stepIndex === steps.length - 1 ? (
+              <button className="primary-button" onClick={onClose} type="button">Finish</button>
+            ) : (
+              <button className="primary-button" onClick={() => setStepIndex((current) => Math.min(steps.length - 1, current + 1))} type="button">Next</button>
+            )}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
+  const steps: TutorialStep[] = [
+    {
+      id: 'boards',
+      targetId: 'boards-list',
+      title: 'Your boards live here',
+      body:
+        'The active board stays on top. Click any board to load it into the editor, and right-click a board when you want quick actions like duplicate or delete.'
+    },
+    {
+      id: 'wizard',
+      targetId: 'wizard-launch',
+      title: 'The wizard is the fast lane',
+      body:
+        'Use LPL Wizard when you want to add several lists quickly, create another board in a few screens, or reset the app without rebuilding everything by hand.'
+    },
+    {
+      id: 'tree',
+      targetId: 'tree',
+      title: 'This is the board structure',
+      body:
+        'The tree shows the loaded board, then its lists, groups, items, and widgets. Click anything here to change what the edit panel is working on.'
+    },
+    {
+      id: 'edit-board',
+      targetId: 'edit-panel',
+      title: 'The edit panel changes scope',
+      body:
+        'This panel follows your selection. Board-level choices live here when a board is selected, and the same area switches to list, item, group, or widget editing as you move around.',
+      selection: { kind: 'board', id: snapshot.id }
+    }
+  ]
+
+  const firstList = snapshot.lists[0]
+  if (firstList) {
+    steps.push({
+      id: 'list-tabs',
+      targetId: 'list-editor-tabs',
+      title: 'Lists are configured in layers',
+      body:
+        'List Properties sets behavior and board visibility. List Structure controls fields and summaries. List Contents is where items and groups are added and managed.',
+      selection: { kind: 'list', id: firstList.id }
+    })
+  }
+
+  steps.push(
+    {
+      id: 'live-layout',
+      targetId: 'live-layout',
+      title: 'Live Layout is an active tool',
+      body:
+        'This is where you resize, reposition, and rebalance the visible board. Dragging here is not just a preview: it updates the board layout and can swap or push neighboring elements to make space.'
+    },
+    {
+      id: 'settings',
+      targetId: 'app-settings',
+      title: 'These settings affect the whole app',
+      body:
+        'Application Settings are global. This is where you choose the display target, theme, and close-confirmation behavior for the entire workspace.'
+    },
+    {
+      id: 'display-target',
+      targetId: 'display-target',
+      title: 'Choose the display before showing the board',
+      body:
+        'If you use more than one monitor, set the target display here first. LPL uses this selection when it opens the fullscreen board window.'
+    },
+    {
+      id: 'show-board',
+      targetId: 'show-board',
+      title: 'Show Board opens the fullscreen view',
+      body:
+        'Use this after you have chosen the monitor. The fullscreen board is the read-only display surface meant to stay visible while you continue editing in Admin Mode.'
+    }
+  )
+
+  return steps
+}
+
+function sameSelectedNode(left: SelectedNode | null, right: SelectedNode | undefined): boolean {
+  if (!left || !right) return false
+  return left.kind === right.kind && left.id === right.id
+}
+
+function tutorialHighlightStyle(rect: DOMRect | null): CSSProperties | undefined {
+  if (!rect) return undefined
+  const padding = 8
+  return {
+    top: Math.max(10, rect.top - padding),
+    left: Math.max(10, rect.left - padding),
+    width: Math.min(window.innerWidth - 20, rect.width + padding * 2),
+    height: Math.min(window.innerHeight - 20, rect.height + padding * 2)
+  }
+}
+
+function tutorialCardStyle(rect: DOMRect | null): CSSProperties {
+  const cardWidth = Math.min(380, window.innerWidth - 32)
+  if (!rect) {
+    return {
+      top: Math.max(24, Math.round((window.innerHeight - 260) / 2)),
+      left: Math.max(16, Math.round((window.innerWidth - cardWidth) / 2)),
+      width: cardWidth
+    }
+  }
+
+  const margin = 16
+  const preferredTop = rect.bottom + 18
+  const fallbackTop = rect.top - 250
+  const top =
+    preferredTop + 250 <= window.innerHeight - margin
+      ? preferredTop
+      : Math.max(margin, Math.min(window.innerHeight - 250 - margin, fallbackTop))
+  const left = rect.left + cardWidth <= window.innerWidth - margin ? rect.left : Math.max(margin, rect.right - cardWidth)
+
+  return {
+    top,
+    left: Math.max(margin, Math.min(window.innerWidth - cardWidth - margin, left)),
+    width: cardWidth
+  }
 }
 
 function BoardRailContextMenu({
@@ -1375,7 +1711,7 @@ function ApplicationSettingsPanel({
   const selectedId = displayState?.selectedDisplayId ?? displayState?.displays[0]?.id ?? ''
 
   return (
-    <aside className="settings-pane">
+    <aside className="settings-pane" data-tutorial-id="app-settings">
       <header className="pane-heading">
         <div className="pane-heading-inline">
           <span className="pane-heading-label">Application Settings</span>
@@ -1401,7 +1737,7 @@ function ApplicationSettingsPanel({
             <option value="none">No confirmation</option>
           </select>
         </label>
-        <label>
+        <label data-tutorial-id="display-target">
           <span>Display</span>
           <select
             disabled={busy || !displayState?.displays.length}
@@ -1453,12 +1789,12 @@ function BoardVisibilityControl({
   return (
     <>
       {displayState?.visible ? (
-        <button className="icon-button wide" disabled={busy} onClick={() => runAction(() => window.lpl.hideDisplayWindow())}>
+        <button className="icon-button wide" data-tutorial-id="show-board" disabled={busy} onClick={() => runAction(() => window.lpl.hideDisplayWindow())}>
           <EyeOff size={18} />
           Hide Board
         </button>
       ) : (
-        <button className="icon-button wide" disabled={busy} onClick={() => runAction(() => window.lpl.openDisplayWindow())}>
+        <button className="icon-button wide" data-tutorial-id="show-board" disabled={busy} onClick={() => runAction(() => window.lpl.openDisplayWindow())}>
           <Eye size={18} />
           Show Board
         </button>
@@ -1543,7 +1879,7 @@ function NavigationTree({
   }
 
   return (
-    <nav className="tree-pane" aria-label="Board content tree">
+    <nav className="tree-pane" aria-label="Board content tree" data-tutorial-id="tree">
       <header className="pane-heading">
         <div>
           <p className="tree-pane-title">Board Content Management</p>
@@ -2097,7 +2433,7 @@ function BoardEditor({
 
   return (
     <form className="editor-tabbed" onSubmit={submit}>
-      <div className="editor-tabbar">
+      <div className="editor-tabbar" data-tutorial-id="list-editor-tabs">
         <button className={activeTab === 'properties' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('properties')} type="button">
           Board Properties
         </button>
@@ -3895,7 +4231,7 @@ function BoardPreviewWidget({
   snapshot: BoardSnapshot
 }): ReactElement {
   return (
-    <aside className="preview-widget">
+    <aside className="preview-widget" data-tutorial-id="live-layout">
       <header className="pane-heading">
         <div className="pane-heading-inline">
           <span className="pane-heading-label">Live Layout:</span>
@@ -4893,20 +5229,19 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
   const [state, setState] = useState<{ loading: boolean; text: string; detail: string }>({
     loading: true,
     text: 'Loading weather',
-    detail: 'Detecting current location...'
+    detail: 'Requesting current location...'
   })
 
   useEffect(() => {
     let cancelled = false
     async function loadWeather(): Promise<void> {
       try {
-        const position = await new Promise<GeolocationPosition>((resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 15 * 60 * 1000 })
-        )
+        const position = await requestWeatherPosition()
         const unit = widget.config.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
         const response = await fetch(
           `https://api.open-meteo.com/v1/forecast?latitude=${position.coords.latitude}&longitude=${position.coords.longitude}&current=temperature_2m,apparent_temperature,weather_code,is_day&temperature_unit=${unit}&timezone=auto`
         )
+        if (!response.ok) throw new Error(`weather-http-${response.status}`)
         const payload = (await response.json()) as {
           current?: { temperature_2m?: number; apparent_temperature?: number; weather_code?: number; is_day?: number }
         }
@@ -4919,12 +5254,12 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
           text: `${Math.round(current.temperature_2m)}°${unitSymbol}`,
           detail: `${weatherCodeLabel(current.weather_code ?? 0, current.is_day === 1)} · Feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)}°${unitSymbol}`
         })
-      } catch {
+      } catch (error) {
         if (cancelled) return
         setState({
           loading: false,
           text: 'Weather unavailable',
-          detail: 'Location permission or weather service unavailable.'
+          detail: weatherUnavailableDetail(error)
         })
       }
     }
@@ -8465,6 +8800,26 @@ function weatherCodeLabel(code: number, isDay: boolean): string {
   if (code >= 80 && code <= 82) return 'Showers'
   if (code >= 95) return 'Storms'
   return 'Weather update'
+}
+
+async function requestWeatherPosition(): Promise<GeolocationPosition> {
+  if (!('geolocation' in navigator)) throw new Error('geolocation-unsupported')
+  return new Promise<GeolocationPosition>((resolve, reject) =>
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 15 * 60 * 1000 })
+  )
+}
+
+function weatherUnavailableDetail(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = Number((error as { code?: unknown }).code)
+    if (code === 1) return 'Location access is blocked. Allow location for Life Plan Lite or Windows, then refresh the widget.'
+    if (code === 2) return 'Current location could not be determined. Check location services and try again.'
+    if (code === 3) return 'Location lookup timed out. Check connectivity and try again.'
+  }
+  if (error instanceof Error && error.message.startsWith('weather-http-')) {
+    return 'The weather service did not respond successfully. Please try again in a moment.'
+  }
+  return 'Location permission or weather service unavailable.'
 }
 
 const wordBank = [

@@ -751,6 +751,99 @@ td {
   }
 }
 
+.tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: rgba(0, 3, 6, 0.78);
+  backdrop-filter: blur(6px) saturate(94%);
+}
+
+.tutorial-highlight {
+  position: fixed;
+  z-index: 96;
+  border: 1px solid rgba(52, 213, 29, 0.55);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 9999px rgba(0, 3, 6, 0.76),
+    0 0 0 1px rgba(52, 213, 29, 0.24) inset,
+    0 0 26px rgba(52, 213, 29, 0.14);
+  pointer-events: none;
+}
+
+.tutorial-card {
+  position: fixed;
+  z-index: 97;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(23, 28, 31, 0.97), rgba(12, 17, 20, 0.97)),
+    var(--color-panel-deep);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.tutorial-card-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0.85rem;
+}
+
+.tutorial-card-body h3 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.tutorial-card-body p {
+  margin: 0;
+  color: rgba(244, 251, 255, 0.8);
+  line-height: 1.45;
+}
+
+.tutorial-progress {
+  color: rgba(244, 251, 255, 0.48);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tutorial-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.tutorial-actions-right {
+  display: inline-flex;
+  gap: 0.55rem;
+}
+
+@media (max-width: 900px) {
+  .tutorial-card {
+    left: 1rem !important;
+    right: 1rem !important;
+    width: auto !important;
+    top: auto !important;
+    bottom: 1rem;
+  }
+
+  .tutorial-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .tutorial-actions-right {
+    justify-content: stretch;
+  }
+
+  .tutorial-actions-right button,
+  .tutorial-actions > button {
+    width: 100%;
+  }
+}
+
 .mini-button {
   min-height: 1.65rem;
   padding: 0 0.45rem;

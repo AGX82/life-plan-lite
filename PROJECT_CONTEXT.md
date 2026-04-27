@@ -192,6 +192,8 @@ Date: 2026-04-27
 - Reset mode starts at board naming, then clears boards, lists, items, widgets, archives, users, display config, and app settings only when the wizard is finished/applied.
 - The wizard creates no database records until Finish, unless the user closes the wizard and explicitly chooses to apply the current setup.
 - Closing the wizard offers three choices: continue the wizard, close without applying, or apply the current setup. Closing without applying discards wizard inputs; on first run it leaves an empty first-run board, while later use preserves existing boards/data unchanged.
+- Reset-to-first-run is a destructive action and must require an explicit confirmation before boards, lists, items, widgets, archive entries, and app settings are cleared.
+- Once a reset is confirmed and executed, the app should already be empty even if the wizard is later closed without applying a new setup.
 - Wizard-created boards use standard list templates, existing validation, standard summary slots, and the same update APIs as normal app editing.
 - Wizard list placement uses each template's preferred size cascade and finds the first available board area; lists that cannot be placed are created but not displayed.
 - If Shopping List store choices are configured in the wizard, the created Shopping List `Store` field is converted to a non-ranked choice field using one store per line.
@@ -207,6 +209,8 @@ Date: 2026-04-27
 - Wizard-created World Clock widgets default to two clocks so their size matches the layout assumptions and the intended first-run experience.
 - World Clock time zones should be type-searchable from supported system time zones when available.
 - World Clock visual style expansion is deferred until the user provides design directions.
+- After initial board creation, the app should offer a guided in-app tutorial that explains the main workspace, not just setup choices.
+- The tutorial should be reopenable from the left rail and should emphasize the practical workflow: board selection, board tree, edit-panel scope, display targeting, and especially Live Layout as an active resize/reposition/swap tool.
 
 ## Packaging Decisions
 
@@ -220,6 +224,7 @@ Date: 2026-04-27
 - `npm run dev` and other unpackaged development runs use `%APPDATA%\\life-plan-lite-dev`.
 - The electron-builder portable executable uses a `portable-data` folder beside the `.exe` when the portable runtime exposes `PORTABLE_EXECUTABLE_DIR`.
 - Before clean packaging/testing that might affect local app data, back up the current user database/config so the dev environment can be restored.
+- Weather widgets rely on Electron geolocation permission handling and should explicitly request/allow geolocation at the session level instead of failing silently.
 
 ## Release Decisions
 
