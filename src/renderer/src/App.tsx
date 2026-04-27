@@ -54,6 +54,7 @@ import type {
   GroupSummaryConfig,
   GroupSummaryMethod,
   ItemGroup,
+  ListBehavior,
   ListColumn,
   ListTemplateType,
   ListSortDirection,
@@ -173,6 +174,22 @@ const listTemplateOptions: Array<{ value: ListTemplateType; label: string; descr
   { value: 'trips_events', label: 'Trips & Events', description: 'Plans with start/end dates, type, topic and location.' },
   { value: 'birthday_calendar', label: 'Birthday Calendar', description: 'Birthdays with turning age, location and gift-task action.' },
   { value: 'custom', label: 'Build Custom List', description: 'Start with a single title field and shape the rest yourself.' }
+]
+const listBehaviorOptions: Array<{ value: ListBehavior; label: string }> = [
+  { value: 'tasks', label: 'Task List' },
+  { value: 'purchases', label: 'Purchases' },
+  { value: 'calendar', label: 'Calendar' },
+  { value: 'other', label: 'Other' }
+]
+const systemBoardSummaryOptions: Array<{ value: AggregationMethod; label: string }> = [
+  { value: 'open_tasks', label: 'Board: Open Tasks' },
+  { value: 'board_items', label: 'Board: Board Items' },
+  { value: 'total_board_entries', label: 'Board: Total Board Entries' },
+  { value: 'total_purchases', label: 'Board: Total Purchases' },
+  { value: 'total_effort_tasks', label: 'Board: Total Effort on Tasks' },
+  { value: 'overdue_items', label: 'Board: Overdue Items' },
+  { value: 'overdue_tasks', label: 'Board: Overdue Tasks' },
+  { value: 'archived_items', label: 'Board: Archived Items' }
 ]
 const birthdayBoardViewOptions: Array<{ value: BirthdayBoardView; label: string }> = [
   { value: 'this_week', label: 'This week' },
@@ -1315,8 +1332,7 @@ function BoardEditor({
   }
 
   function sourceSelectionValue(slot: EditableSummarySlot): string {
-    if (slot.aggregationMethod === 'active_count') return '__board_active__'
-    if (slot.aggregationMethod === 'completed_count') return '__board_archived__'
+    if (isSystemBoardSummary(slot.aggregationMethod)) return `__board_${slot.aggregationMethod}__`
     return slot.sourceListId ?? ''
   }
 
@@ -1406,21 +1422,14 @@ function BoardEditor({
                       <select
                         onChange={(event) => {
                           const nextValue = event.target.value
-                          if (nextValue === '__board_active__') {
+                          if (nextValue.startsWith('__board_')) {
+                            const method = nextValue.replace('__board_', '').replace('__', '') as AggregationMethod
                             setSlot(slot.slotIndex, (current) => ({
                               ...current,
+                              label: current.label || defaultBoardSummaryLabel(method),
                               sourceListId: null,
                               sourceColumnId: null,
-                              aggregationMethod: 'active_count'
-                            }))
-                            return
-                          }
-                          if (nextValue === '__board_archived__') {
-                            setSlot(slot.slotIndex, (current) => ({
-                              ...current,
-                              sourceListId: null,
-                              sourceColumnId: null,
-                              aggregationMethod: 'completed_count'
+                              aggregationMethod: method
                             }))
                             return
                           }
@@ -1444,8 +1453,11 @@ function BoardEditor({
                         value={sourceSelectionValue(slot)}
                       >
                         <option value="">Empty</option>
-                        <option value="__board_active__">Board: Open Tasks</option>
-                        <option value="__board_archived__">Board: Archived Items</option>
+                        {systemBoardSummaryOptions.map((option) => (
+                          <option key={option.value} value={`__board_${option.value}__`}>
+                            {option.label}
+                          </option>
+                        ))}
                         {summaryLists.map((list) => (
                           <option key={list.id} value={list.id}>
                             {list.name}
@@ -1513,14 +1525,30 @@ function BoardEditor({
 
 function boardSummaryReservedLabelMessage(slot: EditableSummarySlot): string | null {
   const normalized = normalizeColumnName(slot.label)
-  const systemSource =
-    !slot.sourceListId &&
-    ((normalized === 'open tasks' && slot.aggregationMethod === 'active_count') ||
-      (normalized === 'archived items' && slot.aggregationMethod === 'completed_count'))
-  if (systemSource) return null
-  if (normalized === 'open tasks') return '"Open Tasks" is reserved for the system board summary. Use the Board: Open Tasks source, or choose a different label.'
-  if (normalized === 'archived items') return '"Archived Items" is reserved for the system board summary. Use the Board: Archived Items source, or choose a different label.'
-  return null
+  const reserved = systemBoardSummaryOptions.find((option) => normalizeColumnName(defaultBoardSummaryLabel(option.value)) === normalized)
+  if (!reserved) return null
+  if (!slot.sourceListId && slot.aggregationMethod === reserved.value) return null
+  return `"${defaultBoardSummaryLabel(reserved.value)}" is reserved for the system board summary. Use the ${reserved.label} source, or choose a different label.`
+}
+
+function isSystemBoardSummary(method: AggregationMethod): boolean {
+  return systemBoardSummaryOptions.some((option) => option.value === method)
+}
+
+function defaultBoardSummaryLabel(method: AggregationMethod): string {
+  if (method === 'open_tasks') return 'Open Tasks'
+  if (method === 'board_items') return 'Board Items'
+  if (method === 'total_board_entries') return 'Total Board Entries'
+  if (method === 'total_purchases') return 'Total Purchases'
+  if (method === 'total_effort_tasks') return 'Total Effort on Tasks'
+  if (method === 'overdue_items') return 'Overdue Items'
+  if (method === 'overdue_tasks') return 'Overdue Tasks'
+  if (method === 'archived_items') return 'Archived Items'
+  return ''
+}
+
+function isSummarySlotDefined(slot: SummarySlot): boolean {
+  return Boolean(slot.sourceListId || isSystemBoardSummary(slot.aggregationMethod))
 }
 
 function ListEditorPanel({
@@ -1544,6 +1572,7 @@ function ListEditorPanel({
 }): ReactElement {
   const [name, setName] = useState(list.name)
   const [templateType, setTemplateType] = useState<ListTemplateType>(list.templateType)
+  const [listBehavior, setListBehavior] = useState<ListBehavior>(list.templateConfig.behavior ?? 'other')
   const [grid, setGrid] = useState(list.grid)
   const [displayEnabled, setDisplayEnabled] = useState(list.displayEnabled)
   const [dueDateEnabled, setDueDateEnabled] = useState(list.dueDateEnabled)
@@ -1575,7 +1604,9 @@ function ListEditorPanel({
 
   useEffect(() => {
     setName(list.name)
+    setListBehavior(list.templateConfig.behavior ?? 'other')
     setTemplateType(list.templateType)
+    setListBehavior(list.templateConfig.behavior ?? 'other')
     setGrid(list.grid)
     setDisplayEnabled(list.displayEnabled)
     setDueDateEnabled(list.dueDateEnabled)
@@ -1677,7 +1708,7 @@ function ListEditorPanel({
         listId: list.id,
         name,
         templateType,
-        templateConfig: templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {},
+        templateConfig: listTemplateConfigForSave(templateType, listBehavior, birthdayBoardView),
         grid: nextGrid,
         dueDateEnabled,
         dueDateColumnId: list.dueDateColumnId,
@@ -1849,6 +1880,7 @@ function ListEditorPanel({
                       onChange={(event) => {
                         const nextType = event.target.value as ListTemplateType
                         setTemplateType(nextType)
+                        setListBehavior(defaultListBehavior(nextType))
                         if (nextType === 'birthday_calendar') {
                           setDueDateEnabled(false)
                           setDeadlineMandatory(false)
@@ -1866,6 +1898,18 @@ function ListEditorPanel({
                       ))}
                     </select>
                   </label>
+                  {templateType === 'custom' && (
+                    <label>
+                      <span>List Behaviour</span>
+                      <select onChange={(event) => setListBehavior(event.target.value as ListBehavior)} value={listBehavior}>
+                        {listBehaviorOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   <label>
                     <span>Sort by</span>
                     <select
@@ -2335,6 +2379,10 @@ function ColumnRow({
   runAction: RunAction
 }): ReactElement {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null)
+  const inheritedShoppingCostCurrency =
+    list.templateType === 'shopping_list' && normalizeColumnName(column.name) === 'cost'
+      ? list.columns.find((candidate) => normalizeColumnName(candidate.name) === 'price / pc')?.currencyCode ?? draft.currencyCode
+      : null
 
   function save(): void {
     onSave()
@@ -2425,8 +2473,12 @@ function ColumnRow({
       {draft.type === 'currency' && (
         <div className="date-config-row">
           <label>
-            <span>Currency</span>
-            <select disabled={locked} onChange={(event) => onDraftChange({ currencyCode: event.target.value as CurrencyCode })} value={draft.currencyCode}>
+            <span>{inheritedShoppingCostCurrency ? 'Currency inherited from Price / pc' : 'Currency'}</span>
+            <select
+              disabled={locked || Boolean(inheritedShoppingCostCurrency)}
+              onChange={(event) => onDraftChange({ currencyCode: event.target.value as CurrencyCode })}
+              value={inheritedShoppingCostCurrency ?? draft.currencyCode}
+            >
               {currencyOptions.map((currency) => (
                 <option key={currency.code} value={currency.code}>
                   {currency.label}
@@ -3256,7 +3308,7 @@ function DisplayBoard({
             <h2>{snapshot.name}</h2>
           </div>
           <div className="top-summary">
-            {snapshot.summarySlots.map((slot) => (
+            {snapshot.summarySlots.filter(isSummarySlotDefined).map((slot) => (
               <div className="summary-slot top" key={slot.slotIndex}>
                 <span>{slot.label}</span>
                 <strong>{slot.value}</strong>
@@ -4373,6 +4425,7 @@ function BoardListSettingsModal({
   snapshot: BoardSnapshot
 }): ReactElement {
   const [name, setName] = useState(list.name)
+  const [listBehavior, setListBehavior] = useState<ListBehavior>(list.templateConfig.behavior ?? 'other')
   const [displayEnabled, setDisplayEnabled] = useState(list.displayEnabled)
   const [dueDateEnabled, setDueDateEnabled] = useState(list.dueDateEnabled)
   const [deadlineMandatory, setDeadlineMandatory] = useState(list.deadlineMandatory)
@@ -4469,7 +4522,7 @@ function BoardListSettingsModal({
         listId: list.id,
         name,
         templateType: list.templateType,
-        templateConfig: list.templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {},
+        templateConfig: listTemplateConfigForSave(list.templateType, listBehavior, birthdayBoardView),
         grid: nextGrid,
         dueDateEnabled,
         dueDateColumnId: list.dueDateColumnId,
@@ -4550,6 +4603,18 @@ function BoardListSettingsModal({
                   <span>List name</span>
                   <input onChange={(event) => setName(event.target.value)} required value={name} />
                 </label>
+                {list.templateType === 'custom' && (
+                  <label>
+                    <span>List Behaviour</span>
+                    <select onChange={(event) => setListBehavior(event.target.value as ListBehavior)} value={listBehavior}>
+                      {listBehaviorOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="toggle-field">
                   <input checked={displayEnabled} onChange={(event) => setDisplayEnabled(event.target.checked)} type="checkbox" />
                   <span>Show list on board</span>
@@ -5054,12 +5119,12 @@ function DependencyTreePicker({
   setDependencies: Dispatch<SetStateAction<string[]>>
   snapshot: BoardSnapshot
 }): ReactElement {
-  const [boardExpanded, setBoardExpanded] = useState(true)
+  const [boardExpanded, setBoardExpanded] = useState(false)
   const [expandedLists, setExpandedLists] = useState<Record<string, boolean>>({})
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    setBoardExpanded(true)
+    setBoardExpanded(false)
     setExpandedLists({})
     setExpandedGroups({})
   }, [snapshot.id, currentItemId])
@@ -6779,7 +6844,7 @@ function defaultChoiceConfig(name: string): ChoiceConfig {
   const priority = name.toLowerCase().includes('priority')
   const wishmeter = name.toLowerCase().includes('wishmeter')
   const labels = wishmeter
-    ? ["It's so fluffy I'm gonna die!", 'My precious!', 'Asking for a friend...', 'Gotta get me one of those!', 'Shut up and take my money!']
+    ? ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Gotta get me one of those!', 'Asking for a friend...']
     : priority
       ? ['Highest', 'High', 'Medium', 'Low', 'Lowest']
       : ['Option 1', 'Option 2', 'Option 3']
@@ -6838,6 +6903,20 @@ function listInput(list: BoardList): Parameters<typeof window.lpl.updateList>[0]
     showCreatedAtOnBoard: list.showCreatedAtOnBoard,
     showCreatedByOnBoard: list.showCreatedByOnBoard,
     showStatusOnBoard: list.showStatusOnBoard
+  }
+}
+
+function defaultListBehavior(templateType: ListTemplateType): ListBehavior {
+  if (templateType === 'todo') return 'tasks'
+  if (templateType === 'shopping_list' || templateType === 'wishlist') return 'purchases'
+  if (templateType === 'health' || templateType === 'trips_events' || templateType === 'birthday_calendar') return 'calendar'
+  return 'other'
+}
+
+function listTemplateConfigForSave(templateType: ListTemplateType, behavior: ListBehavior, birthdayBoardView: BirthdayBoardView) {
+  return {
+    behavior: templateType === 'custom' ? behavior : defaultListBehavior(templateType),
+    ...(templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {})
   }
 }
 

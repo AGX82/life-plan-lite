@@ -8,7 +8,21 @@ export type PublicationStatus = 'draft' | 'published' | 'dirty'
 export type OperationalState = 'active' | 'completed' | 'cancelled'
 export type ArchiveValueScope = 'visible' | 'draft' | 'published'
 
-export type AggregationMethod = 'sum' | 'count' | 'active_count' | 'completed_count' | 'sum_active' | 'next_due'
+export type AggregationMethod =
+  | 'sum'
+  | 'count'
+  | 'active_count'
+  | 'completed_count'
+  | 'sum_active'
+  | 'next_due'
+  | 'open_tasks'
+  | 'board_items'
+  | 'total_board_entries'
+  | 'total_purchases'
+  | 'total_effort_tasks'
+  | 'overdue_items'
+  | 'overdue_tasks'
+  | 'archived_items'
 
 export type ColumnRole = 'deadline'
 
@@ -27,9 +41,11 @@ export type ListTemplateType =
   | 'health'
   | 'trips_events'
   | 'birthday_calendar'
+export type ListBehavior = 'tasks' | 'purchases' | 'calendar' | 'other'
 export type BirthdayBoardView = 'this_week' | 'this_month' | 'next_10_days' | 'next_30_days' | 'next_2_months' | 'all'
 
 export type ListTemplateConfig = {
+  behavior?: ListBehavior
   birthday?: {
     boardView: BirthdayBoardView
   }

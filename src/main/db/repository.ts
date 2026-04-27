@@ -34,6 +34,7 @@ import type {
   GroupSummaryConfig,
   GroupSummaryMethod,
   ItemGroup,
+  ListBehavior,
   ListTemplateConfig,
   ListTemplateType,
   ListColumn,
@@ -61,6 +62,7 @@ const MIN_WIDGET_GRID_WIDTH = 2
 const MIN_WIDGET_GRID_HEIGHT = 2
 const MAX_LIST_SUMMARY_COLUMNS = 3
 const MAX_BOARD_SUMMARY_COLUMNS = 5
+const BOARD_SUMMARY_SLOT_COUNT = 8
 const RESERVED_COLUMN_NAMES = new Set(
   ['item id', 'item name', 'created at', 'created by', 'dependency', 'dependencies', 'close_comm'].map((name) =>
     normalizeReservedColumnName(name)
@@ -74,13 +76,19 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 }
 
 const DEFAULT_PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
-const WISHMETER_OPTIONS = ["It's so fluffy I'm gonna die!", 'My precious!', 'Asking for a friend...', 'Gotta get me one of those!', 'Shut up and take my money!']
+const WISHMETER_OPTIONS = ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Gotta get me one of those!', 'Asking for a friend...']
 const SUMMARY_COUNT_TEXT_COLUMNS = new Set(['item name', 'task', 'task name', 'product', 'entry', 'title', 'name'].map((name) => normalizeReservedColumnName(name)))
 const SUMMARY_DATE_COLUMNS = new Set(['deadline', 'needed by', 'appointment date', 'birthday', 'start'].map((name) => normalizeReservedColumnName(name)))
 const NON_SUMMARY_NUMERIC_COLUMNS = new Set(['year of birth', 'birth year', '% done'].map((name) => normalizeReservedColumnName(name)))
 const RESERVED_BOARD_SUMMARY_LABELS = new Map<string, AggregationMethod>([
-  ['open tasks', 'active_count'],
-  ['archived items', 'completed_count']
+  ['open tasks', 'open_tasks'],
+  ['board items', 'board_items'],
+  ['total board entries', 'total_board_entries'],
+  ['total purchases', 'total_purchases'],
+  ['total effort on tasks', 'total_effort_tasks'],
+  ['overdue items', 'overdue_items'],
+  ['overdue tasks', 'overdue_tasks'],
+  ['archived items', 'archived_items']
 ])
 
 type ListRow = {
@@ -309,7 +317,11 @@ function defaultWidgetConfig(type: WidgetType): BoardWidgetConfig {
 }
 
 function defaultListTemplateConfig(type: ListTemplateType): ListTemplateConfig {
-  if (type === 'birthday_calendar') return { birthday: { boardView: 'this_month' } }
+  if (type === 'custom') return { behavior: 'other' }
+  if (type === 'birthday_calendar') return { behavior: 'calendar', birthday: { boardView: 'this_month' } }
+  if (type === 'todo') return { behavior: 'tasks' }
+  if (type === 'shopping_list' || type === 'wishlist') return { behavior: 'purchases' }
+  if (type === 'health' || type === 'trips_events') return { behavior: 'calendar' }
   return {}
 }
 
@@ -493,11 +505,13 @@ export class LifePlanRepository {
         now
       )
 
-      this.createSeedSummary(boardId, 0, 'Open Tasks', todo, todoName, 'active_count')
-      this.createSeedSummary(boardId, 1, 'Cart Total', shopping, shoppingPrice, 'sum')
-      this.createSeedSummary(boardId, 2, 'House Budget', house, houseBudget, 'sum_active')
-      this.createSeedSummary(boardId, 3, 'Archived', null, null, 'completed_count')
-      this.createSeedSummary(boardId, 4, 'Slot 5', null, null, 'count')
+      this.createSeedSummary(boardId, 0, 'Open Tasks', null, null, 'open_tasks')
+      this.createSeedSummary(boardId, 1, 'Board Items', null, null, 'board_items')
+      this.createSeedSummary(boardId, 2, 'Total Purchases', null, null, 'total_purchases')
+      this.createSeedSummary(boardId, 3, 'Archived Items', null, null, 'archived_items')
+      for (let slot = 4; slot < BOARD_SUMMARY_SLOT_COUNT; slot += 1) {
+        this.createSeedSummary(boardId, slot, '', null, null, 'count')
+      }
     })
   }
 
@@ -802,11 +816,9 @@ export class LifePlanRepository {
         now,
         now
       )
-      this.createSeedSummary(boardId, 0, 'Slot 1', null, null, 'count')
-      this.createSeedSummary(boardId, 1, 'Slot 2', null, null, 'count')
-      this.createSeedSummary(boardId, 2, 'Slot 3', null, null, 'count')
-      this.createSeedSummary(boardId, 3, 'Slot 4', null, null, 'count')
-      this.createSeedSummary(boardId, 4, 'Slot 5', null, null, 'count')
+        for (let slot = 0; slot < BOARD_SUMMARY_SLOT_COUNT; slot += 1) {
+          this.createSeedSummary(boardId, slot, '', null, null, 'count')
+        }
     })
 
     return this.getBoardSnapshot(boardId, 'admin')
@@ -1232,11 +1244,9 @@ export class LifePlanRepository {
           now,
           now
         )
-        this.createSeedSummary(replacementId, 0, 'Slot 1', null, null, 'count')
-        this.createSeedSummary(replacementId, 1, 'Slot 2', null, null, 'count')
-        this.createSeedSummary(replacementId, 2, 'Slot 3', null, null, 'count')
-        this.createSeedSummary(replacementId, 3, 'Slot 4', null, null, 'count')
-        this.createSeedSummary(replacementId, 4, 'Slot 5', null, null, 'count')
+        for (let slot = 0; slot < BOARD_SUMMARY_SLOT_COUNT; slot += 1) {
+          this.createSeedSummary(replacementId, slot, '', null, null, 'count')
+        }
         this.run('UPDATE display_configs SET active_board_id = ?, updated_at = ?', replacementId, now)
         returnBoardId = replacementId
         return
@@ -1945,7 +1955,9 @@ export class LifePlanRepository {
         : type === 'date' ? (input.dateDisplayFormat ?? existingFormat.dateDisplayFormat) : 'date'
     const recurrence = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrence ?? existingFormat.recurrence) : 'none'
     const recurrenceDays = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrenceDays ?? existingFormat.recurrenceDays) : []
-    const currencyCode = type === 'currency' ? normalizeCurrencyCode(input.currencyCode ?? existingFormat.currencyCode) : 'USD'
+    const requestedCurrencyCode = type === 'currency' ? normalizeCurrencyCode(input.currencyCode ?? existingFormat.currencyCode) : 'USD'
+    const currencyCode =
+      this.isShoppingCostColumn(existing.list_type, existing.name) ? this.shoppingPriceCurrencyCode(existing.list_id) : requestedCurrencyCode
     const durationDisplayFormat = type === 'duration' ? normalizeDurationDisplayFormat(input.durationDisplayFormat ?? existingFormat.durationDisplayFormat) : 'days_hours'
     const showOnBoard = input.showOnBoard ?? existingFormat.showOnBoard
     if (this.isProtectedBirthdayColumn(existing.list_type, existing.name)) {
@@ -1996,6 +2008,9 @@ export class LifePlanRepository {
       )
       if (typeof input.order === 'number' && Number.isFinite(input.order)) {
         this.moveColumnToOrder(existing.list_id, input.columnId, Math.trunc(input.order))
+      }
+      if (this.isShoppingPriceColumn(existing.list_type, existing.name)) {
+        this.syncShoppingCostCurrency(existing.list_id, currencyCode)
       }
     })
     return this.getBoardSnapshot(existing.board_id, 'admin')
@@ -2562,12 +2577,12 @@ export class LifePlanRepository {
       .all<BottomSlotRow>(boardId)
 
     const bySlot = new Map(rows.map((row) => [row.slot_index, row]))
-    return [0, 1, 2, 3, 4].map((slotIndex) => {
+    return Array.from({ length: BOARD_SUMMARY_SLOT_COUNT }, (_, slotIndex) => {
       const row = bySlot.get(slotIndex)
       if (!row) {
         return {
           slotIndex,
-          label: `Slot ${slotIndex + 1}`,
+          label: '',
           sourceListId: null,
           sourceColumnId: null,
           aggregationMethod: 'count',
@@ -2580,30 +2595,35 @@ export class LifePlanRepository {
         label: row.label,
         sourceListId: row.source_list_id,
         sourceColumnId: row.source_column_id,
-        aggregationMethod: row.aggregation_method,
-        value: this.calculateSummary(row, lists)
+        aggregationMethod: this.normalizeSummaryAggregationMethod(row.aggregation_method),
+        value: this.calculateSummary(row, lists, boardId)
       }
     })
   }
 
-  private calculateSummary(slot: BottomSlotRow, lists: BoardList[]): string {
-    if (slot.aggregation_method === 'completed_count') {
+  private calculateSummary(slot: BottomSlotRow, lists: BoardList[], boardId: string): string {
+    const aggregationMethod = this.normalizeSummaryAggregationMethod(slot.aggregation_method)
+    if (aggregationMethod === 'archived_items' || aggregationMethod === 'completed_count') {
       const count = this.client.database
-        .prepare('SELECT COUNT(*) AS count FROM item_archives WHERE (? IS NULL OR list_id = ?)')
-        .get<{ count: number }>(slot.source_list_id, slot.source_list_id)?.count ?? 0
+        .prepare('SELECT COUNT(*) AS count FROM item_archives WHERE board_id = ?')
+        .get<{ count: number }>(boardId)?.count ?? 0
       return String(count)
+    }
+
+    if (this.isSystemSummaryAggregation(aggregationMethod)) {
+      return this.calculateSystemSummary(aggregationMethod, boardId, lists)
     }
 
     const list = lists.find((candidate) => candidate.id === slot.source_list_id)
 
-    if (slot.aggregation_method === 'count' || slot.aggregation_method === 'active_count') {
+    if (aggregationMethod === 'count' || aggregationMethod === 'active_count') {
       const shouldCountBoard = !list
       return String(shouldCountBoard ? lists.reduce((count, candidate) => count + candidate.items.length, 0) : list.items.length)
     }
 
     if (!list) return '0'
 
-    if (slot.aggregation_method === 'next_due') {
+    if (aggregationMethod === 'next_due') {
       if (!slot.source_column_id) return 'No due date'
       const datedItems = list.items
         .map((item) => {
@@ -2643,18 +2663,19 @@ export class LifePlanRepository {
 
     const lists = this.getBoardSnapshot(boardId, 'admin').lists
     const listsById = new Map(lists.map((list) => [list.id, list]))
-    return [0, 1, 2, 3, 4].map((slotIndex) => {
+    return Array.from({ length: BOARD_SUMMARY_SLOT_COUNT }, (_, slotIndex) => {
       const provided = providedSlots.find((slot) => slot.slotIndex === slotIndex)
-      const label = provided?.label?.trim() || `Slot ${slotIndex + 1}`
+      const aggregationMethod = this.normalizeSummaryAggregationMethod(provided?.aggregationMethod ?? 'count')
+      const label = provided?.label?.trim() || this.defaultSummaryLabel(aggregationMethod)
       const sourceListId = provided?.sourceListId ?? null
       let sourceColumnId = provided?.sourceColumnId ?? null
-      let aggregationMethod = provided?.aggregationMethod ?? 'count'
+      let resolvedAggregationMethod = aggregationMethod
       this.assertBoardSummaryLabelAllowed(label, sourceListId, aggregationMethod)
 
       if (!sourceListId) {
         sourceColumnId = null
-        if (!['active_count', 'completed_count', 'count'].includes(aggregationMethod)) aggregationMethod = 'count'
-        return { slotIndex, label, sourceListId: null, sourceColumnId: null, aggregationMethod }
+        if (!this.isSystemSummaryAggregation(aggregationMethod) && !['active_count', 'completed_count', 'count'].includes(aggregationMethod)) resolvedAggregationMethod = 'count'
+        return { slotIndex, label, sourceListId: null, sourceColumnId: null, aggregationMethod: resolvedAggregationMethod }
       }
 
       const list = listsById.get(sourceListId)
@@ -2664,9 +2685,9 @@ export class LifePlanRepository {
       if (!column || !column.boardSummaryEligible) {
         throw new Error('Summary slot references an invalid or unsupported field.')
       }
-      aggregationMethod = this.inferBoardSummaryAggregation(column)
-      this.assertBoardSummaryLabelAllowed(label, sourceListId, aggregationMethod)
-      return { slotIndex, label, sourceListId, sourceColumnId, aggregationMethod }
+      resolvedAggregationMethod = this.inferBoardSummaryAggregation(column)
+      this.assertBoardSummaryLabelAllowed(label, sourceListId, resolvedAggregationMethod)
+      return { slotIndex, label, sourceListId, sourceColumnId, aggregationMethod: resolvedAggregationMethod }
     })
   }
 
@@ -2675,6 +2696,139 @@ export class LifePlanRepository {
     if (!reservedMethod) return
     if (!sourceListId && aggregationMethod === reservedMethod) return
     throw new Error(`"${label}" is reserved for a system board summary. Choose a different label, or select the matching Board source.`)
+  }
+
+  private normalizeSummaryAggregationMethod(method: AggregationMethod): AggregationMethod {
+    if (method === 'active_count') return 'open_tasks'
+    if (method === 'completed_count') return 'archived_items'
+    return method
+  }
+
+  private isSystemSummaryAggregation(method: AggregationMethod): boolean {
+    return (
+      method === 'open_tasks' ||
+      method === 'board_items' ||
+      method === 'total_board_entries' ||
+      method === 'total_purchases' ||
+      method === 'total_effort_tasks' ||
+      method === 'overdue_items' ||
+      method === 'overdue_tasks' ||
+      method === 'archived_items'
+    )
+  }
+
+  private defaultSummaryLabel(method: AggregationMethod): string {
+    if (method === 'open_tasks') return 'Open Tasks'
+    if (method === 'board_items') return 'Board Items'
+    if (method === 'total_board_entries') return 'Total Board Entries'
+    if (method === 'total_purchases') return 'Total Purchases'
+    if (method === 'total_effort_tasks') return 'Total Effort on Tasks'
+    if (method === 'overdue_items') return 'Overdue Items'
+    if (method === 'overdue_tasks') return 'Overdue Tasks'
+    if (method === 'archived_items') return 'Archived Items'
+    return ''
+  }
+
+  private calculateSystemSummary(method: AggregationMethod, boardId: string, displayLists: BoardList[]): string {
+    const allLists = this.getBoardLists(boardId, 'admin')
+    if (method === 'open_tasks') {
+      return String(allLists.filter((list) => this.listBehavior(list) === 'tasks').reduce((count, list) => count + list.items.length, 0))
+    }
+    if (method === 'board_items') {
+      return String(displayLists.reduce((count, list) => count + this.displayedItemCount(list), 0))
+    }
+    if (method === 'total_board_entries') {
+      return String(allLists.reduce((count, list) => count + list.items.length, 0))
+    }
+    if (method === 'total_purchases') return this.totalPurchasesSummary(allLists)
+    if (method === 'total_effort_tasks') return this.totalEffortTasksSummary(allLists)
+    if (method === 'overdue_items') {
+      return String(allLists.filter((list) => ['tasks', 'purchases', 'calendar'].includes(this.listBehavior(list))).reduce((count, list) => count + list.items.filter((item) => item.isOverdue).length, 0))
+    }
+    if (method === 'overdue_tasks') {
+      return String(allLists.filter((list) => this.listBehavior(list) === 'tasks').reduce((count, list) => count + list.items.filter((item) => item.isOverdue).length, 0))
+    }
+    return '0'
+  }
+
+  private totalPurchasesSummary(lists: BoardList[]): string {
+    const totals = new Map<CurrencyCode, number>()
+    for (const list of lists.filter((candidate) => this.listBehavior(candidate) === 'purchases')) {
+      const columns =
+        list.templateType === 'shopping_list'
+          ? list.columns.filter((column) => normalizeReservedColumnName(column.name) === 'cost' && column.type === 'currency')
+          : list.templateType === 'wishlist'
+            ? list.columns.filter((column) => normalizeReservedColumnName(column.name) === 'price' && column.type === 'currency')
+            : list.columns.filter((column) => column.type === 'currency')
+      for (const column of columns) {
+        const total = list.items.reduce((sum, item) => {
+          const value = item.values[column.id]
+          return typeof value === 'number' && Number.isFinite(value) ? sum + value : sum
+        }, 0)
+        totals.set(column.currencyCode, (totals.get(column.currencyCode) ?? 0) + total)
+      }
+    }
+    if (totals.size === 0) return '0'
+    return [...totals.entries()]
+      .filter(([, total]) => total !== 0)
+      .map(([currency, total]) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(total))
+      .join(' | ') || '0'
+  }
+
+  private totalEffortTasksSummary(lists: BoardList[]): string {
+    const totalMinutes = lists
+      .filter((list) => this.listBehavior(list) === 'tasks')
+      .flatMap((list) => list.columns.filter((column) => column.type === 'duration' && normalizeReservedColumnName(column.name) === 'effort').map((column) => ({ list, column })))
+      .reduce((sum, { list, column }) => {
+        return sum + list.items.reduce((itemSum, item) => {
+          const value = item.values[column.id]
+          return typeof value === 'number' && Number.isFinite(value) ? itemSum + value : itemSum
+        }, 0)
+      }, 0)
+    return this.formatEffortSummary(totalMinutes)
+  }
+
+  private formatEffortSummary(minutes: number): string {
+    const totalMinutes = Math.max(0, Math.round(minutes))
+    const hours = Math.floor(totalMinutes / 60)
+    const mins = totalMinutes % 60
+    if (hours < 24) return `${hours}h ${String(mins).padStart(2, '0')}m`
+    const days = Math.floor(hours / 24)
+    const remainderHours = hours % 24
+    return `${days}d ${remainderHours}h ${String(mins).padStart(2, '0')}m`
+  }
+
+  private displayedItemCount(list: BoardList): number {
+    if (list.templateType !== 'birthday_calendar') return list.items.length
+    const birthdayColumn = list.columns.find((column) => normalizeReservedColumnName(column.name) === 'birthday')
+    if (!birthdayColumn) return list.items.length
+    const mode = list.templateConfig.birthday?.boardView ?? 'this_month'
+    const end = this.birthdayRangeEnd(new Date(), mode)
+    return list.items.filter((item) => {
+      const occurrence = this.nextBirthdayOccurrence(dateFieldString(item.values[birthdayColumn.id]), new Date())
+      return mode === 'all' ? true : Boolean(occurrence && occurrence.getTime() <= end.getTime())
+    }).length
+  }
+
+  private birthdayRangeEnd(now: Date, mode: NonNullable<ListTemplateConfig['birthday']>['boardView']): Date {
+    if (mode === 'this_week') {
+      const end = new Date(now)
+      end.setHours(23, 59, 59, 999)
+      end.setDate(now.getDate() + (6 - now.getDay()))
+      return end
+    }
+    if (mode === 'this_month') return new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+    if (mode === 'next_10_days') return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 10, 23, 59, 59, 999)
+    if (mode === 'next_30_days') return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30, 23, 59, 59, 999)
+    if (mode === 'next_2_months') return new Date(now.getFullYear(), now.getMonth() + 2, now.getDate(), 23, 59, 59, 999)
+    return new Date(8640000000000000)
+  }
+
+  private listBehavior(list: BoardList): ListBehavior {
+    if (list.templateType === 'todo') return 'tasks'
+    if (list.templateType === 'shopping_list' || list.templateType === 'wishlist') return 'purchases'
+    if (list.templateType === 'health' || list.templateType === 'trips_events' || list.templateType === 'birthday_calendar') return 'calendar'
+    return this.normalizeListBehavior(list.templateConfig.behavior)
   }
 
   private publishItems(itemIds: string[]): void {
@@ -3223,26 +3377,38 @@ export class LifePlanRepository {
   private readListTemplateConfig(type: ListTemplateType | undefined, json: string | null): ListTemplateConfig {
     const normalizedType = normalizeListTemplateType(type)
     const fallback = defaultListTemplateConfig(normalizedType)
-    if (normalizedType !== 'birthday_calendar' || !json) return fallback
+    if (!json) return fallback
     try {
-      const parsed = JSON.parse(json) as { birthday?: { boardView?: string } }
+      const parsed = JSON.parse(json) as { behavior?: string; birthday?: { boardView?: string } }
       const boardView = parsed.birthday?.boardView
+      const behavior = normalizedType === 'custom' ? this.normalizeListBehavior(parsed.behavior) : fallback.behavior
       return {
-        birthday: {
-          boardView:
-            boardView === 'this_week' ||
-            boardView === 'this_month' ||
-            boardView === 'next_10_days' ||
-            boardView === 'next_30_days' ||
-            boardView === 'next_2_months' ||
-            boardView === 'all'
-              ? boardView
-              : 'this_month'
-        }
+        ...fallback,
+        behavior,
+        ...(normalizedType === 'birthday_calendar'
+          ? {
+              birthday: {
+                boardView:
+                  boardView === 'this_week' ||
+                  boardView === 'this_month' ||
+                  boardView === 'next_10_days' ||
+                  boardView === 'next_30_days' ||
+                  boardView === 'next_2_months' ||
+                  boardView === 'all'
+                    ? boardView
+                    : 'this_month'
+              }
+            }
+          : {})
       }
     } catch {
       return fallback
     }
+  }
+
+  private normalizeListBehavior(behavior: string | undefined): ListBehavior {
+    if (behavior === 'tasks' || behavior === 'purchases' || behavior === 'calendar' || behavior === 'other') return behavior
+    return 'other'
   }
 
   private createTemplateList(listId: string, templateType: ListTemplateType): void {
@@ -3345,8 +3511,8 @@ export class LifePlanRepository {
       false,
       this.writeColumnDisplayFormat('deadline', null, 'date', 'none', [], undefined, true)
     )
-    this.createSeedColumn(listId, 'Price / pc', 'currency', 4, false, null, false, false, false)
-    this.createSeedColumn(listId, 'Cost', 'currency', 5, false, null, false, false, false)
+    this.createSeedColumn(listId, 'Price / pc', 'currency', 4, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], 'USD', true))
+    this.createSeedColumn(listId, 'Cost', 'currency', 5, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], 'USD', true))
     this.createSeedColumn(listId, 'Link', 'hyperlink', 6, false, null, false, false, false)
     this.run(
       `UPDATE lists
@@ -3661,6 +3827,44 @@ export class LifePlanRepository {
 
   private isProtectedBirthdayColumn(listType: ListTemplateType, name: string): boolean {
     return normalizeListTemplateType(listType) === 'birthday_calendar' && BIRTHDAY_PROTECTED_COLUMN_NAMES.has(normalizeReservedColumnName(name))
+  }
+
+  private isShoppingPriceColumn(listType: ListTemplateType, name: string): boolean {
+    return normalizeListTemplateType(listType) === 'shopping_list' && normalizeReservedColumnName(name) === 'price / pc'
+  }
+
+  private isShoppingCostColumn(listType: ListTemplateType, name: string): boolean {
+    return normalizeListTemplateType(listType) === 'shopping_list' && normalizeReservedColumnName(name) === 'cost'
+  }
+
+  private shoppingPriceCurrencyCode(listId: string): CurrencyCode {
+    const priceColumn = this.client.database
+      .prepare("SELECT display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'price / pc' ORDER BY sort_order LIMIT 1")
+      .get<{ display_format: string | null }>(listId)
+    return this.readColumnDisplayFormat(priceColumn?.display_format ?? null).currencyCode
+  }
+
+  private syncShoppingCostCurrency(listId: string, currencyCode: CurrencyCode): void {
+    const costColumn = this.client.database
+      .prepare("SELECT id, display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'cost' ORDER BY sort_order LIMIT 1")
+      .get<{ id: string; display_format: string | null }>(listId)
+    if (!costColumn) return
+    const existingFormat = this.readColumnDisplayFormat(costColumn.display_format)
+    this.run(
+      'UPDATE list_columns SET display_format = ?, updated_at = ? WHERE id = ?',
+      this.writeColumnDisplayFormat(
+        existingFormat.role,
+        existingFormat.choiceConfig,
+        existingFormat.dateDisplayFormat,
+        existingFormat.recurrence,
+        existingFormat.recurrenceDays,
+        currencyCode,
+        existingFormat.showOnBoard,
+        existingFormat.durationDisplayFormat
+      ),
+      new Date().toISOString(),
+      costColumn.id
+    )
   }
 
   private assertProtectedBirthdayColumnUpdateAllowed(

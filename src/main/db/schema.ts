@@ -137,11 +137,11 @@ export function migrate(client: DbClient): void {
     CREATE TABLE IF NOT EXISTS bottom_bar_widget_configs (
       id TEXT PRIMARY KEY,
       board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 4),
+      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 7),
       label TEXT NOT NULL,
       source_list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
       source_column_id TEXT REFERENCES list_columns(id) ON DELETE SET NULL,
-      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active', 'next_due')),
+      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active', 'next_due', 'open_tasks', 'board_items', 'total_board_entries', 'total_purchases', 'total_effort_tasks', 'overdue_items', 'overdue_tasks', 'archived_items')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(board_id, slot_index)
@@ -253,7 +253,7 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'item_archives', 'close_action', "TEXT NOT NULL DEFAULT 'completed'")
   addColumnIfMissing(client, 'item_archives', 'close_comment', "TEXT NOT NULL DEFAULT ''")
   rebuildBoardWidgetsForNewTypesIfNeeded(client)
-  rebuildBottomBarSlotsForFiveIfNeeded(client)
+  rebuildBottomBarSlotsForEightAndSystemSummariesIfNeeded(client)
   client.database.exec(`
     UPDATE list_columns
     SET name = 'Deadline',
@@ -263,6 +263,8 @@ export function migrate(client: DbClient): void {
   `)
   runMigrationOnce(client, 2026042601, () => applyTemplateDefaultMigrations(client))
   runMigrationOnce(client, 2026042602, () => applyBirthdayCalendarSortMigration(client))
+  runMigrationOnce(client, 2026042603, () => applyShoppingCostCurrencyMigration(client))
+  runMigrationOnce(client, 2026042701, () => applyWishlistWishmeterOrderMigration(client))
 }
 
 function runMigrationOnce(client: DbClient, version: number, migrateOnce: () => void): void {
@@ -286,7 +288,7 @@ function applyTemplateDefaultMigrations(client: DbClient): void {
   const wishmeterConfig = {
     selection: 'single',
     ranked: true,
-    options: ["It's so fluffy I'm gonna die!", 'My precious!', 'Asking for a friend...', 'Gotta get me one of those!', 'Shut up and take my money!'].map((label, index) => ({
+    options: ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Gotta get me one of those!', 'Asking for a friend...'].map((label, index) => ({
       id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
       label,
       rank: index + 1
@@ -375,6 +377,55 @@ function applyBirthdayCalendarSortMigration(client: DbClient): void {
   updateSortColumn(client, 'birthday_calendar', 'Birthday', 'asc')
 }
 
+function applyShoppingCostCurrencyMigration(client: DbClient): void {
+  const lists = client.database.prepare("SELECT id FROM lists WHERE list_type = 'shopping_list'").all<{ id: string }>()
+  const now = new Date().toISOString()
+  for (const list of lists) {
+    const price = client.database
+      .prepare("SELECT display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'price / pc' ORDER BY sort_order LIMIT 1")
+      .get<{ display_format: string | null }>(list.id)
+    const cost = client.database
+      .prepare("SELECT id, display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'cost' ORDER BY sort_order LIMIT 1")
+      .get<{ id: string; display_format: string | null }>(list.id)
+    if (!cost) continue
+    const currencyCode = readCurrencyCode(price?.display_format ?? null)
+    const showOnBoard = readShowOnBoard(cost.display_format)
+    client.database
+      .prepare('UPDATE list_columns SET display_format = ?, updated_at = ? WHERE id = ?')
+      .run(writeCurrencyDisplayFormat(currencyCode, showOnBoard), now, cost.id)
+  }
+}
+
+function applyWishlistWishmeterOrderMigration(client: DbClient): void {
+  const now = new Date().toISOString()
+  const choiceConfig = {
+    selection: 'single',
+    ranked: true,
+    options: ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Gotta get me one of those!', 'Asking for a friend...'].map((label, index) => ({
+      id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      label,
+      rank: index + 1
+    }))
+  }
+  const columns = client.database
+    .prepare(
+      `SELECT c.id, c.display_format
+       FROM list_columns c
+       JOIN lists l ON l.id = c.list_id
+       WHERE l.list_type = 'wishlist'
+         AND lower(c.name) = 'wishmeter'`
+    )
+    .all<{ id: string; display_format: string | null }>()
+
+  for (const column of columns) {
+    const existing = parseDisplayFormat(column.display_format)
+    const nextFormat = { ...existing, choiceConfig }
+    client.database.prepare('UPDATE list_columns SET display_format = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(nextFormat), now, column.id)
+  }
+
+  updateSortColumn(client, 'wishlist', 'Wishmeter', 'asc')
+}
+
 function setColumnDisplay(client: DbClient, listType: string, names: string[], showOnBoard: boolean): void {
   const format = showOnBoard ? null : JSON.stringify({ showOnBoard: false })
   const placeholders = names.map(() => '?').join(', ')
@@ -451,6 +502,45 @@ function ensureWishlistPriceColumns(client: DbClient, now: string): void {
   }
 }
 
+function parseDisplayFormat(displayFormat: string | null): Record<string, unknown> {
+  if (!displayFormat) return {}
+  try {
+    const parsed = JSON.parse(displayFormat)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function readCurrencyCode(displayFormat: string | null): string {
+  if (!displayFormat) return 'USD'
+  try {
+    const parsed = JSON.parse(displayFormat) as { currencyCode?: unknown }
+    return typeof parsed.currencyCode === 'string' && parsed.currencyCode.trim() ? parsed.currencyCode.trim().toUpperCase() : 'USD'
+  } catch {
+    return 'USD'
+  }
+}
+
+function readShowOnBoard(displayFormat: string | null): boolean {
+  if (!displayFormat) return true
+  try {
+    const parsed = JSON.parse(displayFormat) as { showOnBoard?: unknown }
+    return parsed.showOnBoard !== false
+  } catch {
+    return true
+  }
+}
+
+function writeCurrencyDisplayFormat(currencyCode: string, showOnBoard: boolean): string | null {
+  const normalizedCurrencyCode = currencyCode.toUpperCase()
+  const format = {
+    ...(normalizedCurrencyCode !== 'USD' ? { currencyCode: normalizedCurrencyCode } : {}),
+    ...(!showOnBoard ? { showOnBoard: false } : {})
+  }
+  return Object.keys(format).length > 0 ? JSON.stringify(format) : null
+}
+
 function rebuildBoardWidgetsForNewTypesIfNeeded(client: DbClient): void {
   const table = client.database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'board_widgets'").get<{ sql: string }>()
   if (!table?.sql || table.sql.includes("'countdown'")) return
@@ -486,11 +576,11 @@ function rebuildBoardWidgetsForNewTypesIfNeeded(client: DbClient): void {
   `)
 }
 
-function rebuildBottomBarSlotsForFiveIfNeeded(client: DbClient): void {
+function rebuildBottomBarSlotsForEightAndSystemSummariesIfNeeded(client: DbClient): void {
   const table = client.database
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bottom_bar_widget_configs'")
     .get<{ sql: string }>()
-  if (table?.sql?.includes('BETWEEN 0 AND 4') && table.sql.includes("'next_due'")) return
+  if (table?.sql?.includes('BETWEEN 0 AND 7') && table.sql.includes("'total_purchases'")) return
 
   client.database.exec(`
     PRAGMA foreign_keys = OFF;
@@ -498,11 +588,11 @@ function rebuildBottomBarSlotsForFiveIfNeeded(client: DbClient): void {
     CREATE TABLE bottom_bar_widget_configs_new (
       id TEXT PRIMARY KEY,
       board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 4),
+      slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 7),
       label TEXT NOT NULL,
       source_list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
       source_column_id TEXT REFERENCES list_columns(id) ON DELETE SET NULL,
-      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active', 'next_due')),
+      aggregation_method TEXT NOT NULL CHECK(aggregation_method IN ('sum', 'count', 'active_count', 'completed_count', 'sum_active', 'next_due', 'open_tasks', 'board_items', 'total_board_entries', 'total_purchases', 'total_effort_tasks', 'overdue_items', 'overdue_tasks', 'archived_items')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(board_id, slot_index)
@@ -510,8 +600,15 @@ function rebuildBottomBarSlotsForFiveIfNeeded(client: DbClient): void {
 
     INSERT INTO bottom_bar_widget_configs_new
       (id, board_id, slot_index, label, source_list_id, source_column_id, aggregation_method, created_at, updated_at)
-    SELECT id, board_id, slot_index, label, source_list_id, source_column_id, aggregation_method, created_at, updated_at
-    FROM bottom_bar_widget_configs;
+    SELECT id, board_id, slot_index, label, source_list_id, source_column_id,
+           CASE
+             WHEN aggregation_method = 'active_count' AND source_list_id IS NULL THEN 'open_tasks'
+             WHEN aggregation_method = 'completed_count' AND source_list_id IS NULL THEN 'archived_items'
+             ELSE aggregation_method
+           END,
+           created_at, updated_at
+    FROM bottom_bar_widget_configs
+    WHERE slot_index BETWEEN 0 AND 7;
 
     DROP TABLE bottom_bar_widget_configs;
     ALTER TABLE bottom_bar_widget_configs_new RENAME TO bottom_bar_widget_configs;

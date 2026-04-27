@@ -82,8 +82,19 @@ Date: 2026-04-26
 - Made `updateBoard` optionally save summary slots in the same transaction as board metadata.
 - Kept `updateSummarySlots` available for direct summary-only saves.
 - Board Summary edits should keep the user on the Board Summary tab after saving.
-- Board system summary labels such as `Open Tasks` and `Archived Items` are reserved for their explicit Board source options.
+- Board summary slots are now eight slots, indexed 0 through 7.
+- Empty board summary slots should remain configurable in the editor but should not display on the board.
+- Board system summary labels such as `Open Tasks`, `Board Items`, `Total Board Entries`, `Total Purchases`, `Total Effort on Tasks`, `Overdue Items`, `Overdue Tasks`, and `Archived Items` are reserved for their explicit Board source options.
 - User-defined board summary slots should not infer system behavior from a typed label.
+- Custom lists have a non-behavior-changing `List Behaviour` classification: Task List, Purchases, Calendar, or Other.
+- Standard templates imply their behavior for board summaries: To Do is tasks; Shopping List and Wishlist are purchases; Health, Trips & Events, and Birthday Calendar are calendar.
+- `Open Tasks` counts active items from To Do lists and custom lists marked as Task List.
+- `Board Items` counts items currently displayed on the board, respecting visible lists and current Birthday Calendar filtering.
+- `Total Board Entries` counts all active non-archived items defined in the board, including items not currently displayed.
+- `Total Purchases` sums purchase totals by currency and returns separate totals when currencies differ.
+- `Total Effort on Tasks` sums Effort duration across task-type lists and includes explicit day/hour/minute labels.
+- `Overdue Items` counts overdue items from task, purchase, and calendar-type lists; `Overdue Tasks` counts only task-type lists.
+- `Archived Items` counts archived items for the board.
 - Fixed several mutations so inactive-board editing remains anchored on the affected board snapshot.
 - Updated README language from four summary slots to five board summary slots.
 - Verified with `npm run typecheck` and `npm run build`.
@@ -156,7 +167,8 @@ Date: 2026-04-26
 - To Do summary defaults are Task count, Deadline, and Effort. Other template summaries are disabled by default unless explicitly configured later.
 - Shopping List uses its deadline column as `Needed By`; the list editor explains this label mapping near the deadline setting.
 - Shopping List defaults: sort by Needed By oldest first, prefer 4x4, and hide Item ID, Dependencies, and Link.
-- Wishlist defaults: sort by Wishmeter highest rank first, prefer 6x4, hide Item ID, Dependencies, and Description, include Price as a currency field, and use the five-level Wishmeter scale including `Gotta get me one of those!`.
+- Shopping List `Cost` is a computed currency field derived from `Pieces * Price / pc`; its currency is inherited from `Price / pc` and is not independently editable while the app does not perform currency conversion.
+- Wishlist defaults: sort by Wishmeter highest rank first, prefer 6x4, hide Item ID, Dependencies, and Description, include Price as a currency field, and use the five-level Wishmeter scale in this highest-to-lowest order: `It's so fluffy I'm gonna die!`, `My precious!`, `Shut up and take my money!`, `Gotta get me one of those!`, `Asking for a friend...`.
 - Health defaults: deadline disabled, sort by Appointment Date oldest first, prefer 5x4, hide Item ID and Dependencies, and rename Frequency to Mentions.
 - Health recurrence options include Every x weeks, Monthly, and Every x months. Interval recurrence stores a numeric interval.
 - Trips & Events defaults: sort by Start oldest first, hide Item ID, Dependencies, Topic / Theme, and Location, and make Type a non-ranked Choice field.
