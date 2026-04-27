@@ -231,6 +231,7 @@ Date: 2026-04-27
 - Post-`v1.0.0` development starts from `1.1.0-dev`.
 - `v1.0.1` is a hotfix patch release for `v1.0.0` focused on first-run wizard stability and layout correctness.
 - Hotfix releases should be published with explicit patch notes that call out the user-facing regressions they fix, especially when the affected flow is startup/onboarding.
+- After `v1.0.1` is tagged and published, ongoing work resumes from `1.1.0-dev`.
 
 ## Development Practice Decisions
 
