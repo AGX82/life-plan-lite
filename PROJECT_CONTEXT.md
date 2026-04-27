@@ -211,6 +211,9 @@ Date: 2026-04-27
 - The repository may retain local seed-data utilities for development, but the `dist:win` package configuration must not include `resources/seed-data`.
 - A clean first run creates only an empty `Life Plan Lite` board and opens the wizard in Admin Mode.
 - The Windows executable uses `build/icon.ico`, generated from the app logo PNG while preserving the logo aspect ratio inside a square icon.
+- Development and production data must be isolated on the same machine.
+- `npm run dev` and other unpackaged development runs use `%APPDATA%\\life-plan-lite-dev`.
+- The electron-builder portable executable uses a `portable-data` folder beside the `.exe` when the portable runtime exposes `PORTABLE_EXECUTABLE_DIR`.
 - Before clean packaging/testing that might affect local app data, back up the current user database/config so the dev environment can be restored.
 
 ## Development Practice Decisions

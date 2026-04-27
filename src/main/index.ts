@@ -32,6 +32,25 @@ let displayWindow: BrowserWindow | null = null
 let repository: LifePlanRepository
 let allowDisplayClose = false
 
+function configureUserDataPath(): void {
+  const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR?.trim()
+  if (portableExecutableDir) {
+    const portableDataDir = join(portableExecutableDir, 'portable-data')
+    mkdirSync(portableDataDir, { recursive: true })
+    app.setPath('userData', portableDataDir)
+    return
+  }
+
+  if (!app.isPackaged || process.env.ELECTRON_RENDERER_URL) {
+    const devDataDir = join(app.getPath('appData'), 'life-plan-lite-dev')
+    mkdirSync(devDataDir, { recursive: true })
+    app.setPath('userData', devDataDir)
+    return
+  }
+
+  mkdirSync(app.getPath('userData'), { recursive: true })
+}
+
 function configureChromiumRuntime(): void {
   try {
     const runtimeDir = join(app.getPath('temp'), 'life-plan-lite-runtime', String(process.pid))
@@ -47,6 +66,7 @@ function configureChromiumRuntime(): void {
   app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
 }
 
+configureUserDataPath()
 configureChromiumRuntime()
 
 function createWindow(route: 'admin' | 'display', options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
