@@ -486,6 +486,10 @@ export function App(): ReactElement {
           try {
             await window.lpl.deleteBoard({ boardId: createdBoardId, keepBoardId: baseSnapshot.id })
           } catch {}
+        } else if (reuseInitialSeedBoard && (data.mode === 'firstRun' || data.mode === 'reset')) {
+          try {
+            await window.lpl.resetAppToFirstRun()
+          } catch {}
         }
         throw error
       }
