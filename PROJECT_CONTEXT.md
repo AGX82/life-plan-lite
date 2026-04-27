@@ -2,7 +2,7 @@
 
 This is the living project context for Life Plan Lite. Use it to record product decisions, behavior rules, requirement changes, rationale, and development choices that should guide future work.
 
-Last updated: 2026-04-27
+Last updated: 2026-04-28
 
 ## Product Intent
 
@@ -229,6 +229,8 @@ Date: 2026-04-27
 - The release-safe production artifact is the electron-builder portable wrapper executable, not the unpacked `win-unpacked` app binary.
 - After tagging a stable release, ongoing work continues on a development version string rather than the next final semantic version.
 - Post-`v1.0.0` development starts from `1.1.0-dev`.
+- `v1.0.1` is a hotfix patch release for `v1.0.0` focused on first-run wizard stability and layout correctness.
+- Hotfix releases should be published with explicit patch notes that call out the user-facing regressions they fix, especially when the affected flow is startup/onboarding.
 
 ## Development Practice Decisions
 
