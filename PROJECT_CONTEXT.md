@@ -211,6 +211,7 @@ Date: 2026-04-27
 - World Clock visual style expansion is deferred until the user provides design directions.
 - After initial board creation, the app should offer a guided in-app tutorial that explains the main workspace, not just setup choices.
 - The tutorial should be reopenable from the left rail and should emphasize the practical workflow: board selection, board tree, edit-panel scope, display targeting, and especially Live Layout as an active resize/reposition/swap tool.
+- Wizard board creation should use opinionated placement priorities instead of purely generic packing: To Do lists attempt to anchor top-left, visible widgets reserve and fill the top-right four-column strip, templates with explicit target sizes are placed before flexible templates, and non-fixed-size lists should derive width from their relative visible-column count.
 
 ## Packaging Decisions
 
@@ -237,6 +238,8 @@ Date: 2026-04-27
 - `v1.0.1` is a hotfix patch release for `v1.0.0` focused on first-run wizard stability and layout correctness.
 - Hotfix releases should be published with explicit patch notes that call out the user-facing regressions they fix, especially when the affected flow is startup/onboarding.
 - After `v1.0.1` is tagged and published, ongoing work resumes from `1.1.0-dev`.
+- During active post-release stabilization, the development version should advance with meaningful behavior or critical-fix checkpoints so local builds and packaged test executables are easy to distinguish.
+- The current post-`v1.0.1` stabilization line continues from `1.1.1-dev`.
 
 ## Development Practice Decisions
 

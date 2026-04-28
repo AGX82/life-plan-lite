@@ -8227,55 +8227,154 @@ function configureWizardList(
 }
 
 function planWizardBoardLayout(listDrafts: WizardListDraft[], widgets: WizardWidgetDraft[], baseOccupied: WizardGrid[] = []): WizardLayoutPlan {
-  type LayoutElement = {
+  type ListLayoutElement = {
     id: string
-    kind: 'list' | 'widget'
+    templateType: WizardTemplateType
     sizes: Array<{ w: number; h: number }>
+    priority: 'todo' | 'fixed' | 'flex'
   }
-  const elements: LayoutElement[] = [
-    ...listDrafts
-      .filter((draft) => draft.displayEnabled)
-      .map((draft) => ({ id: draft.id, kind: 'list' as const, sizes: wizardPreferredGrids(draft.templateType) })),
-    ...widgets
-      .filter((widget) => widget.displayEnabled)
-      .map((widget) => ({ id: widget.id, kind: 'widget' as const, sizes: [wizardWidgetGridSize(widget)] }))
-  ].sort((a, b) => b.sizes[0].w * b.sizes[0].h - a.sizes[0].w * a.sizes[0].h)
+  type WidgetLayoutElement = {
+    id: string
+    size: { w: number; h: number }
+  }
 
-  const assignments = new Map<string, WizardGrid>()
+  const visibleLists = listDrafts.filter((draft) => draft.displayEnabled)
+  const visibleWidgets = widgets.filter((widget) => widget.displayEnabled)
+  const widgetStripWidth = visibleWidgets.length > 0 ? 4 : 0
+  const leftRegionWidth = Math.max(4, 16 - widgetStripWidth)
   const occupied: WizardGrid[] = [...baseOccupied]
-
-  function place(index: number): boolean {
-    const element = elements[index]
-    if (!element) return true
-    for (const size of element.sizes) {
-      for (let y = 1; y <= 9 - size.h; y += 1) {
-        for (let x = 1; x <= 17 - size.w; x += 1) {
-          const candidate = { x, y, ...size }
-          if (occupied.some((grid) => gridsOverlap(grid, candidate))) continue
-          occupied.push(candidate)
-          assignments.set(element.id, candidate)
-          if (place(index + 1)) return true
-          assignments.delete(element.id)
-          occupied.pop()
-        }
-      }
-    }
-    return false
-  }
-
-  if (!place(0)) {
-    throw new Error('There is not enough board space for the selected visible lists and widgets. Hide one or more items, or reduce the number of widgets.')
-  }
-
   const listGrids = new Map<string, WizardGrid>()
   const widgetGrids = new Map<string, WizardGrid>()
-  for (const element of elements) {
-    const grid = assignments.get(element.id)
-    if (!grid) continue
-    if (element.kind === 'list') listGrids.set(element.id, grid)
-    else widgetGrids.set(element.id, grid)
+
+  const listElements: ListLayoutElement[] = visibleLists.map((draft) => ({
+    id: draft.id,
+    templateType: draft.templateType,
+    sizes: wizardHasTargetSize(draft.templateType)
+      ? wizardPreferredGrids(draft.templateType)
+      : wizardFlexibleListSizes(draft, visibleLists, leftRegionWidth),
+    priority: draft.templateType === 'todo' ? 'todo' : wizardHasTargetSize(draft.templateType) ? 'fixed' : 'flex'
+  }))
+
+  const widgetElements: WidgetLayoutElement[] = visibleWidgets
+    .map((widget) => ({ id: widget.id, size: wizardWidgetGridSize(widget) }))
+    .sort((left, right) => right.size.h - left.size.h || right.size.w - left.size.w)
+
+  const todoLists = listElements.filter((entry) => entry.priority === 'todo')
+  const fixedLists = listElements.filter((entry) => entry.priority === 'fixed')
+  const flexLists = listElements.filter((entry) => entry.priority === 'flex')
+
+  for (const entry of todoLists) {
+    const placement = placeWizardElement(entry.sizes, occupied, widgetStripWidth > 0 ? 'left' : 'full', 'left')
+    if (!placement) throw new Error('There is not enough board space to place the selected To Do lists. Hide one or more items or reduce the number of widgets.')
+    occupied.push(placement)
+    listGrids.set(entry.id, placement)
   }
+
+  for (const entry of widgetElements) {
+    const placement = placeWizardElement([entry.size], occupied, 'right', 'right')
+    if (!placement) throw new Error('There is not enough space in the board widget area. Hide one or more widgets or reduce the number of visible lists.')
+    occupied.push(placement)
+    widgetGrids.set(entry.id, placement)
+  }
+
+  for (const entry of fixedLists) {
+    const placement = placeWizardElement(entry.sizes, occupied, widgetStripWidth > 0 ? 'left' : 'full', 'left')
+    if (!placement) throw new Error('There is not enough board space for the selected visible lists and widgets. Hide one or more items, or reduce the number of widgets.')
+    occupied.push(placement)
+    listGrids.set(entry.id, placement)
+  }
+
+  for (const entry of flexLists) {
+    const placement = placeWizardElement(entry.sizes, occupied, widgetStripWidth > 0 ? 'left' : 'full', 'left')
+    if (!placement) throw new Error('There is not enough board space for the selected visible lists and widgets. Hide one or more items, or reduce the number of widgets.')
+    occupied.push(placement)
+    listGrids.set(entry.id, placement)
+  }
+
   return { listGrids, widgetGrids }
+}
+
+function placeWizardElement(
+  sizes: Array<{ w: number; h: number }>,
+  occupied: WizardGrid[],
+  region: 'left' | 'right' | 'full',
+  anchor: 'left' | 'right'
+): WizardGrid | null {
+  for (const size of sizes) {
+    const positions = wizardCandidatePositions(size, region, anchor)
+    for (const candidate of positions) {
+      if (occupied.some((grid) => gridsOverlap(grid, candidate))) continue
+      return candidate
+    }
+  }
+  return null
+}
+
+function wizardCandidatePositions(
+  size: { w: number; h: number },
+  region: 'left' | 'right' | 'full',
+  anchor: 'left' | 'right'
+): WizardGrid[] {
+  const positions: WizardGrid[] = []
+  const yMax = 9 - size.h
+
+  if (region === 'right') {
+    const xStart = Math.max(13, 17 - size.w)
+    for (let y = 1; y <= yMax; y += 1) {
+      for (let x = xStart; x >= 13; x -= 1) {
+        if (x + size.w - 1 > 16) continue
+        positions.push({ x, y, ...size })
+      }
+    }
+    return positions
+  }
+
+  const xLimit = region === 'left' ? 12 : 16
+  const xMin = 1
+  if (anchor === 'right') {
+    for (let y = 1; y <= yMax; y += 1) {
+      for (let x = xLimit - size.w + 1; x >= xMin; x -= 1) {
+        positions.push({ x, y, ...size })
+      }
+    }
+    return positions
+  }
+
+  for (let y = 1; y <= yMax; y += 1) {
+    for (let x = xMin; x <= xLimit - size.w + 1; x += 1) {
+      positions.push({ x, y, ...size })
+    }
+  }
+  return positions
+}
+
+function wizardHasTargetSize(templateType: WizardTemplateType): boolean {
+  return templateType === 'todo' || templateType === 'shopping_list' || templateType === 'wishlist' || templateType === 'health' || templateType === 'birthday_calendar'
+}
+
+function wizardFlexibleListSizes(draft: WizardListDraft, allVisibleDrafts: WizardListDraft[], availableWidth: number): Array<{ w: number; h: number }> {
+  const flexibleDrafts = allVisibleDrafts.filter((entry) => entry.displayEnabled && !wizardHasTargetSize(entry.templateType))
+  const maxVisibleColumns = Math.max(1, ...flexibleDrafts.map((entry) => wizardEstimatedVisibleColumnCount(entry)))
+  const ownVisibleColumns = wizardEstimatedVisibleColumnCount(draft)
+  const preferredWidth = clamp(Math.round((ownVisibleColumns / maxVisibleColumns) * Math.min(6, availableWidth)), 3, Math.min(6, availableWidth))
+  const widths = Array.from(new Set([preferredWidth, preferredWidth + 1, preferredWidth - 1, 6, 5, 4, 3].filter((value) => value >= 3 && value <= availableWidth)))
+  const heights = [4, 3, 2]
+  const sizes: Array<{ w: number; h: number }> = []
+  for (const width of widths) {
+    for (const height of heights) {
+      sizes.push({ w: width, h: height })
+    }
+  }
+  return sizes
+}
+
+function wizardEstimatedVisibleColumnCount(draft: WizardListDraft): number {
+  if (draft.templateType === 'todo') return draft.dueDateEnabled ? 6 : 5
+  if (draft.templateType === 'shopping_list') return draft.dueDateEnabled ? 6 : 5
+  if (draft.templateType === 'wishlist') return 4
+  if (draft.templateType === 'health') return 4
+  if (draft.templateType === 'trips_events') return 4
+  return 3
 }
 
 function wizardPreferredGrids(templateType: WizardTemplateType): Array<{ w: number; h: number }> {
