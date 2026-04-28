@@ -259,12 +259,50 @@ Date: 2026-04-27
 - `v1.3.0` is the next stable minor release and promotes the refined guided tutorial experience, the synthetic walkthrough board, and the polished admin-to-board onboarding flow to the public line.
 - After `v1.3.0`, ongoing development continues from `1.3.1-dev` until the next stable release is intentionally cut.
 
+## Forward Planning Decisions
+
+Date: 2026-04-28
+
+- `v2.0.0` is planned as the last major local-first desktop generation before the product's cloud transition becomes the main focus.
+- `v2.0.0` must therefore do two jobs at once: add the next major capability set for users and establish the product/platform prerequisites for online evolution.
+- Candidate user-facing scope for `v2.0.0` currently includes:
+  - calendar widget
+  - expanded widget visual modes
+  - Project list with Gantt mode
+  - richer task progress and effort intelligence
+  - budget management list
+  - rendering optimization across display ratios
+  - users/login
+  - multiple views of the same board
+- The cloud-readiness work for `v2.0.0` is not optional platform polish; it is part of the release definition itself.
+- In particular, `v2.0.0` should establish:
+  - real user identity and ownership
+  - API-ready service boundaries
+  - sync-friendly metadata and revision/version discipline
+  - board views as first-class entities
+  - stronger backup/export/migration discipline
+  - higher-confidence tests around migrations and domain rules
+
+## Backlog Intake Decisions
+
+Date: 2026-04-28
+
+- Production-only regressions or environment mismatches, such as Weather working in dev but failing in the packaged app, should be treated as near-term stabilization work rather than deferred long-term roadmap items.
+- Navigation tree default behavior should favor a calm startup state: lists collapsed on app launch, session-local expansion preserved while the app remains open, and expansion state reset on restart.
+- Word of the Day widget should move to a square aspect model with a minimum board size of 2x2.
+- Widget editing should consistently expose a layout/view selector for every widget type. If a widget currently has only one available presentation, the selector should still exist and show a single default option.
+- Board summary visual treatment should be tightened: minimum width per summary field, horizontal growth when content requires it, smaller type than the current board body emphasis, and non-white emphasis styling so summaries read like signals rather than oversized labels.
+- List Contents should keep the header fixed while rows scroll beneath it; content should never visually scroll over the header.
+- Database migration, export, and import are explicit backlog items and are strategically aligned with the pre-cloud transition work rather than being optional utilities.
+
 ## Development Practice Decisions
 
 - Record future behavior, requirement, and rationale decisions in this file as they are made.
 - Keep local scratch/mock-up files out of Git unless they are intentionally promoted into app assets or docs.
 - Commit stable checkpoints after meaningful, verified changes.
 - Avoid unrelated refactors while stabilizing feature work.
+- When new feature ideas are proposed, evaluate them not only on desirability but also on release fit, sequencing, architectural timing, and adjacency to related planned capabilities.
+- Product guidance should explicitly advise whether a new idea is best pursued now or deferred to a later release because of dependency grouping, implementation efficiency, architectural readiness, or the risk of building something that would likely be reworked once later roadmap items arrive.
 - Prefer focused repository-level fixes over UI-only workarounds when a behavior is part of the domain model.
 
 ## Open Next Areas
