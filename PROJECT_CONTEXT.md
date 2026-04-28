@@ -257,6 +257,7 @@ Date: 2026-04-27
 - After `v1.2.0`, ongoing development should stay on a `1.2.x-dev` line until the scope of upcoming work clearly justifies the next minor release as `1.3.0`.
 - The current post-`v1.2.0` development line continues from `1.2.1-dev`.
 - `v1.3.0` is the next stable minor release and promotes the refined guided tutorial experience, the synthetic walkthrough board, and the polished admin-to-board onboarding flow to the public line.
+- After `v1.3.0`, ongoing development continues from `1.3.1-dev` until the next stable release is intentionally cut.
 
 ## Development Practice Decisions
 
