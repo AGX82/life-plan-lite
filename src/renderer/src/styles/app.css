@@ -773,6 +773,12 @@ td {
     0 0 0 1px rgba(52, 213, 29, 0.24) inset,
     0 0 26px rgba(52, 213, 29, 0.14);
   pointer-events: none;
+  transition:
+    top 220ms ease,
+    left 220ms ease,
+    width 220ms ease,
+    height 220ms ease,
+    box-shadow 220ms ease;
 }
 
 .tutorial-card {
@@ -781,11 +787,23 @@ td {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   background:
-    linear-gradient(180deg, rgba(23, 28, 31, 0.97), rgba(12, 17, 20, 0.97)),
-    var(--color-panel-deep);
+     linear-gradient(180deg, rgba(23, 28, 31, 0.97), rgba(12, 17, 20, 0.97)),
+     var(--color-panel-deep);
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.55);
   overflow: hidden;
   pointer-events: auto;
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+  transition:
+    top 220ms ease,
+    left 220ms ease,
+    opacity 160ms ease,
+    transform 220ms ease;
+}
+
+.tutorial-card.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 .tutorial-card-body {
@@ -3655,6 +3673,10 @@ input[type="checkbox"] {
 .modal-header h3,
 .modal-body p {
   margin: 0;
+}
+
+.message-modal .modal-body p {
+  white-space: pre-line;
 }
 
 .modal-body {

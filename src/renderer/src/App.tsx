@@ -128,6 +128,11 @@ type TutorialTargetId =
   | 'tree'
   | 'edit-panel'
   | 'list-editor-tabs'
+  | 'list-tab-properties'
+  | 'list-tab-structure'
+  | 'list-tab-contents'
+  | 'list-tab-settings'
+  | 'list-tab-summary'
   | 'live-layout'
   | 'app-settings'
   | 'display-target'
@@ -139,6 +144,7 @@ type TutorialStep = {
   title: string
   body: string
   selection?: SelectedNode
+  activateTarget?: boolean
 }
 
 const columnTypes: ColumnType[] = ['text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink']
@@ -225,6 +231,8 @@ type WizardGrid = { x: number; y: number; w: number; h: number }
 type WizardLayoutPlan = {
   listGrids: Map<string, WizardGrid>
   widgetGrids: Map<string, WizardGrid>
+  unplacedListIds: string[]
+  unplacedWidgetIds: string[]
 }
 type WizardData = {
   mode: WizardMode
@@ -399,6 +407,7 @@ export function App(): ReactElement {
   }
 
   async function applyWizard(data: WizardData): Promise<BoardSnapshot | undefined> {
+    let hiddenDisplayNames: string[] = []
     const result = await runAction(async () => {
       const baseSnapshot = snapshot
       if (!baseSnapshot) throw new Error('No board is available for the wizard setup.')
@@ -448,6 +457,7 @@ export function App(): ReactElement {
               ]
             : []
         const layoutPlan = planWizardBoardLayout(data.listDrafts, data.widgets, baseOccupied)
+        const hiddenNames: string[] = []
         const listLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['lists'] = []
         const widgetLayoutUpdates: Parameters<typeof window.lpl.updateBoardLayouts>[0]['widgets'] = []
 
@@ -466,6 +476,7 @@ export function App(): ReactElement {
           if (updatedList) {
             const plannedGrid = layoutPlan.listGrids.get(draft.id)
             if (plannedGrid) listLayoutUpdates.push({ listId: updatedList.id, grid: plannedGrid })
+            else if (draft.displayEnabled && layoutPlan.unplacedListIds.includes(draft.id)) hiddenNames.push(updatedList.name)
             if (data.useStoreList && draft.templateType === 'shopping_list') {
               const storeColumn = updatedList.columns.find((column) => normalizeColumnName(column.name) === 'store')
               const storeOptions = wizardStoreOptions(data.storeText)
@@ -516,6 +527,7 @@ export function App(): ReactElement {
           })
           const plannedGrid = layoutPlan.widgetGrids.get(widgetDraft.id)
           if (plannedGrid) widgetLayoutUpdates.push({ widgetId: createdWidget.id, grid: plannedGrid })
+          else if (widgetDraft.displayEnabled && layoutPlan.unplacedWidgetIds.includes(widgetDraft.id)) hiddenNames.push(widgetDraft.name)
         }
 
         if (listLayoutUpdates.length > 0 || widgetLayoutUpdates.length > 0) {
@@ -530,6 +542,7 @@ export function App(): ReactElement {
         }
 
         await window.lpl.updateAppSettings({ ...appSettings, wizardCompleted: true })
+        hiddenDisplayNames = hiddenNames
         return nextSnapshot
       } catch (error) {
         if (createdBoardId) {
@@ -548,6 +561,15 @@ export function App(): ReactElement {
       editingBoardId.current = result.id
       setSelectedNode({ kind: 'board', id: result.id })
       if ((data.mode === 'firstRun' || data.mode === 'reset') && !appSettings.tutorialCompleted) setLaunchTutorialAfterWizard(true)
+      if (hiddenDisplayNames.length > 0) {
+        setMessageDialog({
+          title: 'Some items were created but not displayed',
+          message:
+            "The LPL Wizard couldn't resolve a suitable layout configuration given your list & widgets selection. Your lists and widgets have been created, but the following are not currently displayed:\n\n" +
+            hiddenDisplayNames.map((name) => `- ${name}`).join('\n') +
+            '\n\nUse the live layout to reorganize the board and spaces, and you can change their visibility back on from the edit panel - List Structure.'
+        })
+      }
       setWizardOpen(true)
       return result
     }
@@ -1458,6 +1480,7 @@ function GuidedTutorial({
   const steps = tutorialSteps(snapshot)
   const [stepIndex, setStepIndex] = useState(0)
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
+  const [cardVisible, setCardVisible] = useState(false)
   const step = steps[Math.min(stepIndex, steps.length - 1)]
 
   useEffect(() => {
@@ -1471,6 +1494,12 @@ function GuidedTutorial({
   }, [onClose, stepIndex, steps.length])
 
   useEffect(() => {
+    setCardVisible(false)
+    const timer = window.setTimeout(() => setCardVisible(true), 220)
+    return () => window.clearTimeout(timer)
+  }, [stepIndex])
+
+  useEffect(() => {
     if (!step) return
     if (step.selection && !sameSelectedNode(selectedNode, step.selection)) {
       setSelectedNode(step.selection)
@@ -1482,6 +1511,7 @@ function GuidedTutorial({
         setTargetRect(null)
         return
       }
+      if (step.activateTarget && target instanceof HTMLButtonElement) target.click()
       target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
       setTargetRect(target.getBoundingClientRect())
     }
@@ -1499,7 +1529,7 @@ function GuidedTutorial({
   if (!step) {
     return (
       <div className="tutorial-overlay" role="presentation">
-        <section aria-modal="true" className="tutorial-card" role="dialog">
+        <section aria-modal="true" className="tutorial-card visible" role="dialog">
           <div className="tutorial-card-body">
             <p className="eyebrow">Tutorial</p>
             <h3>Nothing to show yet</h3>
@@ -1523,7 +1553,7 @@ function GuidedTutorial({
         <div className="tutorial-mask" key={index} style={style} />
       ))}
       {highlightStyle && <div className="tutorial-highlight" style={highlightStyle} />}
-      <section aria-modal="true" className="tutorial-card" role="dialog" style={cardStyle}>
+      <section aria-modal="true" className={cardVisible ? 'tutorial-card visible' : 'tutorial-card'} role="dialog" style={cardStyle}>
         <div className="tutorial-card-body">
           <p className="eyebrow">Tutorial</p>
           <div className="tutorial-progress">
@@ -1588,9 +1618,56 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
       targetId: 'list-editor-tabs',
       title: 'Lists are configured in layers',
       body:
-        'List Properties sets behavior and board visibility. List Structure controls fields and summaries. List Contents is where items and groups are added and managed.',
+        'Each list has five tabs. Together they define how the list behaves, which fields it uses, what content it holds, and what summaries it reports.',
       selection: { kind: 'list', id: firstList.id }
     })
+    steps.push(
+      {
+        id: 'list-tab-properties',
+        targetId: 'list-tab-properties',
+        title: 'List Properties sets the operating rules',
+        body:
+          'This is where you name the list, choose the template, control board visibility, enable deadlines, and set the main size and placement defaults.',
+        selection: { kind: 'list', id: firstList.id },
+        activateTarget: true
+      },
+      {
+        id: 'list-tab-structure',
+        targetId: 'list-tab-structure',
+        title: 'List Structure defines the fields',
+        body:
+          'Use this tab to show or hide columns, change field types, decide which ones are required, and control the order in which fields appear on the board.',
+        selection: { kind: 'list', id: firstList.id },
+        activateTarget: true
+      },
+      {
+        id: 'list-tab-contents',
+        targetId: 'list-tab-contents',
+        title: 'List Contents is where the entries live',
+        body:
+          'Add items and groups here, then edit or reorganize the actual content of the list. This is the working area for day-to-day data inside that list.',
+        selection: { kind: 'list', id: firstList.id },
+        activateTarget: true
+      },
+      {
+        id: 'list-tab-settings',
+        targetId: 'list-tab-settings',
+        title: 'List Settings handles behavior details',
+        body:
+          'This tab is for the list-level options that shape how entries behave, which includes template-specific controls and automation-related settings.',
+        selection: { kind: 'list', id: firstList.id },
+        activateTarget: true
+      },
+      {
+        id: 'list-tab-summary',
+        targetId: 'list-tab-summary',
+        title: 'List Summary controls what the list reports',
+        body:
+          'Define the summary values shown for the list here, like counts, totals, or deadline-oriented rollups. These summaries also feed into board-level reporting.',
+        selection: { kind: 'list', id: firstList.id },
+        activateTarget: true
+      }
+    )
   }
 
   steps.push(
@@ -2967,19 +3044,44 @@ function ListEditorPanel({
     <div className="editor-tabbed editor-tabbed-list">
       <div className="editor-tabbar">
         <div className="editor-tab-buttons">
-          <button className={activeTab === 'properties' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('properties')} type="button">
+          <button
+            className={activeTab === 'properties' ? 'editor-tab active' : 'editor-tab'}
+            data-tutorial-id="list-tab-properties"
+            onClick={() => setActiveTab('properties')}
+            type="button"
+          >
             List Properties
           </button>
-          <button className={activeTab === 'structure' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('structure')} type="button">
+          <button
+            className={activeTab === 'structure' ? 'editor-tab active' : 'editor-tab'}
+            data-tutorial-id="list-tab-structure"
+            onClick={() => setActiveTab('structure')}
+            type="button"
+          >
             List Structure
           </button>
-          <button className={activeTab === 'contents' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('contents')} type="button">
+          <button
+            className={activeTab === 'contents' ? 'editor-tab active' : 'editor-tab'}
+            data-tutorial-id="list-tab-contents"
+            onClick={() => setActiveTab('contents')}
+            type="button"
+          >
             List Contents
           </button>
-          <button className={activeTab === 'settings' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('settings')} type="button">
+          <button
+            className={activeTab === 'settings' ? 'editor-tab active' : 'editor-tab'}
+            data-tutorial-id="list-tab-settings"
+            onClick={() => setActiveTab('settings')}
+            type="button"
+          >
             List Settings
           </button>
-          <button className={activeTab === 'summary' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('summary')} type="button">
+          <button
+            className={activeTab === 'summary' ? 'editor-tab active' : 'editor-tab'}
+            data-tutorial-id="list-tab-summary"
+            onClick={() => setActiveTab('summary')}
+            type="button"
+          >
             List Summary
           </button>
         </div>
@@ -8245,6 +8347,8 @@ function planWizardBoardLayout(listDrafts: WizardListDraft[], widgets: WizardWid
   const occupied: WizardGrid[] = [...baseOccupied]
   const listGrids = new Map<string, WizardGrid>()
   const widgetGrids = new Map<string, WizardGrid>()
+  const unplacedListIds: string[] = []
+  const unplacedWidgetIds: string[] = []
 
   const listElements: ListLayoutElement[] = visibleLists.map((draft) => ({
     id: draft.id,
@@ -8265,33 +8369,45 @@ function planWizardBoardLayout(listDrafts: WizardListDraft[], widgets: WizardWid
 
   for (const entry of todoLists) {
     const placement = placeWizardElement(entry.sizes, occupied, widgetStripWidth > 0 ? 'left' : 'full', 'left')
-    if (!placement) throw new Error('There is not enough board space to place the selected To Do lists. Hide one or more items or reduce the number of widgets.')
+    if (!placement) {
+      unplacedListIds.push(entry.id)
+      continue
+    }
     occupied.push(placement)
     listGrids.set(entry.id, placement)
   }
 
   for (const entry of widgetElements) {
     const placement = placeWizardElement([entry.size], occupied, 'right', 'right')
-    if (!placement) throw new Error('There is not enough space in the board widget area. Hide one or more widgets or reduce the number of visible lists.')
+    if (!placement) {
+      unplacedWidgetIds.push(entry.id)
+      continue
+    }
     occupied.push(placement)
     widgetGrids.set(entry.id, placement)
   }
 
   for (const entry of fixedLists) {
     const placement = placeWizardElement(entry.sizes, occupied, widgetStripWidth > 0 ? 'left' : 'full', 'left')
-    if (!placement) throw new Error('There is not enough board space for the selected visible lists and widgets. Hide one or more items, or reduce the number of widgets.')
+    if (!placement) {
+      unplacedListIds.push(entry.id)
+      continue
+    }
     occupied.push(placement)
     listGrids.set(entry.id, placement)
   }
 
   for (const entry of flexLists) {
     const placement = placeWizardElement(entry.sizes, occupied, widgetStripWidth > 0 ? 'left' : 'full', 'left')
-    if (!placement) throw new Error('There is not enough board space for the selected visible lists and widgets. Hide one or more items, or reduce the number of widgets.')
+    if (!placement) {
+      unplacedListIds.push(entry.id)
+      continue
+    }
     occupied.push(placement)
     listGrids.set(entry.id, placement)
   }
 
-  return { listGrids, widgetGrids }
+  return { listGrids, widgetGrids, unplacedListIds, unplacedWidgetIds }
 }
 
 function placeWizardElement(
