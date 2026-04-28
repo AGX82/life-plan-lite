@@ -692,8 +692,26 @@ td {
   grid-template-columns: 1fr;
 }
 
-.wizard-skip {
+.wizard-footer-left,
+.wizard-footer-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.wizard-footer-right {
   justify-self: end;
+}
+
+.wizard-back {
+  border: 0;
+  background: transparent;
+  color: rgba(244, 251, 255, 0.62);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.wizard-skip {
   border: 0;
   background: transparent;
   color: rgba(244, 251, 255, 0.52);

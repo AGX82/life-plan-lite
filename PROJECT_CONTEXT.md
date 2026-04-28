@@ -217,6 +217,9 @@ Date: 2026-04-27
 - Tutorial movement should feel fluid: the spotlight should animate between targets and the explanation card should fade in after the spotlight completes its move.
 - Tutorial pacing should stay relaxed rather than snappy; spotlight motion and card fade timing should err slightly slower if needed for readability.
 - For list-tab tutorial steps, the spotlight should frame the active tab content, not just the tab label, so the user can connect the explanation with the visible controls.
+- Wizard pages after the first should provide a Back action in the footer, aligned to the left side of the active content area, while Skip/Next remain on the right.
+- In reset mode, the first wizard page after the destructive reset is confirmed should expose a direct `Close Wizard` action in the footer so the user can immediately leave the app empty without extra modal steps.
+- When closing the wizard after a confirmed reset, admin mode should force a fresh board reload before dismissing the wizard so stale pre-reset content cannot linger on screen.
 
 ## Packaging Decisions
 
@@ -244,7 +247,7 @@ Date: 2026-04-27
 - Hotfix releases should be published with explicit patch notes that call out the user-facing regressions they fix, especially when the affected flow is startup/onboarding.
 - After `v1.0.1` is tagged and published, ongoing work resumes from `1.1.0-dev`.
 - During active post-release stabilization, the development version should advance with meaningful behavior or critical-fix checkpoints so local builds and packaged test executables are easy to distinguish.
-- The current post-`v1.0.1` stabilization line continues from `1.1.3-dev`.
+- The current post-`v1.0.1` stabilization line continues from `1.1.4-dev`.
 
 ## Development Practice Decisions
 

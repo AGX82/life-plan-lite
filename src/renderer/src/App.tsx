@@ -391,6 +391,7 @@ export function App(): ReactElement {
       return
     }
     if (mode === 'reset') {
+      await load('admin', editingBoardId.current)
       setWizardOpen(false)
       return
     }
@@ -1113,6 +1114,11 @@ function ConfigurationWizard({
     if (nextStep) setStep(nextStep)
   }
 
+  function goBack(): void {
+    const previousStep = steps[currentStepIndex - 1]
+    if (previousStep) setStep(previousStep)
+  }
+
   const backplate = (
     <div className="wizard-brand-panel">
       <img alt="Life Plan Lite" className="wizard-logo" src={lplLogo} />
@@ -1409,7 +1415,7 @@ function ConfigurationWizard({
                 <div className="wizard-done-actions">
                   <p>Before closing, do you want to create one more board now?</p>
                   <button className="icon-button" disabled={busy} onClick={resetForAnotherBoard} type="button">Let&apos;s build one more board</button>
-                  <button className="primary-button" disabled={busy} onClick={onClose} type="button">Let&apos;s get Life <span>Planning</span>!</button>
+                  <button className="primary-button" disabled={busy} onClick={onClose} type="button">Let&apos;s get Life <span>Planning!</span></button>
                 </div>
               </section>
             )}
@@ -1422,12 +1428,23 @@ function ConfigurationWizard({
         )}
         {step !== 'done' && step !== 'mode' && (
           <footer className="wizard-footer">
-            <button className="wizard-skip" disabled={busy} onClick={() => setSkipDialogOpen(true)} type="button">Skip Configuration Wizard</button>
-            {step === 'widgets' ? (
-              <button className="primary-button wizard-next" disabled={busy} onClick={() => void finishWizard()} type="button">Finish</button>
-            ) : (
-              <button className="primary-button wizard-next" disabled={busy} onClick={goNext} type="button">Next</button>
-            )}
+            <div className="wizard-footer-left">
+              {mode === 'reset' && resetPrepared && step === 'welcome' ? (
+                <button className="icon-button wizard-back" disabled={busy} onClick={() => void onMarkComplete(mode)} type="button">Close Wizard</button>
+              ) : currentStepIndex > 0 ? (
+                <button className="wizard-back" disabled={busy} onClick={goBack} type="button">Back</button>
+              ) : (
+                <span />
+              )}
+            </div>
+            <div className="wizard-footer-right">
+              <button className="wizard-skip" disabled={busy} onClick={() => setSkipDialogOpen(true)} type="button">Skip Configuration Wizard</button>
+              {step === 'widgets' ? (
+                <button className="primary-button wizard-next" disabled={busy} onClick={() => void finishWizard()} type="button">Finish</button>
+              ) : (
+                <button className="primary-button wizard-next" disabled={busy} onClick={goNext} type="button">Next</button>
+              )}
+            </div>
           </footer>
         )}
       </div>
