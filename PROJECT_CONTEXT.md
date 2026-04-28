@@ -220,6 +220,7 @@ Date: 2026-04-27
 - The tutorial should darken the surrounding workspace enough to create focus, but not so much that the broader interface context disappears. Users should still be able to form mental anchors against the rest of the screen.
 - Tutorial transitions should follow a calm sequence: fade out the current explanation card, move/resize the spotlight, then fade in the next explanation card.
 - Consecutive list-tab tutorial steps should behave like content swaps inside the same frame: keep the spotlight and card placement stable, and change the explanation without an obvious jump.
+- The tutorial should explicitly signal the handoff from admin/editor mode to the live board view. Before the board-level callouts begin, show the full board unobstructed with a centered overlay that explains the board is the primary day-to-day workspace, while the editor remains for one-time setup and occasional structural changes.
 - Wizard pages after the first should provide a Back action in the footer, aligned to the left side of the active content area, while Skip/Next remain on the right.
 - In reset mode, the first wizard page after the destructive reset is confirmed should expose a direct `Close Wizard` action in the footer so the user can immediately leave the app empty without extra modal steps.
 - When closing the wizard after a confirmed reset, admin mode should force a fresh board reload before dismissing the wizard so stale pre-reset content cannot linger on screen.
@@ -255,6 +256,7 @@ Date: 2026-04-27
 - `v1.2.0` is the first minor release after the initial stabilization cycle. It promotes the configuration wizard, tutorial, reset flow, and wizard-driven layout behavior to the stable line.
 - After `v1.2.0`, ongoing development should stay on a `1.2.x-dev` line until the scope of upcoming work clearly justifies the next minor release as `1.3.0`.
 - The current post-`v1.2.0` development line continues from `1.2.1-dev`.
+- `v1.3.0` is the next stable minor release and promotes the refined guided tutorial experience, the synthetic walkthrough board, and the polished admin-to-board onboarding flow to the public line.
 
 ## Development Practice Decisions
 

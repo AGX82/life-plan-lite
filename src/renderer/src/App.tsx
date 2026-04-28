@@ -143,6 +143,7 @@ type TutorialTargetId =
   | 'theme-select'
   | 'display-target'
   | 'board-display-actions'
+  | 'view-here-action'
   | 'display-top-band'
   | 'display-summary-row'
   | 'display-day-actions'
@@ -162,6 +163,8 @@ type TutorialStep = {
   selection?: SelectedNode
   activateTarget?: boolean
   clickTargetId?: TutorialTargetId
+  maskless?: boolean
+  centerCard?: boolean
 }
 
 type TutorialSession = {
@@ -682,6 +685,7 @@ export function App(): ReactElement {
       appThemeClass={currentThemeClass}
       previewSnapshot={effectivePreviewSnapshot}
       runAction={tutorialOpen ? tutorialRunAction : runAction}
+      tutorialMode={tutorialOpen}
       wizardOpen={wizardOpen}
       onSelectBoard={(boardId) => {
         if (tutorialSession) {
@@ -749,6 +753,7 @@ function AdminApp({
   globalMessageDialog,
   previewSnapshot,
   runAction,
+  tutorialMode,
   wizardOpen,
   onSelectBoard,
   onApplyWizard,
@@ -771,6 +776,7 @@ function AdminApp({
   globalMessageDialog: { title: string; message: string } | null
   previewSnapshot: BoardSnapshot
   runAction: RunAction
+  tutorialMode: boolean
   wizardOpen: boolean
   onSelectBoard: (boardId: string) => void
   onApplyWizard: (data: WizardData) => Promise<BoardSnapshot | undefined>
@@ -848,9 +854,15 @@ function AdminApp({
             <BookOpenText size={18} />
             Tutorial
           </button>
-          <div data-tutorial-id="board-display-actions">
+          <div className="side-action-group" data-tutorial-id="board-display-actions">
             <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
-            <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
+            <button
+              className="icon-button wide"
+              data-tutorial-id="view-here-action"
+              onClick={() => {
+                if (!tutorialMode) window.location.hash = '/display'
+              }}
+            >
               <ExternalLink size={18} />
               View Here
             </button>
@@ -1570,6 +1582,7 @@ function GuidedTutorial({
   const [contentStepIndex, setContentStepIndex] = useState(0)
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
   const [cardVisible, setCardVisible] = useState(false)
+  const [contentMasked, setContentMasked] = useState(false)
   const activeStep = steps[Math.min(activeStepIndex, steps.length - 1)]
   const contentStep = steps[Math.min(contentStepIndex, steps.length - 1)]
   const timers = useRef<number[]>([])
@@ -1594,16 +1607,18 @@ function GuidedTutorial({
     const sameFrame = currentStep.scene === nextStep.scene && currentStep.targetId === nextStep.targetId
     clearTimers()
     setCardVisible(false)
+    if (!sameFrame) setContentMasked(true)
     queueTimer(() => {
       setActiveStepIndex(nextIndex)
       queueTimer(
         () => {
           setContentStepIndex(nextIndex)
+          if (!sameFrame) setContentMasked(false)
           setCardVisible(true)
         },
-        sameFrame ? 220 : 660
+        sameFrame ? 180 : 460
       )
-    }, 260)
+    }, 180)
   }
 
   useEffect(() => {
@@ -1618,7 +1633,8 @@ function GuidedTutorial({
 
   useEffect(() => {
     setCardVisible(false)
-    queueTimer(() => setCardVisible(true), 620)
+    setContentMasked(false)
+    queueTimer(() => setCardVisible(true), 420)
     return clearTimers
   }, [])
 
@@ -1644,7 +1660,7 @@ function GuidedTutorial({
       setTargetRect(target.getBoundingClientRect())
     }
 
-    const timer = window.setTimeout(updateTarget, activeStep.scene === scene ? 260 : 360)
+    const timer = window.setTimeout(updateTarget, activeStep.scene === scene ? 40 : 120)
     window.addEventListener('resize', updateTarget)
     window.addEventListener('scroll', updateTarget, true)
     return () => {
@@ -1671,15 +1687,16 @@ function GuidedTutorial({
     )
   }
 
-  const highlightStyle = tutorialHighlightStyle(targetRect)
-  const cardStyle = tutorialCardStyle(targetRect)
-  const maskStyles = tutorialMaskStyles(targetRect)
+  const highlightStyle = activeStep.maskless ? undefined : tutorialHighlightStyle(targetRect)
+  const cardStyle = tutorialCardStyle(targetRect, contentStep.centerCard ?? false)
+  const maskStyles = activeStep.maskless ? [] : tutorialMaskStyles(targetRect)
 
   return (
     <div className="tutorial-overlay" role="presentation">
       {maskStyles.map((style, index) => (
         <div className="tutorial-mask" key={index} style={style} />
       ))}
+      <div className={contentMasked ? 'tutorial-transition-shroud visible' : 'tutorial-transition-shroud'} />
       {highlightStyle && <div className="tutorial-highlight" style={highlightStyle} />}
       <section aria-modal="true" className={cardVisible ? 'tutorial-card visible' : 'tutorial-card'} role="dialog" style={cardStyle}>
         <div className="tutorial-card-body">
@@ -1878,6 +1895,26 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
         'Show Board opens the board window on the selected display. Hide Board closes that display window. View Here opens the same board view inside this window so you can inspect the board locally.'
     },
     {
+      id: 'display-intro',
+      scene: 'admin',
+      targetId: 'board-display-actions',
+      title: "Let's step into the live board",
+      body:
+        'When you are ready to leave setup behind, View Here opens the actual board inside this window. That is the same live surface you will use day to day.',
+      activateTarget: true,
+      clickTargetId: 'view-here-action'
+    },
+    {
+      id: 'display-board-intro',
+      scene: 'display',
+      targetId: 'display-board-shell',
+      title: 'This is the board you will actually live in',
+      body:
+        'This is the main working surface of Life Plan Lite. The editor is there to help you set up structure and make occasional deeper changes, but most of the time this live board is where you will review, update, and move your planning forward.',
+      maskless: true,
+      centerCard: true
+    },
+    {
       id: 'display-summary-row',
       scene: 'display',
       targetId: 'display-summary-row',
@@ -1954,10 +1991,10 @@ function tutorialHighlightStyle(rect: DOMRect | null): CSSProperties | undefined
   }
 }
 
-function tutorialCardStyle(rect: DOMRect | null): CSSProperties {
+function tutorialCardStyle(rect: DOMRect | null, centerCard = false): CSSProperties {
   const cardWidth = Math.min(380, window.innerWidth - 32)
   const cardHeight = 270
-  if (!rect) {
+  if (centerCard || !rect) {
     return {
       top: Math.max(24, Math.round((window.innerHeight - cardHeight) / 2)),
       left: Math.max(16, Math.round((window.innerWidth - cardWidth) / 2)),
@@ -2292,98 +2329,101 @@ function NavigationTree({
           </div>
         )}
       </div>
-      <div className="tree-section-row" data-tutorial-id="tree-lists-section">
-        <p className="list-section-label">Lists in this board:</p>
-        <button
-          className="mini-button tree-action-button"
-          onClick={onRequestNewList}
-          type="button"
-        >
-          <List size={13} />
-          New List
-        </button>
-      </div>
-
       <div className="tree-pane-main">
-        <div className="tree-list-scroll">
-          <div className="tree-children">
-            {snapshot.lists.map((list) => {
-              const expanded = expandedLists[list.id] ?? true
-              return (
-                <div className="tree-group list-tree-card" key={list.id}>
-                  <button
-                    className={nodeClass(selectedNode, { kind: 'list', id: list.id })}
-                    onClick={() => setSelectedNode({ kind: 'list', id: list.id })}
-                    onContextMenu={(event) => openContext(event, { kind: 'list', id: list.id })}
-                  >
-                    <span
-                      className="tree-expander"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setExpandedLists((current) => ({ ...current, [list.id]: !expanded }))
-                      }}
+        <div className="tree-section-block" data-tutorial-id="tree-lists-section">
+          <div className="tree-section-row">
+            <p className="list-section-label">Lists in this board:</p>
+            <button
+              className="mini-button tree-action-button"
+              onClick={onRequestNewList}
+              type="button"
+            >
+              <List size={13} />
+              New List
+            </button>
+          </div>
+          <div className="tree-list-scroll">
+            <div className="tree-children">
+              {snapshot.lists.map((list) => {
+                const expanded = expandedLists[list.id] ?? true
+                return (
+                  <div className="tree-group list-tree-card" key={list.id}>
+                    <button
+                      className={nodeClass(selectedNode, { kind: 'list', id: list.id })}
+                      onClick={() => setSelectedNode({ kind: 'list', id: list.id })}
+                      onContextMenu={(event) => openContext(event, { kind: 'list', id: list.id })}
                     >
-                      {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    </span>
-                    <span>
-                      {list.name}: {list.items.length} open items
-                    </span>
-                    {list.dueDateEnabled && nextDueLabel(list)}
-                  </button>
-                  {expanded && (
-                    <div className="tree-children groups">
-                      {list.groups.filter((group) => !group.parentGroupId).map((group) => renderGroupNode(group, list))}
-                      <div className="tree-children items root-items">{list.items.filter((item) => !item.groupId).map((item) => itemNode(item, list))}</div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+                      <span
+                        className="tree-expander"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setExpandedLists((current) => ({ ...current, [list.id]: !expanded }))
+                        }}
+                      >
+                        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </span>
+                      <span>
+                        {list.name}: {list.items.length} open items
+                      </span>
+                      {list.dueDateEnabled && nextDueLabel(list)}
+                    </button>
+                    {expanded && (
+                      <div className="tree-children groups">
+                        {list.groups.filter((group) => !group.parentGroupId).map((group) => renderGroupNode(group, list))}
+                        <div className="tree-children items root-items">{list.items.filter((item) => !item.groupId).map((item) => itemNode(item, list))}</div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
-        <div className="tree-section-row tree-widget-section-header" data-tutorial-id="tree-widgets-section">
-          <p className="list-section-label widget-section-label">Widgets in this board:</p>
-          <button
-            className="mini-button tree-action-button"
-            onClick={async () => {
-              const result = await runAction(() =>
-                window.lpl.createWidget({
-                  boardId: snapshot.id,
-                  type: 'clock',
-                  name: 'New Widget'
-                })
-              )
-              if (result && 'lists' in result) {
-                const created = newestWidget(result)
-                if (created) setSelectedNode({ kind: 'widget', id: created.id })
-              }
-            }}
-            type="button"
-          >
-            <LayoutGrid size={13} />
-            New Widget
-          </button>
-        </div>
-        <div className="tree-widget-scroll">
-          <div className="tree-widget-grid">
-            {snapshot.widgets.map((widget) => {
-              const widgetMeta = widgetTypes.find((entry) => entry.value === widget.type)
-              const WidgetIcon = widgetMeta?.icon ?? Clock3
-              return (
-                <button
-                  className={nodeClass(selectedNode, { kind: 'widget', id: widget.id })}
-                  key={widget.id}
-                  onClick={() => setSelectedNode({ kind: 'widget', id: widget.id })}
-                  onContextMenu={(event) => openContext(event, { kind: 'widget', id: widget.id })}
-                >
-                  <span className="widget-node-label">
-                    <WidgetIcon size={14} />
-                    {widget.name}
-                  </span>
-                  <small>{widgetMeta?.label ?? 'Widget'}</small>
-                </button>
-              )
-            })}
+        <div className="tree-section-block tree-widget-section-block" data-tutorial-id="tree-widgets-section">
+          <div className="tree-section-row tree-widget-section-header">
+            <p className="list-section-label widget-section-label">Widgets in this board:</p>
+            <button
+              className="mini-button tree-action-button"
+              onClick={async () => {
+                const result = await runAction(() =>
+                  window.lpl.createWidget({
+                    boardId: snapshot.id,
+                    type: 'clock',
+                    name: 'New Widget'
+                  })
+                )
+                if (result && 'lists' in result) {
+                  const created = newestWidget(result)
+                  if (created) setSelectedNode({ kind: 'widget', id: created.id })
+                }
+              }}
+              type="button"
+            >
+              <LayoutGrid size={13} />
+              New Widget
+            </button>
+          </div>
+          <div className="tree-widget-scroll">
+            <div className="tree-widget-grid">
+              {snapshot.widgets.map((widget) => {
+                const widgetMeta = widgetTypes.find((entry) => entry.value === widget.type)
+                const WidgetIcon = widgetMeta?.icon ?? Clock3
+                return (
+                  <button
+                    className={nodeClass(selectedNode, { kind: 'widget', id: widget.id })}
+                    key={widget.id}
+                    onClick={() => setSelectedNode({ kind: 'widget', id: widget.id })}
+                    onContextMenu={(event) => openContext(event, { kind: 'widget', id: widget.id })}
+                  >
+                    <span className="widget-node-label">
+                      <WidgetIcon size={14} />
+                      {widget.name}
+                    </span>
+                    <small>{widgetMeta?.label ?? 'Widget'}</small>
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -8781,63 +8821,132 @@ function createTutorialBoards(snapshot: BoardSnapshot): BoardSummary[] {
 function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
   const boardId = 'tutorial-board'
   const todoListId = 'tutorial-list-todo'
+  const workListId = 'tutorial-list-work'
   const shoppingListId = 'tutorial-list-shopping'
+  const travelListId = 'tutorial-list-travel'
+  const birthdayListId = 'tutorial-list-birthdays'
   const todoGroupId = 'tutorial-group-week'
-  const todoColumns: ListColumn[] = [
-    tutorialColumn(todoListId, 'todo-col-title', 'Task Name', 'text', 1, {
-      listSummaryEligible: true,
-      boardSummaryEligible: true,
-      showOnBoard: true
-    }),
-    tutorialColumn(todoListId, 'todo-col-deadline', 'Deadline', 'date', 2, {
-      listSummaryEligible: true,
-      boardSummaryEligible: true,
-      role: 'deadline',
-      showOnBoard: true
-    }),
-    tutorialColumn(todoListId, 'todo-col-priority', 'Priority', 'choice', 3, {
-      showOnBoard: true,
-      choiceConfig: {
-        selection: 'single',
-        ranked: true,
-        options: [
-          { id: 'p1', label: 'High', rank: 1 },
-          { id: 'p2', label: 'Medium', rank: 2 },
-          { id: 'p3', label: 'Low', rank: 3 }
-        ]
-      }
-    }),
-    tutorialColumn(todoListId, 'todo-col-effort', 'Effort', 'duration', 4, {
-      listSummaryEligible: true,
-      boardSummaryEligible: true,
-      showOnBoard: true,
-      durationDisplayFormat: 'hours'
-    }),
-    tutorialColumn(todoListId, 'todo-col-progress', '% Done', 'integer', 5, { showOnBoard: true }),
-    tutorialColumn(todoListId, 'todo-col-people', 'People', 'text', 6, { showOnBoard: false }),
-    tutorialColumn(todoListId, 'todo-col-details', 'Details', 'text', 7, { showOnBoard: false })
-  ]
+  const workGroupId = 'tutorial-group-work'
+
+  function createTodoColumns(listId: string, prefix: string): ListColumn[] {
+    return [
+      tutorialColumn(listId, `${prefix}-col-title`, 'Task Name', 'text', 1, {
+        listSummaryEligible: true,
+        boardSummaryEligible: true,
+        showOnBoard: true
+      }),
+      tutorialColumn(listId, `${prefix}-col-deadline`, 'Deadline', 'date', 2, {
+        listSummaryEligible: true,
+        boardSummaryEligible: true,
+        role: 'deadline',
+        showOnBoard: true
+      }),
+      tutorialColumn(listId, `${prefix}-col-priority`, 'Priority', 'choice', 3, {
+        showOnBoard: true,
+        choiceConfig: {
+          selection: 'single',
+          ranked: true,
+          options: [
+            { id: `${prefix}-p1`, label: 'High', rank: 1 },
+            { id: `${prefix}-p2`, label: 'Medium', rank: 2 },
+            { id: `${prefix}-p3`, label: 'Low', rank: 3 }
+          ]
+        }
+      }),
+      tutorialColumn(listId, `${prefix}-col-effort`, 'Effort', 'duration', 4, {
+        listSummaryEligible: true,
+        boardSummaryEligible: true,
+        showOnBoard: true,
+        durationDisplayFormat: 'hours'
+      }),
+      tutorialColumn(listId, `${prefix}-col-progress`, '% Done', 'integer', 5, { showOnBoard: true }),
+      tutorialColumn(listId, `${prefix}-col-people`, 'People', 'text', 6, { showOnBoard: false }),
+      tutorialColumn(listId, `${prefix}-col-details`, 'Details', 'text', 7, { showOnBoard: false })
+    ]
+  }
+
+  const todoColumns: ListColumn[] = createTodoColumns(todoListId, 'todo')
+  const workColumns: ListColumn[] = createTodoColumns(workListId, 'work')
+
   const shoppingColumns: ListColumn[] = [
     tutorialColumn(shoppingListId, 'shop-col-product', 'Product', 'text', 1, { showOnBoard: true }),
     tutorialColumn(shoppingListId, 'shop-col-pieces', 'Pieces', 'integer', 2, { showOnBoard: true }),
-    tutorialColumn(shoppingListId, 'shop-col-store', 'Store', 'choice', 3, {
+    tutorialColumn(shoppingListId, 'shop-col-price', 'Price / pc', 'currency', 3, {
+      showOnBoard: true,
+      currencyCode: 'EUR'
+    }),
+    tutorialColumn(shoppingListId, 'shop-col-cost', 'Cost', 'currency', 4, {
+      showOnBoard: true,
+      currencyCode: 'EUR',
+      listSummaryEligible: true,
+      boardSummaryEligible: true
+    }),
+    tutorialColumn(shoppingListId, 'shop-col-store', 'Store', 'choice', 5, {
       showOnBoard: true,
       choiceConfig: {
         selection: 'single',
         ranked: false,
         options: [
           { id: 'store-1', label: 'Mega Market', rank: 1 },
-          { id: 'store-2', label: 'Pharmacy', rank: 2 }
+          { id: 'store-2', label: 'Farmer Market', rank: 2 },
+          { id: 'store-3', label: 'Corner Shop', rank: 3 }
         ]
       }
     }),
-    tutorialColumn(shoppingListId, 'shop-col-needed', 'Needed By', 'date', 4, {
+    tutorialColumn(shoppingListId, 'shop-col-needed', 'Needed By', 'date', 6, {
+      showOnBoard: true,
+      role: 'deadline'
+    })
+  ]
+
+  const travelColumns: ListColumn[] = [
+    tutorialColumn(travelListId, 'trip-col-topic', 'Topic / Theme', 'text', 1, {
+      listSummaryEligible: true,
+      boardSummaryEligible: true,
+      showOnBoard: true
+    }),
+    tutorialColumn(travelListId, 'trip-col-type', 'Type', 'choice', 2, {
+      showOnBoard: true,
+      choiceConfig: {
+        selection: 'single',
+        ranked: false,
+        options: [
+          { id: 'trip-type-personal', label: 'Personal Time', rank: 1 },
+          { id: 'trip-type-event', label: 'Event', rank: 2 },
+          { id: 'trip-type-work-trip', label: 'Work Trip', rank: 3 },
+          { id: 'trip-type-work-event', label: 'Work Event', rank: 4 },
+          { id: 'trip-type-other', label: 'Other', rank: 5 }
+        ]
+      }
+    }),
+    tutorialColumn(travelListId, 'trip-col-start', 'Start', 'date', 3, {
       showOnBoard: true,
       role: 'deadline'
     }),
-    tutorialColumn(shoppingListId, 'shop-col-cost', 'Cost', 'currency', 5, {
+    tutorialColumn(travelListId, 'trip-col-end', 'End', 'date', 4, {
       showOnBoard: true,
-      currencyCode: 'EUR'
+      dateDisplayFormat: 'date'
+    }),
+    tutorialColumn(travelListId, 'trip-col-location', 'Location', 'text', 5, {
+      showOnBoard: true
+    })
+  ]
+
+  const birthdayColumns: ListColumn[] = [
+    tutorialColumn(birthdayListId, 'birthday-col-name', 'Name', 'text', 1, {
+      listSummaryEligible: true,
+      boardSummaryEligible: true,
+      showOnBoard: true
+    }),
+    tutorialColumn(birthdayListId, 'birthday-col-birthday', 'Birthday', 'date', 2, {
+      showOnBoard: true,
+      role: 'deadline'
+    }),
+    tutorialColumn(birthdayListId, 'birthday-col-birth-year', 'Birth Year', 'integer', 3, {
+      showOnBoard: false
+    }),
+    tutorialColumn(birthdayListId, 'birthday-col-location', 'Location', 'text', 4, {
+      showOnBoard: false
     })
   ]
 
@@ -8856,7 +8965,7 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         templateType: 'todo',
         templateConfig: { behavior: 'tasks' },
         order: 1,
-        grid: { x: 1, y: 1, w: 12, h: 5 },
+        grid: { x: 1, y: 1, w: 6, h: 4 },
         dueDateEnabled: true,
         dueDateColumnId: 'todo-col-deadline',
         deadlineMandatory: false,
@@ -8897,27 +9006,101 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
             groupId: todoGroupId
           }),
           tutorialItem(todoListId, 'todo-item-2', 'T02', todoColumns, {
-            taskname: 'Buy groceries',
-            deadline: '2026-05-01',
-            priority: 'Medium',
-            effort: 30,
-            done: 0,
-            people: 'Home',
-            details: 'Quick stop after work.'
-          }, {
-            deadlineStatus: 'Today',
-            deadlineTone: 'urgent'
-          }),
-          tutorialItem(todoListId, 'todo-item-3', 'T03', todoColumns, {
             taskname: 'Schedule dentist visit',
             deadline: '2026-05-04',
-            priority: 'Low',
+            priority: 'Medium',
             effort: 15,
             done: 10,
             people: 'Andre',
             details: 'Find an afternoon slot.'
           }, {
             deadlineStatus: 'In 3 days',
+            deadlineTone: 'ok'
+          }),
+          tutorialItem(todoListId, 'todo-item-3', 'T03', todoColumns, {
+            taskname: 'Renew passport',
+            deadline: '2026-05-08',
+            priority: 'Low',
+            effort: 45,
+            done: 0,
+            people: 'Andre',
+            details: 'Fill in the online request and prepare the documents.'
+          }, {
+            deadlineStatus: 'Next week',
+            deadlineTone: 'ok'
+          })
+        ]
+      },
+      {
+        id: workListId,
+        boardId,
+        name: 'Work Priorities',
+        code: 'L02',
+        templateType: 'todo',
+        templateConfig: { behavior: 'tasks' },
+        order: 2,
+        grid: { x: 1, y: 5, w: 6, h: 4 },
+        dueDateEnabled: true,
+        dueDateColumnId: 'work-col-deadline',
+        deadlineMandatory: false,
+        columnSortOrder: 'default',
+        sortColumnId: 'work-col-priority',
+        sortDirection: 'asc',
+        displayEnabled: true,
+        showItemIdOnBoard: false,
+        showDependenciesOnBoard: false,
+        showCreatedAtOnBoard: false,
+        showCreatedByOnBoard: false,
+        showStatusOnBoard: true,
+        columns: workColumns,
+        groups: [
+          {
+            id: workGroupId,
+            listId: workListId,
+            parentGroupId: null,
+            name: 'This Sprint',
+            code: 'G01',
+            order: 1,
+            showIdOnBoard: false,
+            summaries: []
+          }
+        ],
+        items: [
+          tutorialItem(workListId, 'work-item-1', 'W01', workColumns, {
+            taskname: 'Finalize Q2 budget pack',
+            deadline: '2026-04-30',
+            priority: 'High',
+            effort: 120,
+            done: 70,
+            people: 'Finance',
+            details: 'Align the slides and validate the final figures before review.'
+          }, {
+            deadlineStatus: 'Today',
+            deadlineTone: 'urgent',
+            groupId: workGroupId
+          }),
+          tutorialItem(workListId, 'work-item-2', 'W02', workColumns, {
+            taskname: 'Prepare summit keynote',
+            deadline: '2026-05-03',
+            priority: 'High',
+            effort: 180,
+            done: 35,
+            people: 'Marketing',
+            details: 'Tighten the story arc and rehearse the opening sequence.'
+          }, {
+            deadlineStatus: 'In 2 days',
+            deadlineTone: 'soon'
+          }),
+          tutorialItem(workListId, 'work-item-3', 'W03', workColumns, {
+            taskname: 'Review vendor proposal',
+            deadline: '2026-05-06',
+            priority: 'Medium',
+            effort: 60,
+            done: 15,
+            people: 'Operations',
+            details: 'Compare the commercial terms and capture follow-up questions.'
+          }, {
+            deadlineStatus: 'In 5 days',
             deadlineTone: 'ok'
           })
         ]
@@ -8926,11 +9109,11 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         id: shoppingListId,
         boardId,
         name: 'Shopping List',
-        code: 'L02',
+        code: 'L03',
         templateType: 'shopping_list',
         templateConfig: { behavior: 'purchases' },
-        order: 2,
-        grid: { x: 1, y: 6, w: 8, h: 3 },
+        order: 3,
+        grid: { x: 7, y: 1, w: 6, h: 4 },
         dueDateEnabled: true,
         dueDateColumnId: 'shop-col-needed',
         deadlineMandatory: false,
@@ -8947,23 +9130,146 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         groups: [],
         items: [
           tutorialItem(shoppingListId, 'shop-item-1', 'S01', shoppingColumns, {
-            product: 'Coffee beans',
+            product: 'Milk',
             pieces: 2,
+            pricepc: 2.5,
+            cost: 5,
             store: 'Mega Market',
-            neededby: '2026-05-03',
-            cost: 28.5
+            neededby: '2026-05-01'
           }, {
-            deadlineStatus: 'In 2 days',
-            deadlineTone: 'soon'
+            deadlineStatus: 'Today',
+            deadlineTone: 'urgent'
           }),
           tutorialItem(shoppingListId, 'shop-item-2', 'S02', shoppingColumns, {
-            product: 'Vitamins',
+            product: 'Eggs',
             pieces: 1,
-            store: 'Pharmacy',
-            neededby: '2026-05-05',
-            cost: 12.99
+            pricepc: 4.2,
+            cost: 4.2,
+            store: 'Farmer Market',
+            neededby: '2026-05-01'
           }, {
-            deadlineStatus: 'In 4 days',
+            deadlineStatus: 'Today',
+            deadlineTone: 'urgent'
+          }),
+          tutorialItem(shoppingListId, 'shop-item-3', 'S03', shoppingColumns, {
+            product: 'Tomatoes',
+            pieces: 1,
+            pricepc: 3.8,
+            cost: 3.8,
+            store: 'Farmer Market',
+            neededby: '2026-05-02'
+          }, {
+            deadlineStatus: 'Tomorrow',
+            deadlineTone: 'soon'
+          }),
+          tutorialItem(shoppingListId, 'shop-item-4', 'S04', shoppingColumns, {
+            product: 'Pasta',
+            pieces: 3,
+            pricepc: 1.6,
+            cost: 4.8,
+            store: 'Corner Shop',
+            neededby: '2026-05-04'
+          }, {
+            deadlineStatus: 'In 3 days',
+            deadlineTone: 'ok'
+          })
+        ]
+      },
+      {
+        id: travelListId,
+        boardId,
+        name: 'Vacation & Events',
+        code: 'L04',
+        templateType: 'trips_events',
+        templateConfig: { behavior: 'calendar' },
+        order: 4,
+        grid: { x: 7, y: 5, w: 6, h: 2 },
+        dueDateEnabled: false,
+        dueDateColumnId: null,
+        deadlineMandatory: false,
+        columnSortOrder: 'default',
+        sortColumnId: 'trip-col-start',
+        sortDirection: 'asc',
+        displayEnabled: true,
+        showItemIdOnBoard: false,
+        showDependenciesOnBoard: false,
+        showCreatedAtOnBoard: false,
+        showCreatedByOnBoard: false,
+        showStatusOnBoard: true,
+        columns: travelColumns,
+        groups: [],
+        items: [
+          tutorialItem(travelListId, 'trip-item-1', 'E01', travelColumns, {
+            topictheme: 'Summer getaway in Crete',
+            type: 'Personal Time',
+            start: '2026-08-15',
+            end: '2026-08-22',
+            location: 'Heraklion'
+          }, {
+            deadlineStatus: 'Aug 15',
+            deadlineTone: 'ok'
+          }),
+          tutorialItem(travelListId, 'trip-item-2', 'E02', travelColumns, {
+            topictheme: 'Bucharest Growth Summit',
+            type: 'Work Event',
+            start: '2026-06-18',
+            end: '2026-06-19',
+            location: 'Bucharest'
+          }, {
+            deadlineStatus: 'Jun 18',
+            deadlineTone: 'ok'
+          })
+        ]
+      },
+      {
+        id: birthdayListId,
+        boardId,
+        name: 'Upcoming Birthdays',
+        code: 'L05',
+        templateType: 'birthday_calendar',
+        templateConfig: { behavior: 'calendar', birthday: { boardView: 'next_30_days' } },
+        order: 5,
+        grid: { x: 7, y: 7, w: 6, h: 2 },
+        dueDateEnabled: false,
+        dueDateColumnId: null,
+        deadlineMandatory: false,
+        columnSortOrder: 'default',
+        sortColumnId: 'birthday-col-birthday',
+        sortDirection: 'asc',
+        displayEnabled: true,
+        showItemIdOnBoard: false,
+        showDependenciesOnBoard: false,
+        showCreatedAtOnBoard: false,
+        showCreatedByOnBoard: false,
+        showStatusOnBoard: true,
+        columns: birthdayColumns,
+        groups: [],
+        items: [
+          tutorialItem(birthdayListId, 'birthday-item-1', 'B01', birthdayColumns, {
+            name: 'Mara',
+            birthday: '1994-05-02',
+            birthyear: 1994,
+            location: 'Cluj'
+          }, {
+            deadlineStatus: 'May 2',
+            deadlineTone: 'soon'
+          }),
+          tutorialItem(birthdayListId, 'birthday-item-2', 'B02', birthdayColumns, {
+            name: 'Victor',
+            birthday: '1989-05-11',
+            birthyear: 1989,
+            location: 'Brasov'
+          }, {
+            deadlineStatus: 'May 11',
+            deadlineTone: 'ok'
+          }),
+          tutorialItem(birthdayListId, 'birthday-item-3', 'B03', birthdayColumns, {
+            name: 'Elena',
+            birthday: '1992-05-24',
+            birthyear: 1992,
+            location: 'Bucharest'
+          }, {
+            deadlineStatus: 'May 24',
             deadlineTone: 'ok'
           })
         ]
@@ -8977,24 +9283,69 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         name: 'Local Time',
         order: 1,
         displayEnabled: true,
-        grid: { x: 13, y: 1, w: 4, h: 2 },
+        grid: { x: 13, y: 1, w: 2, h: 2 },
         config: { clock: { showSeconds: false } }
+      },
+      {
+        id: 'tutorial-widget-weather',
+        boardId,
+        type: 'weather',
+        name: 'Weather',
+        order: 2,
+        displayEnabled: true,
+        grid: { x: 15, y: 1, w: 2, h: 2 },
+        config: { weather: { temperatureUnit: 'celsius' } }
+      },
+      {
+        id: 'tutorial-widget-world',
+        boardId,
+        type: 'world_clocks',
+        name: 'World Clock',
+        order: 3,
+        displayEnabled: true,
+        grid: { x: 13, y: 3, w: 4, h: 2 },
+        config: {
+          worldClocks: {
+            locations: [
+              { id: 'bucharest', label: 'Bucharest', timeZone: 'Europe/Bucharest' },
+              { id: 'new-york', label: 'New York', timeZone: 'America/New_York' }
+            ],
+            showSeconds: false,
+            style: 'digital'
+          }
+        }
       },
       {
         id: 'tutorial-widget-word',
         boardId,
         type: 'word_of_day',
         name: 'Word of the Day',
-        order: 2,
+        order: 4,
         displayEnabled: true,
-        grid: { x: 13, y: 3, w: 4, h: 2 },
+        grid: { x: 13, y: 5, w: 4, h: 2 },
         config: { wordOfDay: { accent: '#34d51d' } }
+      },
+      {
+        id: 'tutorial-widget-countdown',
+        boardId,
+        type: 'countdown',
+        name: 'Countdown to Vacation',
+        order: 5,
+        displayEnabled: true,
+        grid: { x: 13, y: 7, w: 4, h: 2 },
+        config: {
+          countdown: {
+            label: 'Vacation',
+            targetAt: '2026-08-15T09:00'
+          }
+        }
       }
     ],
     summarySlots: [
-      tutorialSummarySlot(0, 'Open Tasks', 'open_tasks', '3'),
-      tutorialSummarySlot(1, 'Board Items', 'board_items', '5'),
-      tutorialSummarySlot(2, 'Total Purchases', 'total_purchases', '41.49 EUR')
+      tutorialSummarySlot(0, 'Open Tasks', 'open_tasks', '6'),
+      tutorialSummarySlot(1, 'Board Items', 'board_items', '15'),
+      tutorialSummarySlot(2, 'Total Purchases', 'total_purchases', '17.80 EUR'),
+      tutorialSummarySlot(3, 'Upcoming Birthdays', 'count', '3')
     ],
     mode,
     generatedAt: '2026-04-28T08:00:00.000Z'

@@ -260,6 +260,16 @@ td {
   margin-top: auto;
 }
 
+.side-action-group {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.side-action-group > .icon-button.wide,
+.side-action-group > .danger-button.wide {
+  width: 100%;
+}
+
 .nav-button,
 .icon-button,
 .primary-button,
@@ -781,6 +791,21 @@ td {
   pointer-events: none;
 }
 
+.tutorial-transition-shroud {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: rgba(0, 3, 6, 0.58);
+  backdrop-filter: blur(4px) saturate(92%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.tutorial-transition-shroud.visible {
+  opacity: 1;
+}
+
 .tutorial-highlight {
   position: fixed;
   z-index: 96;
@@ -791,11 +816,11 @@ td {
     0 0 26px rgba(52, 213, 29, 0.14);
   pointer-events: none;
   transition:
-    top 560ms ease,
-    left 560ms ease,
-    width 560ms ease,
-    height 560ms ease,
-    box-shadow 560ms ease;
+    top 420ms ease,
+    left 420ms ease,
+    width 420ms ease,
+    height 420ms ease,
+    box-shadow 420ms ease;
 }
 
 .tutorial-card {
@@ -812,10 +837,10 @@ td {
   opacity: 0;
   transform: translateY(14px) scale(0.985);
   transition:
-    top 560ms ease,
-    left 560ms ease,
-    opacity 380ms ease,
-    transform 560ms ease;
+    top 420ms ease,
+    left 420ms ease,
+    opacity 260ms ease,
+    transform 420ms ease;
 }
 
 .tutorial-card.visible {
@@ -1088,8 +1113,19 @@ input[type="checkbox"] {
 .tree-pane-main {
   display: grid;
   min-height: 0;
-  grid-template-rows: minmax(0, 1fr) auto minmax(92px, 0.3fr);
+  grid-template-rows: minmax(0, 1fr) minmax(92px, 0.3fr);
   overflow: hidden;
+}
+
+.tree-section-block {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.tree-widget-section-block {
+  min-height: 92px;
 }
 
 .tree-list-scroll,
