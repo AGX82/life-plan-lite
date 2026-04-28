@@ -133,6 +133,11 @@ type TutorialTargetId =
   | 'list-tab-contents'
   | 'list-tab-settings'
   | 'list-tab-summary'
+  | 'list-panel-properties'
+  | 'list-panel-structure'
+  | 'list-panel-contents'
+  | 'list-panel-settings'
+  | 'list-panel-summary'
   | 'live-layout'
   | 'app-settings'
   | 'display-target'
@@ -145,6 +150,7 @@ type TutorialStep = {
   body: string
   selection?: SelectedNode
   activateTarget?: boolean
+  clickTargetId?: TutorialTargetId
 }
 
 const columnTypes: ColumnType[] = ['text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink']
@@ -1495,7 +1501,7 @@ function GuidedTutorial({
 
   useEffect(() => {
     setCardVisible(false)
-    const timer = window.setTimeout(() => setCardVisible(true), 220)
+    const timer = window.setTimeout(() => setCardVisible(true), 380)
     return () => window.clearTimeout(timer)
   }, [stepIndex])
 
@@ -1506,6 +1512,10 @@ function GuidedTutorial({
     }
 
     const updateTarget = (): void => {
+      if (step.clickTargetId) {
+        const clickTarget = document.querySelector<HTMLElement>(`[data-tutorial-id="${step.clickTargetId}"]`)
+        if (step.activateTarget && clickTarget instanceof HTMLButtonElement) clickTarget.click()
+      }
       const target = document.querySelector<HTMLElement>(`[data-tutorial-id="${step.targetId}"]`)
       if (!target) {
         setTargetRect(null)
@@ -1516,7 +1526,7 @@ function GuidedTutorial({
       setTargetRect(target.getBoundingClientRect())
     }
 
-    const timer = window.setTimeout(updateTarget, 120)
+    const timer = window.setTimeout(updateTarget, 170)
     window.addEventListener('resize', updateTarget)
     window.addEventListener('scroll', updateTarget, true)
     return () => {
@@ -1624,48 +1634,53 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
     steps.push(
       {
         id: 'list-tab-properties',
-        targetId: 'list-tab-properties',
+        targetId: 'list-panel-properties',
         title: 'List Properties sets the operating rules',
         body:
           'This is where you name the list, choose the template, control board visibility, enable deadlines, and set the main size and placement defaults.',
         selection: { kind: 'list', id: firstList.id },
-        activateTarget: true
+        activateTarget: true,
+        clickTargetId: 'list-tab-properties'
       },
       {
         id: 'list-tab-structure',
-        targetId: 'list-tab-structure',
+        targetId: 'list-panel-structure',
         title: 'List Structure defines the fields',
         body:
           'Use this tab to show or hide columns, change field types, decide which ones are required, and control the order in which fields appear on the board.',
         selection: { kind: 'list', id: firstList.id },
-        activateTarget: true
+        activateTarget: true,
+        clickTargetId: 'list-tab-structure'
       },
       {
         id: 'list-tab-contents',
-        targetId: 'list-tab-contents',
+        targetId: 'list-panel-contents',
         title: 'List Contents is where the entries live',
         body:
           'Add items and groups here, then edit or reorganize the actual content of the list. This is the working area for day-to-day data inside that list.',
         selection: { kind: 'list', id: firstList.id },
-        activateTarget: true
+        activateTarget: true,
+        clickTargetId: 'list-tab-contents'
       },
       {
         id: 'list-tab-settings',
-        targetId: 'list-tab-settings',
+        targetId: 'list-panel-settings',
         title: 'List Settings handles behavior details',
         body:
           'This tab is for the list-level options that shape how entries behave, which includes template-specific controls and automation-related settings.',
         selection: { kind: 'list', id: firstList.id },
-        activateTarget: true
+        activateTarget: true,
+        clickTargetId: 'list-tab-settings'
       },
       {
         id: 'list-tab-summary',
-        targetId: 'list-tab-summary',
+        targetId: 'list-panel-summary',
         title: 'List Summary controls what the list reports',
         body:
           'Define the summary values shown for the list here, like counts, totals, or deadline-oriented rollups. These summaries also feed into board-level reporting.',
         selection: { kind: 'list', id: firstList.id },
-        activateTarget: true
+        activateTarget: true,
+        clickTargetId: 'list-tab-summary'
       }
     )
   }
@@ -3115,7 +3130,7 @@ function ListEditorPanel({
       </div>
       <div className="editor-tab-content">
         {activeTab === 'properties' && (
-          <form className="list-tab-panel" onSubmit={submit}>
+          <form className="list-tab-panel" data-tutorial-id="list-panel-properties" onSubmit={submit}>
             <div className="list-general-panel">
               <div className="list-general-top">
                 <div className="list-general-main-fields">
@@ -3312,7 +3327,7 @@ function ListEditorPanel({
         )}
 
         {activeTab === 'settings' && (
-          <section className="list-tab-panel">
+          <section className="list-tab-panel" data-tutorial-id="list-panel-settings">
             {hasTemplateSettings ? (
               <div className="field-grid two">
                 <label>
@@ -3333,7 +3348,7 @@ function ListEditorPanel({
         )}
 
         {activeTab === 'structure' && (
-          <section className="list-tab-panel list-structure-tab-panel">
+          <section className="list-tab-panel list-structure-tab-panel" data-tutorial-id="list-panel-structure">
             <div className={templateType === 'birthday_calendar' ? 'column-list-table has-structure-note' : 'column-list-table'}>
               {templateType === 'birthday_calendar' && <p className="locked-template-note">Birthday Calendar keeps its core fields protected, but you can still add extra fields around them.</p>}
               <form className="add-column-row" onSubmit={addColumn}>
@@ -3417,7 +3432,7 @@ function ListEditorPanel({
         )}
 
         {activeTab === 'contents' && (
-          <section className="list-tab-panel list-items-tab-panel">
+          <section className="list-tab-panel list-items-tab-panel" data-tutorial-id="list-panel-contents">
             <div className="list-tab-action-row">
               <button className="icon-button" onClick={() => setShowCreateItemModal(true)} type="button">
                 <Plus size={16} />
@@ -3462,7 +3477,7 @@ function ListEditorPanel({
         )}
 
         {activeTab === 'summary' && (
-          <section className="list-tab-panel list-summary-tab-panel">
+          <section className="list-tab-panel list-summary-tab-panel" data-tutorial-id="list-panel-summary">
             <div className="column-list-table">
               <div className="summary-list-header">
                 <span>Column</span>

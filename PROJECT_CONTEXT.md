@@ -215,6 +215,8 @@ Date: 2026-04-27
 - When wizard placement runs out of board space, the wizard should still create the requested lists/widgets, switch the unplaceable ones to hidden, and explain exactly which elements were created but are not currently displayed so the user can resolve layout later in Live Layout.
 - The guided tutorial should include a step for each list editor tab after the general edit-panel explanation, because list tabs define real workflow stages and are worth teaching explicitly.
 - Tutorial movement should feel fluid: the spotlight should animate between targets and the explanation card should fade in after the spotlight completes its move.
+- Tutorial pacing should stay relaxed rather than snappy; spotlight motion and card fade timing should err slightly slower if needed for readability.
+- For list-tab tutorial steps, the spotlight should frame the active tab content, not just the tab label, so the user can connect the explanation with the visible controls.
 
 ## Packaging Decisions
 
@@ -242,7 +244,7 @@ Date: 2026-04-27
 - Hotfix releases should be published with explicit patch notes that call out the user-facing regressions they fix, especially when the affected flow is startup/onboarding.
 - After `v1.0.1` is tagged and published, ongoing work resumes from `1.1.0-dev`.
 - During active post-release stabilization, the development version should advance with meaningful behavior or critical-fix checkpoints so local builds and packaged test executables are easy to distinguish.
-- The current post-`v1.0.1` stabilization line continues from `1.1.2-dev`.
+- The current post-`v1.0.1` stabilization line continues from `1.1.3-dev`.
 
 ## Development Practice Decisions
 
