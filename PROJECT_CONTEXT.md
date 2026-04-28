@@ -249,8 +249,8 @@ Date: 2026-04-27
 - After `v1.0.1` is tagged and published, ongoing work resumes from `1.1.0-dev`.
 - During active post-release stabilization, the development version should advance with meaningful behavior or critical-fix checkpoints so local builds and packaged test executables are easy to distinguish.
 - `v1.2.0` is the first minor release after the initial stabilization cycle. It promotes the configuration wizard, tutorial, reset flow, and wizard-driven layout behavior to the stable line.
-- After `v1.2.0` is tagged and published, ongoing work should continue from `1.3.0-dev`.
-- The current post-`v1.2.0` development line continues from `1.3.0-dev`.
+- After `v1.2.0`, ongoing development should stay on a `1.2.x-dev` line until the scope of upcoming work clearly justifies the next minor release as `1.3.0`.
+- The current post-`v1.2.0` development line continues from `1.2.1-dev`.
 
 ## Development Practice Decisions
 
