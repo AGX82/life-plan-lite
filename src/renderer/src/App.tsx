@@ -67,6 +67,7 @@ import type {
 } from '@shared/domain'
 
 type Route = 'admin' | 'display'
+type TutorialScene = 'admin' | 'display'
 
 type FormValues = Record<string, FieldValue>
 
@@ -124,33 +125,51 @@ type PromptDialogState = {
 
 type TutorialTargetId =
   | 'boards-list'
-  | 'wizard-launch'
   | 'tree'
+  | 'tree-lists-section'
+  | 'tree-widgets-section'
   | 'edit-panel'
-  | 'list-editor-tabs'
+  | 'wizard-launch'
+  | 'tutorial-launch'
+  | 'list-editor-shell'
   | 'list-tab-properties'
   | 'list-tab-structure'
   | 'list-tab-contents'
   | 'list-tab-settings'
   | 'list-tab-summary'
-  | 'list-panel-properties'
-  | 'list-panel-structure'
-  | 'list-panel-contents'
-  | 'list-panel-settings'
-  | 'list-panel-summary'
   | 'live-layout'
   | 'app-settings'
+  | 'close-confirmation'
+  | 'theme-select'
   | 'display-target'
-  | 'show-board'
+  | 'board-display-actions'
+  | 'display-top-band'
+  | 'display-summary-row'
+  | 'display-day-actions'
+  | 'display-primary-list-header'
+  | 'display-add-item'
+  | 'display-edit-list'
+  | 'display-list-summary'
+  | 'display-list-table'
+  | 'display-board-shell'
 
 type TutorialStep = {
   id: string
+  scene: TutorialScene
   targetId: TutorialTargetId
   title: string
   body: string
   selection?: SelectedNode
   activateTarget?: boolean
   clickTargetId?: TutorialTargetId
+}
+
+type TutorialSession = {
+  scene: TutorialScene
+  adminSnapshot: BoardSnapshot
+  displaySnapshot: BoardSnapshot
+  boards: BoardSummary[]
+  selectedNode: SelectedNode
 }
 
 const columnTypes: ColumnType[] = ['text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink']
@@ -319,7 +338,7 @@ export function App(): ReactElement {
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [tutorialSession, setTutorialSession] = useState<TutorialSession | null>(null)
   const [launchTutorialAfterWizard, setLaunchTutorialAfterWizard] = useState(false)
   const [busy, setBusy] = useState(false)
   const editingBoardId = useRef<string | null>(null)
@@ -585,12 +604,20 @@ export function App(): ReactElement {
 
   function openTutorial(): void {
     tutorialReturnSelection.current = selectedNode ?? (snapshot ? { kind: 'board', id: snapshot.id } : null)
-    setTutorialOpen(true)
+    const adminSnapshot = createTutorialSnapshot('admin')
+    const displaySnapshot = createTutorialSnapshot('display')
+    setTutorialSession({
+      scene: 'admin',
+      adminSnapshot,
+      displaySnapshot,
+      boards: createTutorialBoards(adminSnapshot),
+      selectedNode: { kind: 'board', id: adminSnapshot.id }
+    })
   }
 
   async function closeTutorial(): Promise<void> {
     await runAction(() => window.lpl.updateAppSettings({ ...appSettings, tutorialCompleted: true }))
-    setTutorialOpen(false)
+    setTutorialSession(null)
     const returnSelection = tutorialReturnSelection.current
     tutorialReturnSelection.current = null
     if (returnSelection) setSelectedNode(returnSelection)
@@ -620,38 +647,47 @@ export function App(): ReactElement {
   }
 
   const currentThemeClass = themeClassName(appSettings.theme)
+  const tutorialOpen = Boolean(tutorialSession)
+  const effectiveRoute = tutorialSession?.scene ?? route
+  const effectiveSnapshot = tutorialSession ? (tutorialSession.scene === 'display' ? tutorialSession.displaySnapshot : tutorialSession.adminSnapshot) : snapshot
+  const effectivePreviewSnapshot = tutorialSession?.displaySnapshot ?? previewSnapshot ?? snapshot
+  const effectiveBoards = tutorialSession?.boards ?? boards
+  const effectiveSelectedNode = tutorialSession?.selectedNode ?? selectedNode ?? { kind: 'board', id: effectiveSnapshot.id }
+  const effectiveBusy = busy || tutorialOpen
+  const tutorialRunAction: RunAction = async () => undefined
 
-  if (route === 'display') {
-    return (
+  const content =
+    effectiveRoute === 'display' ? (
       <DisplayBoard
         appSettings={appSettings}
         appThemeClass={currentThemeClass}
-        busy={busy}
-        runAction={runAction}
-        selectedWidgetId={undefined}
-        snapshot={snapshot}
+        busy={effectiveBusy}
+        runAction={tutorialOpen ? tutorialRunAction : runAction}
+        selectedListId={effectiveSelectedNode.kind === 'list' ? effectiveSelectedNode.id : undefined}
+        selectedWidgetId={effectiveSelectedNode.kind === 'widget' ? effectiveSelectedNode.id : undefined}
+        snapshot={effectiveSnapshot}
         onAdmin={async () => {
           const result = await window.lpl.requestAdminMode()
           if (result.switchInPlace) window.location.hash = '/admin'
         }}
       />
-    )
-  }
-
-  return (
-    <AdminApp
+    ) : (
+      <AdminApp
       globalMessageDialog={messageDialog}
       setGlobalMessageDialog={setMessageDialog}
-      boards={boards}
-      busy={busy}
+      boards={effectiveBoards}
+      busy={effectiveBusy}
       displayState={displayState}
       appSettings={appSettings}
       appThemeClass={currentThemeClass}
-      previewSnapshot={previewSnapshot ?? snapshot}
-      runAction={runAction}
-      tutorialOpen={tutorialOpen}
+      previewSnapshot={effectivePreviewSnapshot}
+      runAction={tutorialOpen ? tutorialRunAction : runAction}
       wizardOpen={wizardOpen}
       onSelectBoard={(boardId) => {
+        if (tutorialSession) {
+          setTutorialSession((current) => (current ? { ...current, selectedNode: { kind: 'board', id: boardId } } : current))
+          return
+        }
         editingBoardId.current = boardId
         setSelectedNode({ kind: 'board', id: boardId })
         load('admin', boardId)
@@ -671,10 +707,36 @@ export function App(): ReactElement {
       onOpenTutorial={openTutorial}
       onOpenWizard={() => setWizardOpen(true)}
       onPrepareWizardReset={prepareWizardReset}
-      selectedNode={selectedNode ?? { kind: 'board', id: snapshot.id }}
-      setSelectedNode={setSelectedNode}
-      snapshot={snapshot}
+      selectedNode={effectiveSelectedNode}
+      setSelectedNode={tutorialSession ? ((value) => setTutorialSession((current) => {
+        if (!current) return current
+        const nextValue = typeof value === 'function' ? value(current.selectedNode) : value
+        return nextValue ? { ...current, selectedNode: nextValue } : current
+      })) : setSelectedNode}
+      snapshot={effectiveSnapshot}
     />
+    )
+
+  return (
+    <>
+      {content}
+      {tutorialSession && (
+        <GuidedTutorial
+          onClose={closeTutorial}
+          scene={tutorialSession.scene}
+          selectedNode={tutorialSession.selectedNode}
+          setScene={(scene) => setTutorialSession((current) => (current ? { ...current, scene } : current))}
+          setSelectedNode={(value) =>
+            setTutorialSession((current) => {
+              if (!current) return current
+              const nextValue = typeof value === 'function' ? value(current.selectedNode) : value
+              return nextValue ? { ...current, selectedNode: nextValue } : current
+            })
+          }
+          snapshot={tutorialSession.scene === 'display' ? tutorialSession.displaySnapshot : tutorialSession.adminSnapshot}
+        />
+      )}
+    </>
   )
 }
 
@@ -687,7 +749,6 @@ function AdminApp({
   globalMessageDialog,
   previewSnapshot,
   runAction,
-  tutorialOpen,
   wizardOpen,
   onSelectBoard,
   onApplyWizard,
@@ -710,7 +771,6 @@ function AdminApp({
   globalMessageDialog: { title: string; message: string } | null
   previewSnapshot: BoardSnapshot
   runAction: RunAction
-  tutorialOpen: boolean
   wizardOpen: boolean
   onSelectBoard: (boardId: string) => void
   onApplyWizard: (data: WizardData) => Promise<BoardSnapshot | undefined>
@@ -784,15 +844,17 @@ function AdminApp({
             <Settings2 size={18} />
             LPL Wizard
           </button>
-          <button className="icon-button wide" disabled={busy} onClick={onOpenTutorial} type="button">
+          <button className="icon-button wide" data-tutorial-id="tutorial-launch" disabled={busy} onClick={onOpenTutorial} type="button">
             <BookOpenText size={18} />
             Tutorial
           </button>
-          <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
-          <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
-            <ExternalLink size={18} />
-            View Here
-          </button>
+          <div data-tutorial-id="board-display-actions">
+            <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
+            <button className="icon-button wide" onClick={() => (window.location.hash = '/display')}>
+              <ExternalLink size={18} />
+              View Here
+            </button>
+          </div>
           <button className="danger-button wide" disabled={busy} onClick={() => window.lpl.closeApp()}>
             <Power size={18} />
             Exit App
@@ -939,7 +1001,6 @@ function AdminApp({
           snapshot={snapshot}
         />
       )}
-      {tutorialOpen && <GuidedTutorial onClose={onCloseTutorial} selectedNode={selectedNode} setSelectedNode={setSelectedNode} snapshot={snapshot} />}
     </main>
   )
 }
@@ -1491,59 +1552,99 @@ function ConfigurationWizard({
 
 function GuidedTutorial({
   onClose,
+  scene,
   selectedNode,
+  setScene,
   setSelectedNode,
   snapshot
 }: {
   onClose: () => void
+  scene: TutorialScene
   selectedNode: SelectedNode
+  setScene: (scene: TutorialScene) => void
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
 }): ReactElement {
   const steps = tutorialSteps(snapshot)
-  const [stepIndex, setStepIndex] = useState(0)
+  const [activeStepIndex, setActiveStepIndex] = useState(0)
+  const [contentStepIndex, setContentStepIndex] = useState(0)
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
   const [cardVisible, setCardVisible] = useState(false)
-  const step = steps[Math.min(stepIndex, steps.length - 1)]
+  const activeStep = steps[Math.min(activeStepIndex, steps.length - 1)]
+  const contentStep = steps[Math.min(contentStepIndex, steps.length - 1)]
+  const timers = useRef<number[]>([])
+
+  function queueTimer(callback: () => void, delay: number): void {
+    const timer = window.setTimeout(() => {
+      timers.current = timers.current.filter((entry) => entry !== timer)
+      callback()
+    }, delay)
+    timers.current.push(timer)
+  }
+
+  function clearTimers(): void {
+    timers.current.forEach((timer) => window.clearTimeout(timer))
+    timers.current = []
+  }
+
+  function goToStep(nextIndex: number): void {
+    if (nextIndex < 0 || nextIndex >= steps.length || nextIndex === activeStepIndex) return
+    const currentStep = steps[activeStepIndex]
+    const nextStep = steps[nextIndex]
+    const sameFrame = currentStep.scene === nextStep.scene && currentStep.targetId === nextStep.targetId
+    clearTimers()
+    setCardVisible(false)
+    queueTimer(() => {
+      setActiveStepIndex(nextIndex)
+      queueTimer(
+        () => {
+          setContentStepIndex(nextIndex)
+          setCardVisible(true)
+        },
+        sameFrame ? 220 : 660
+      )
+    }, 260)
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
-      if (event.key === 'ArrowRight' && stepIndex < steps.length - 1) setStepIndex((current) => current + 1)
-      if (event.key === 'ArrowLeft' && stepIndex > 0) setStepIndex((current) => current - 1)
+      if (event.key === 'ArrowRight' && activeStepIndex < steps.length - 1) goToStep(activeStepIndex + 1)
+      if (event.key === 'ArrowLeft' && activeStepIndex > 0) goToStep(activeStepIndex - 1)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, stepIndex, steps.length])
+  }, [activeStepIndex, onClose, steps.length])
 
   useEffect(() => {
     setCardVisible(false)
-    const timer = window.setTimeout(() => setCardVisible(true), 380)
-    return () => window.clearTimeout(timer)
-  }, [stepIndex])
+    queueTimer(() => setCardVisible(true), 620)
+    return clearTimers
+  }, [])
 
   useEffect(() => {
-    if (!step) return
-    if (step.selection && !sameSelectedNode(selectedNode, step.selection)) {
-      setSelectedNode(step.selection)
+    if (!activeStep) return
+    if (activeStep.scene !== scene) setScene(activeStep.scene)
+    if (activeStep.selection && !sameSelectedNode(selectedNode, activeStep.selection)) {
+      setSelectedNode(activeStep.selection)
     }
 
     const updateTarget = (): void => {
-      if (step.clickTargetId) {
-        const clickTarget = document.querySelector<HTMLElement>(`[data-tutorial-id="${step.clickTargetId}"]`)
-        if (step.activateTarget && clickTarget instanceof HTMLButtonElement) clickTarget.click()
+      if (activeStep.clickTargetId) {
+        const clickTarget = document.querySelector<HTMLElement>(`[data-tutorial-id="${activeStep.clickTargetId}"]`)
+        if (activeStep.activateTarget && clickTarget instanceof HTMLButtonElement) clickTarget.click()
       }
-      const target = document.querySelector<HTMLElement>(`[data-tutorial-id="${step.targetId}"]`)
+      const target = document.querySelector<HTMLElement>(`[data-tutorial-id="${activeStep.targetId}"]`)
       if (!target) {
         setTargetRect(null)
         return
       }
-      if (step.activateTarget && target instanceof HTMLButtonElement) target.click()
+      if (activeStep.activateTarget && target instanceof HTMLButtonElement) target.click()
       target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
       setTargetRect(target.getBoundingClientRect())
     }
 
-    const timer = window.setTimeout(updateTarget, 170)
+    const timer = window.setTimeout(updateTarget, activeStep.scene === scene ? 260 : 360)
     window.addEventListener('resize', updateTarget)
     window.addEventListener('scroll', updateTarget, true)
     return () => {
@@ -1551,9 +1652,9 @@ function GuidedTutorial({
       window.removeEventListener('resize', updateTarget)
       window.removeEventListener('scroll', updateTarget, true)
     }
-  }, [selectedNode, setSelectedNode, step])
+  }, [activeStep, scene, selectedNode, setScene, setSelectedNode])
 
-  if (!step) {
+  if (!activeStep || !contentStep) {
     return (
       <div className="tutorial-overlay" role="presentation">
         <section aria-modal="true" className="tutorial-card visible" role="dialog">
@@ -1584,19 +1685,19 @@ function GuidedTutorial({
         <div className="tutorial-card-body">
           <p className="eyebrow">Tutorial</p>
           <div className="tutorial-progress">
-            <span>Step {stepIndex + 1} of {steps.length}</span>
+            <span>Step {contentStepIndex + 1} of {steps.length}</span>
           </div>
-          <h3>{step.title}</h3>
-          <p>{step.body}</p>
+          <h3>{contentStep.title}</h3>
+          <p>{contentStep.body}</p>
         </div>
         <div className="tutorial-actions">
           <button className="icon-button" onClick={onClose} type="button">Skip Tutorial</button>
           <div className="tutorial-actions-right">
-            <button className="icon-button" disabled={stepIndex === 0} onClick={() => setStepIndex((current) => Math.max(0, current - 1))} type="button">Back</button>
-            {stepIndex === steps.length - 1 ? (
+            <button className="icon-button" disabled={activeStepIndex === 0} onClick={() => goToStep(activeStepIndex - 1)} type="button">Back</button>
+            {activeStepIndex === steps.length - 1 ? (
               <button className="primary-button" onClick={onClose} type="button">Finish</button>
             ) : (
-              <button className="primary-button" onClick={() => setStepIndex((current) => Math.min(steps.length - 1, current + 1))} type="button">Next</button>
+              <button className="primary-button" onClick={() => goToStep(activeStepIndex + 1)} type="button">Next</button>
             )}
           </div>
         </div>
@@ -1609,49 +1710,54 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
   const steps: TutorialStep[] = [
     {
       id: 'boards',
+      scene: 'admin',
       targetId: 'boards-list',
       title: 'Your boards live here',
       body:
         'The active board stays on top. Click any board to load it into the editor, and right-click a board when you want quick actions like duplicate or delete.'
     },
     {
-      id: 'wizard',
-      targetId: 'wizard-launch',
-      title: 'The wizard is the fast lane',
+      id: 'tree',
+      scene: 'admin',
+      targetId: 'tree',
+      title: 'This is the navigation tree',
       body:
-        'Use LPL Wizard when you want to add several lists quickly, create another board in a few screens, or reset the app without rebuilding everything by hand.'
+        'This pane maps the content of the loaded board. It shows the structure of the board and lets you move quickly between lists, groups, items, and widgets.'
     },
     {
-      id: 'tree',
-      targetId: 'tree',
-      title: 'This is the board structure',
+      id: 'tree-lists',
+      scene: 'admin',
+      targetId: 'tree-lists-section',
+      title: 'Lists sit at the top of the tree',
       body:
-        'The tree shows the loaded board, then its lists, groups, items, and widgets. Click anything here to change what the edit panel is working on.'
+        'The upper part of the navigation tree is for lists. This is where you add new lists and drill into their groups and tasks.'
+    },
+    {
+      id: 'tree-widgets',
+      scene: 'admin',
+      targetId: 'tree-widgets-section',
+      title: 'Widgets live in their own section',
+      body:
+        'The lower part of the navigation tree is for widgets. From here you can add, edit, and remove the board widgets that support your daily view.'
     },
     {
       id: 'edit-board',
+      scene: 'admin',
       targetId: 'edit-panel',
-      title: 'The edit panel changes scope',
+      title: 'The edit panel is where the work happens',
       body:
-        'This panel follows your selection. Board-level choices live here when a board is selected, and the same area switches to list, item, group, or widget editing as you move around.',
+        'This is the main working area of the app. Based on what you select, this panel switches between board, list, group, task, and widget editing so the right controls appear in the same place.',
       selection: { kind: 'board', id: snapshot.id }
     }
   ]
 
   const firstList = snapshot.lists[0]
   if (firstList) {
-    steps.push({
-      id: 'list-tabs',
-      targetId: 'list-editor-tabs',
-      title: 'Lists are configured in layers',
-      body:
-        'Each list has five tabs. Together they define how the list behaves, which fields it uses, what content it holds, and what summaries it reports.',
-      selection: { kind: 'list', id: firstList.id }
-    })
     steps.push(
       {
         id: 'list-tab-properties',
-        targetId: 'list-panel-properties',
+        scene: 'admin',
+        targetId: 'list-editor-shell',
         title: 'List Properties sets the operating rules',
         body:
           'This is where you name the list, choose the template, control board visibility, enable deadlines, and set the main size and placement defaults.',
@@ -1661,7 +1767,8 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
       },
       {
         id: 'list-tab-structure',
-        targetId: 'list-panel-structure',
+        scene: 'admin',
+        targetId: 'list-editor-shell',
         title: 'List Structure defines the fields',
         body:
           'Use this tab to show or hide columns, change field types, decide which ones are required, and control the order in which fields appear on the board.',
@@ -1671,7 +1778,8 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
       },
       {
         id: 'list-tab-contents',
-        targetId: 'list-panel-contents',
+        scene: 'admin',
+        targetId: 'list-editor-shell',
         title: 'List Contents is where the entries live',
         body:
           'Add items and groups here, then edit or reorganize the actual content of the list. This is the working area for day-to-day data inside that list.',
@@ -1681,7 +1789,8 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
       },
       {
         id: 'list-tab-settings',
-        targetId: 'list-panel-settings',
+        scene: 'admin',
+        targetId: 'list-editor-shell',
         title: 'List Settings handles behavior details',
         body:
           'This tab is for the list-level options that shape how entries behave, which includes template-specific controls and automation-related settings.',
@@ -1691,7 +1800,8 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
       },
       {
         id: 'list-tab-summary',
-        targetId: 'list-panel-summary',
+        scene: 'admin',
+        targetId: 'list-editor-shell',
         title: 'List Summary controls what the list reports',
         body:
           'Define the summary values shown for the list here, like counts, totals, or deadline-oriented rollups. These summaries also feed into board-level reporting.',
@@ -1705,31 +1815,123 @@ function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
   steps.push(
     {
       id: 'live-layout',
+      scene: 'admin',
       targetId: 'live-layout',
       title: 'Live Layout is an active tool',
       body:
         'This is where you resize, reposition, and rebalance the visible board. Dragging here is not just a preview: it updates the board layout and can swap or push neighboring elements to make space.'
     },
     {
-      id: 'settings',
-      targetId: 'app-settings',
-      title: 'These settings affect the whole app',
+      id: 'wizard',
+      scene: 'admin',
+      targetId: 'wizard-launch',
+      title: 'The wizard is your friend',
       body:
-        'Application Settings are global. This is where you choose the display target, theme, and close-confirmation behavior for the entire workspace.'
+        'Use the LPL Wizard when you want to create several lists quickly, add a new board in a guided flow, or reset the app without rebuilding everything by hand.'
+    },
+    {
+      id: 'tutorial-launch',
+      scene: 'admin',
+      targetId: 'tutorial-launch',
+      title: 'You can always run this tutorial again',
+      body:
+        'Use the Tutorial button any time you want a refresher. It is meant to be a reusable guided walkthrough, not only a first-run feature.'
+    },
+    {
+      id: 'settings',
+      scene: 'admin',
+      targetId: 'app-settings',
+      title: 'Application Settings affect the whole workspace',
+      body:
+        'This panel controls the global behavior of the app. It is where you manage close confirmation, display targeting, and the current visual theme.'
+    },
+    {
+      id: 'close-confirmation',
+      scene: 'admin',
+      targetId: 'close-confirmation',
+      title: 'Close confirmation controls how items are closed',
+      body:
+        'Here you decide whether finishing or cancelling an item should ask for comments, ask without comments, or happen immediately. It affects the way closure actions behave across the app.'
+    },
+    {
+      id: 'theme',
+      scene: 'admin',
+      targetId: 'theme-select',
+      title: 'Themes let you switch the visual style',
+      body:
+        'You can move between the built-in themes here. The theme changes the look and contrast of the workspace without changing the structure or data.'
     },
     {
       id: 'display-target',
+      scene: 'admin',
       targetId: 'display-target',
       title: 'Choose the display before showing the board',
       body:
         'If you use more than one monitor, set the target display here first. LPL uses this selection when it opens the fullscreen board window.'
     },
     {
-      id: 'show-board',
-      targetId: 'show-board',
-      title: 'Show Board opens the fullscreen view',
+      id: 'board-display-actions',
+      scene: 'admin',
+      targetId: 'board-display-actions',
+      title: 'Show Board, Hide Board, and View Here',
       body:
-        'Use this after you have chosen the monitor. The fullscreen board is the read-only display surface meant to stay visible while you continue editing in Admin Mode.'
+        'Show Board opens the board window on the selected display. Hide Board closes that display window. View Here opens the same board view inside this window so you can inspect the board locally.'
+    },
+    {
+      id: 'display-summary-row',
+      scene: 'display',
+      targetId: 'display-summary-row',
+      title: 'The board header keeps key summaries visible',
+      body:
+        'This summary row keeps the board-level rollups in view while you work. These values are configured in the edit panel under Board Summary and act as the quick status line for the whole board.'
+    },
+    {
+      id: 'display-day-actions',
+      scene: 'display',
+      targetId: 'display-day-actions',
+      title: 'These quick filters help with day-focused planning',
+      body:
+        'The 24 and day buttons help you focus on immediate time windows. They are quick board-level lenses for what matters today and in the next day.'
+    },
+    {
+      id: 'display-add-item',
+      scene: 'display',
+      targetId: 'display-add-item',
+      title: 'You can add new items directly from the board',
+      body:
+        'After the initial setup, many everyday actions can happen directly on the live board. Adding a new item does not require going back through the full list editor.'
+    },
+    {
+      id: 'display-edit-list',
+      scene: 'display',
+      targetId: 'display-edit-list',
+      title: 'You can also open list settings from the board',
+      body:
+        'The board is not just for reading. It also gives you direct access to common list-level adjustments, so basic user-focused work stays close to the live context.'
+    },
+    {
+      id: 'display-list-summary',
+      scene: 'display',
+      targetId: 'display-list-summary',
+      title: 'List summaries keep the key signals visible',
+      body:
+        'These compact summaries surface the most useful roll-ups for the list, like counts, deadlines, and effort, without forcing you to scan the full table each time.'
+    },
+    {
+      id: 'display-list-table',
+      scene: 'display',
+      targetId: 'display-list-table',
+      title: 'Board lists show the right amount of detail',
+      body:
+        'A list may have many fields defined, but only a few need to stay visible on the board for readability. Clicking an item brings up its full detail editor, where you can see and edit all of the item fields.'
+    },
+    {
+      id: 'finish',
+      scene: 'display',
+      targetId: 'display-board-shell',
+      title: 'That is the core Life Plan Lite flow',
+      body:
+        'You now have the main mental map: boards and structure on the left, editing in the panel, layout management below, and the live board as the daily action surface. You can return to this tutorial any time.'
     }
   )
 
@@ -1812,8 +2014,8 @@ function tutorialCardStyle(rect: DOMRect | null): CSSProperties {
 function tutorialMaskStyles(rect: DOMRect | null): CSSProperties[] {
   const base: CSSProperties = {
     position: 'fixed',
-    background: 'rgba(0, 3, 6, 0.78)',
-    backdropFilter: 'blur(6px) saturate(94%)'
+    background: 'rgba(0, 3, 6, 0.58)',
+    backdropFilter: 'blur(4px) saturate(92%)'
   }
   if (!rect) {
     return [{ ...base, inset: 0 }]
@@ -1894,7 +2096,7 @@ function ApplicationSettingsPanel({
         </div>
       </header>
       <div className="display-controls">
-        <label>
+        <label data-tutorial-id="close-confirmation">
           <span>Close confirmation</span>
           <select
             disabled={busy}
@@ -1927,7 +2129,7 @@ function ApplicationSettingsPanel({
             ))}
           </select>
         </label>
-        <label>
+        <label data-tutorial-id="theme-select">
           <span>Theme</span>
           <select
             disabled={busy}
@@ -2090,7 +2292,7 @@ function NavigationTree({
           </div>
         )}
       </div>
-      <div className="tree-section-row">
+      <div className="tree-section-row" data-tutorial-id="tree-lists-section">
         <p className="list-section-label">Lists in this board:</p>
         <button
           className="mini-button tree-action-button"
@@ -2139,7 +2341,7 @@ function NavigationTree({
             })}
           </div>
         </div>
-        <div className="tree-section-row tree-widget-section-header">
+        <div className="tree-section-row tree-widget-section-header" data-tutorial-id="tree-widgets-section">
           <p className="list-section-label widget-section-label">Widgets in this board:</p>
           <button
             className="mini-button tree-action-button"
@@ -3073,7 +3275,7 @@ function ListEditorPanel({
   }
 
   return (
-    <div className="editor-tabbed editor-tabbed-list">
+    <div className="editor-tabbed editor-tabbed-list" data-tutorial-id="list-editor-shell">
       <div className="editor-tabbar">
         <div className="editor-tab-buttons">
           <button
@@ -4582,13 +4784,13 @@ function DisplayBoard({
 
   return (
     <section className={`${appThemeClass ?? 'theme-midnight-clear'} ${compact ? 'display-board compact' : 'display-board'}`}>
-      <div className="board-shell">
-        <header className="display-top-band">
+      <div className="board-shell" data-tutorial-id="display-board-shell">
+        <header className="display-top-band" data-tutorial-id="display-top-band">
           <div className="display-title">
             <p className="eyebrow">{snapshot.mode === 'display' ? 'Display Mode' : 'Preview'}</p>
             <h2>{snapshot.name}</h2>
           </div>
-          <div className="top-summary">
+          <div className="top-summary" data-tutorial-id="display-summary-row">
             {snapshot.summarySlots.filter(isSummarySlotDefined).map((slot) => (
               <div className="summary-slot top" key={slot.slotIndex}>
                 <span>{slot.label}</span>
@@ -4596,7 +4798,7 @@ function DisplayBoard({
               </div>
             ))}
           </div>
-          <div className="display-top-actions">
+          <div className="display-top-actions" data-tutorial-id="display-day-actions">
             {!compact && !editable && (
               <>
                 <button className="summary-trigger-button text-badge" onClick={() => setSummaryDialogMode('next24h')} title="Next 24 hours" type="button">
@@ -4616,7 +4818,7 @@ function DisplayBoard({
         </header>
 
         <div className={editable ? 'board-grid editable-grid' : 'board-grid'}>
-          {snapshot.lists.map((list) => (
+          {snapshot.lists.map((list, index) => (
             <BoardListView
               compact={compact}
               editable={editable}
@@ -4635,6 +4837,7 @@ function DisplayBoard({
               onSelect={onListSelect}
               rowActionBusy={closingItemId !== null}
               selected={list.id === selectedListId}
+              tutorialAnchor={index === 0}
             />
           ))}
           {snapshot.widgets.map((widget) => (
@@ -5026,7 +5229,8 @@ function BoardListView({
   onOpenItem,
   onSelect,
   rowActionBusy,
-  selected
+  selected,
+  tutorialAnchor = false
 }: {
   compact: boolean
   editable: boolean
@@ -5040,6 +5244,7 @@ function BoardListView({
   onSelect?: (listId: string) => void
   rowActionBusy?: boolean
   selected?: boolean
+  tutorialAnchor?: boolean
 }): ReactElement {
   const columns = boardVisibleColumns(list)
   const rows = boardDisplayRows(list)
@@ -5085,6 +5290,7 @@ function BoardListView({
   return (
     <article
       className={`${onSelect ? 'board-list-panel selectable' : 'board-list-panel'} ${selected ? 'selected-layout' : ''}`}
+      data-tutorial-id={tutorialAnchor ? 'display-primary-list-header' : undefined}
       onClick={() => onSelect?.(list.id)}
       onPointerUp={finishDrag}
       style={{
@@ -5099,6 +5305,7 @@ function BoardListView({
               {onAddItem && (
                 <button
                   className="board-list-tool-button"
+                  data-tutorial-id={tutorialAnchor ? 'display-add-item' : undefined}
                   onClick={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
@@ -5113,6 +5320,7 @@ function BoardListView({
               {onEditList && (
                 <button
                   className="board-list-tool-button"
+                  data-tutorial-id={tutorialAnchor ? 'display-edit-list' : undefined}
                   onClick={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
@@ -5128,7 +5336,7 @@ function BoardListView({
           )}
           <h3>{compact ? `LIST: ${list.name}` : list.name}</h3>
           {!compact && listSummaries.length > 0 && (
-            <div className="board-list-summaries">
+            <div className="board-list-summaries" data-tutorial-id={tutorialAnchor ? 'display-list-summary' : undefined}>
               {listSummaries.map((summary) => (
                 <span className="board-list-summary" key={summary.columnId}>
                   <em>{summary.label}</em>
@@ -5156,7 +5364,7 @@ function BoardListView({
           </div>
         </div>
       ) : (
-        <div className="table-wrap">
+          <div className="table-wrap" data-tutorial-id={tutorialAnchor ? 'display-list-table' : undefined}>
           <table>
             <thead>
               <tr>
@@ -8549,6 +8757,359 @@ function wizardStoreOptions(text: string): string[] {
       seen.add(key)
       return true
     })
+}
+
+function createTutorialBoards(snapshot: BoardSnapshot): BoardSummary[] {
+  return [
+    {
+      id: snapshot.id,
+      name: snapshot.name,
+      description: 'System tutorial board',
+      owner: snapshot.owner,
+      active: true
+    },
+    {
+      id: 'tutorial-board-alt',
+      name: 'Quarterly Focus',
+      description: 'Inactive example board',
+      owner: snapshot.owner,
+      active: false
+    }
+  ]
+}
+
+function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
+  const boardId = 'tutorial-board'
+  const todoListId = 'tutorial-list-todo'
+  const shoppingListId = 'tutorial-list-shopping'
+  const todoGroupId = 'tutorial-group-week'
+  const todoColumns: ListColumn[] = [
+    tutorialColumn(todoListId, 'todo-col-title', 'Task Name', 'text', 1, {
+      listSummaryEligible: true,
+      boardSummaryEligible: true,
+      showOnBoard: true
+    }),
+    tutorialColumn(todoListId, 'todo-col-deadline', 'Deadline', 'date', 2, {
+      listSummaryEligible: true,
+      boardSummaryEligible: true,
+      role: 'deadline',
+      showOnBoard: true
+    }),
+    tutorialColumn(todoListId, 'todo-col-priority', 'Priority', 'choice', 3, {
+      showOnBoard: true,
+      choiceConfig: {
+        selection: 'single',
+        ranked: true,
+        options: [
+          { id: 'p1', label: 'High', rank: 1 },
+          { id: 'p2', label: 'Medium', rank: 2 },
+          { id: 'p3', label: 'Low', rank: 3 }
+        ]
+      }
+    }),
+    tutorialColumn(todoListId, 'todo-col-effort', 'Effort', 'duration', 4, {
+      listSummaryEligible: true,
+      boardSummaryEligible: true,
+      showOnBoard: true,
+      durationDisplayFormat: 'hours'
+    }),
+    tutorialColumn(todoListId, 'todo-col-progress', '% Done', 'integer', 5, { showOnBoard: true }),
+    tutorialColumn(todoListId, 'todo-col-people', 'People', 'text', 6, { showOnBoard: false }),
+    tutorialColumn(todoListId, 'todo-col-details', 'Details', 'text', 7, { showOnBoard: false })
+  ]
+  const shoppingColumns: ListColumn[] = [
+    tutorialColumn(shoppingListId, 'shop-col-product', 'Product', 'text', 1, { showOnBoard: true }),
+    tutorialColumn(shoppingListId, 'shop-col-pieces', 'Pieces', 'integer', 2, { showOnBoard: true }),
+    tutorialColumn(shoppingListId, 'shop-col-store', 'Store', 'choice', 3, {
+      showOnBoard: true,
+      choiceConfig: {
+        selection: 'single',
+        ranked: false,
+        options: [
+          { id: 'store-1', label: 'Mega Market', rank: 1 },
+          { id: 'store-2', label: 'Pharmacy', rank: 2 }
+        ]
+      }
+    }),
+    tutorialColumn(shoppingListId, 'shop-col-needed', 'Needed By', 'date', 4, {
+      showOnBoard: true,
+      role: 'deadline'
+    }),
+    tutorialColumn(shoppingListId, 'shop-col-cost', 'Cost', 'currency', 5, {
+      showOnBoard: true,
+      currencyCode: 'EUR'
+    })
+  ]
+
+  return {
+    id: boardId,
+    name: 'Life Plan Lite Tutorial',
+    description: 'Synthetic tutorial walkthrough board',
+    owner: 'LPL',
+    active: true,
+    lists: [
+      {
+        id: todoListId,
+        boardId,
+        name: 'My To Do List',
+        code: 'L01',
+        templateType: 'todo',
+        templateConfig: { behavior: 'tasks' },
+        order: 1,
+        grid: { x: 1, y: 1, w: 12, h: 5 },
+        dueDateEnabled: true,
+        dueDateColumnId: 'todo-col-deadline',
+        deadlineMandatory: false,
+        columnSortOrder: 'default',
+        sortColumnId: 'todo-col-priority',
+        sortDirection: 'asc',
+        displayEnabled: true,
+        showItemIdOnBoard: false,
+        showDependenciesOnBoard: false,
+        showCreatedAtOnBoard: false,
+        showCreatedByOnBoard: false,
+        showStatusOnBoard: true,
+        columns: todoColumns,
+        groups: [
+          {
+            id: todoGroupId,
+            listId: todoListId,
+            parentGroupId: null,
+            name: 'This Week',
+            code: 'G01',
+            order: 1,
+            showIdOnBoard: false,
+            summaries: []
+          }
+        ],
+        items: [
+          tutorialItem(todoListId, 'todo-item-1', 'T01', todoColumns, {
+            taskname: 'Prepare release notes',
+            deadline: '2026-05-02',
+            priority: 'High',
+            effort: 90,
+            done: 60,
+            people: 'Andre',
+            details: 'Wrap up the stable notes for the next release.'
+          }, {
+            deadlineStatus: 'Tomorrow',
+            deadlineTone: 'soon',
+            groupId: todoGroupId
+          }),
+          tutorialItem(todoListId, 'todo-item-2', 'T02', todoColumns, {
+            taskname: 'Buy groceries',
+            deadline: '2026-05-01',
+            priority: 'Medium',
+            effort: 30,
+            done: 0,
+            people: 'Home',
+            details: 'Quick stop after work.'
+          }, {
+            deadlineStatus: 'Today',
+            deadlineTone: 'urgent'
+          }),
+          tutorialItem(todoListId, 'todo-item-3', 'T03', todoColumns, {
+            taskname: 'Schedule dentist visit',
+            deadline: '2026-05-04',
+            priority: 'Low',
+            effort: 15,
+            done: 10,
+            people: 'Andre',
+            details: 'Find an afternoon slot.'
+          }, {
+            deadlineStatus: 'In 3 days',
+            deadlineTone: 'ok'
+          })
+        ]
+      },
+      {
+        id: shoppingListId,
+        boardId,
+        name: 'Shopping List',
+        code: 'L02',
+        templateType: 'shopping_list',
+        templateConfig: { behavior: 'purchases' },
+        order: 2,
+        grid: { x: 1, y: 6, w: 8, h: 3 },
+        dueDateEnabled: true,
+        dueDateColumnId: 'shop-col-needed',
+        deadlineMandatory: false,
+        columnSortOrder: 'default',
+        sortColumnId: 'shop-col-needed',
+        sortDirection: 'asc',
+        displayEnabled: true,
+        showItemIdOnBoard: false,
+        showDependenciesOnBoard: false,
+        showCreatedAtOnBoard: false,
+        showCreatedByOnBoard: false,
+        showStatusOnBoard: true,
+        columns: shoppingColumns,
+        groups: [],
+        items: [
+          tutorialItem(shoppingListId, 'shop-item-1', 'S01', shoppingColumns, {
+            product: 'Coffee beans',
+            pieces: 2,
+            store: 'Mega Market',
+            neededby: '2026-05-03',
+            cost: 28.5
+          }, {
+            deadlineStatus: 'In 2 days',
+            deadlineTone: 'soon'
+          }),
+          tutorialItem(shoppingListId, 'shop-item-2', 'S02', shoppingColumns, {
+            product: 'Vitamins',
+            pieces: 1,
+            store: 'Pharmacy',
+            neededby: '2026-05-05',
+            cost: 12.99
+          }, {
+            deadlineStatus: 'In 4 days',
+            deadlineTone: 'ok'
+          })
+        ]
+      }
+    ],
+    widgets: [
+      {
+        id: 'tutorial-widget-clock',
+        boardId,
+        type: 'clock',
+        name: 'Local Time',
+        order: 1,
+        displayEnabled: true,
+        grid: { x: 13, y: 1, w: 4, h: 2 },
+        config: { clock: { showSeconds: false } }
+      },
+      {
+        id: 'tutorial-widget-word',
+        boardId,
+        type: 'word_of_day',
+        name: 'Word of the Day',
+        order: 2,
+        displayEnabled: true,
+        grid: { x: 13, y: 3, w: 4, h: 2 },
+        config: { wordOfDay: { accent: '#34d51d' } }
+      }
+    ],
+    summarySlots: [
+      tutorialSummarySlot(0, 'Open Tasks', 'open_tasks', '3'),
+      tutorialSummarySlot(1, 'Board Items', 'board_items', '5'),
+      tutorialSummarySlot(2, 'Total Purchases', 'total_purchases', '41.49 EUR')
+    ],
+    mode,
+    generatedAt: '2026-04-28T08:00:00.000Z'
+  }
+}
+
+function tutorialSummarySlot(slotIndex: number, label: string, aggregationMethod: AggregationMethod, value: string): SummarySlot {
+  return {
+    slotIndex,
+    label,
+    sourceListId: null,
+    sourceColumnId: null,
+    aggregationMethod,
+    value
+  }
+}
+
+function tutorialColumn(
+  listId: string,
+  id: string,
+  name: string,
+  type: ColumnType,
+  order: number,
+  options: {
+    listSummaryEligible?: boolean
+    boardSummaryEligible?: boolean
+    role?: 'deadline'
+    choiceConfig?: ChoiceConfig
+    dateDisplayFormat?: DateDisplayFormat
+    durationDisplayFormat?: DurationDisplayFormat
+    currencyCode?: CurrencyCode
+    showOnBoard?: boolean
+    required?: boolean
+  } = {}
+): ListColumn {
+  return {
+    id,
+    listId,
+    name,
+    type,
+    order,
+    required: options.required ?? false,
+    maxLength: null,
+    listSummaryEligible: options.listSummaryEligible ?? false,
+    boardSummaryEligible: options.boardSummaryEligible ?? false,
+    system: false,
+    role: options.role ?? null,
+    choiceConfig: options.choiceConfig ?? null,
+    dateDisplayFormat: options.dateDisplayFormat ?? 'date',
+    durationDisplayFormat: options.durationDisplayFormat ?? 'days_hours',
+    recurrence: 'none',
+    recurrenceDays: [],
+    currencyCode: options.currencyCode ?? 'EUR',
+    showOnBoard: options.showOnBoard ?? true
+  }
+}
+
+function tutorialItem(
+  listId: string,
+  id: string,
+  code: string,
+  columns: ListColumn[],
+  values: Record<string, string | number>,
+  options: {
+    deadlineStatus: string
+    deadlineTone: BoardItem['deadlineTone']
+    groupId?: string | null
+  }
+): BoardItem {
+  const mappedValues = columns.reduce<Record<string, FieldValue>>((acc, column) => {
+    const raw = values[tutorialColumnKey(column.name)]
+    if (column.type === 'date' || column.role === 'deadline') {
+      acc[column.id] = tutorialDateField(String(raw ?? ''))
+      return acc
+    }
+    acc[column.id] = raw ?? ''
+    return acc
+  }, {})
+
+  return {
+    id,
+    listId,
+    groupId: options.groupId ?? null,
+    code,
+    displayCode: code,
+    order: Number(code.replace(/\D+/g, '')) || 1,
+    publicationStatus: 'published',
+    operationalState: 'active',
+    values: mappedValues,
+    dependencyCodes: [],
+    dependencyItemIds: [],
+    createdAt: '2026-04-28T08:00:00.000Z',
+    createdBy: 'LPL',
+    isOverdue: options.deadlineTone === 'overdue',
+    deadlineStatus: options.deadlineStatus,
+    deadlineTone: options.deadlineTone,
+    updatedAt: '2026-04-28T08:00:00.000Z'
+  }
+}
+
+function tutorialDateField(value: string): DateFieldValue {
+  return {
+    value,
+    recurrence: 'none',
+    recurrenceDays: [],
+    recurrenceInterval: 1
+  }
+}
+
+function tutorialColumnKey(name: string): string {
+  return name
+    .replace(/[%/]/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
 }
 
 function wizardWidgetConfig(draft: WizardWidgetDraft, existing: BoardWidgetConfig): BoardWidgetConfig {

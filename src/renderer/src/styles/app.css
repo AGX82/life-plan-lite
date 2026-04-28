@@ -773,7 +773,7 @@ td {
   position: fixed;
   inset: 0;
   z-index: 95;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .tutorial-mask {
@@ -787,16 +787,15 @@ td {
   border: 1px solid rgba(52, 213, 29, 0.55);
   border-radius: 12px;
   box-shadow:
-    0 0 0 9999px rgba(0, 3, 6, 0.76),
     0 0 0 1px rgba(52, 213, 29, 0.24) inset,
     0 0 26px rgba(52, 213, 29, 0.14);
   pointer-events: none;
   transition:
-    top 340ms ease,
-    left 340ms ease,
-    width 340ms ease,
-    height 340ms ease,
-    box-shadow 340ms ease;
+    top 560ms ease,
+    left 560ms ease,
+    width 560ms ease,
+    height 560ms ease,
+    box-shadow 560ms ease;
 }
 
 .tutorial-card {
@@ -813,10 +812,10 @@ td {
   opacity: 0;
   transform: translateY(14px) scale(0.985);
   transition:
-    top 340ms ease,
-    left 340ms ease,
-    opacity 240ms ease,
-    transform 340ms ease;
+    top 560ms ease,
+    left 560ms ease,
+    opacity 380ms ease,
+    transform 560ms ease;
 }
 
 .tutorial-card.visible {

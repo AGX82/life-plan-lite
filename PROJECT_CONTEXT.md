@@ -217,10 +217,14 @@ Date: 2026-04-27
 - Tutorial movement should feel fluid: the spotlight should animate between targets and the explanation card should fade in after the spotlight completes its move.
 - Tutorial pacing should stay relaxed rather than snappy; spotlight motion and card fade timing should err slightly slower if needed for readability.
 - For list-tab tutorial steps, the spotlight should frame the active tab content, not just the tab label, so the user can connect the explanation with the visible controls.
+- The tutorial should darken the surrounding workspace enough to create focus, but not so much that the broader interface context disappears. Users should still be able to form mental anchors against the rest of the screen.
+- Tutorial transitions should follow a calm sequence: fade out the current explanation card, move/resize the spotlight, then fade in the next explanation card.
+- Consecutive list-tab tutorial steps should behave like content swaps inside the same frame: keep the spotlight and card placement stable, and change the explanation without an obvious jump.
 - Wizard pages after the first should provide a Back action in the footer, aligned to the left side of the active content area, while Skip/Next remain on the right.
 - In reset mode, the first wizard page after the destructive reset is confirmed should expose a direct `Close Wizard` action in the footer so the user can immediately leave the app empty without extra modal steps.
 - When closing the wizard after a confirmed reset, admin mode should force a fresh board reload before dismissing the wizard so stale pre-reset content cannot linger on screen.
 - Reset-to-first-run still preserves one empty base board (`Life Plan Lite`) instead of leaving the app with zero boards. This is intentional and counts as the expected empty state.
+- The tutorial should use a synthetic in-memory walkthrough board/session rather than a persisted hidden demo board. This keeps the walkthrough stable even when user data is sparse, avoids dummy content leaking into real app state, and sidesteps crash-recovery cleanup rules around hidden tutorial boards.
 
 ## Packaging Decisions
 
