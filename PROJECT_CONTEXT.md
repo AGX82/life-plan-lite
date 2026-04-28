@@ -220,6 +220,7 @@ Date: 2026-04-27
 - Wizard pages after the first should provide a Back action in the footer, aligned to the left side of the active content area, while Skip/Next remain on the right.
 - In reset mode, the first wizard page after the destructive reset is confirmed should expose a direct `Close Wizard` action in the footer so the user can immediately leave the app empty without extra modal steps.
 - When closing the wizard after a confirmed reset, admin mode should force a fresh board reload before dismissing the wizard so stale pre-reset content cannot linger on screen.
+- Reset-to-first-run still preserves one empty base board (`Life Plan Lite`) instead of leaving the app with zero boards. This is intentional and counts as the expected empty state.
 
 ## Packaging Decisions
 
@@ -247,7 +248,8 @@ Date: 2026-04-27
 - Hotfix releases should be published with explicit patch notes that call out the user-facing regressions they fix, especially when the affected flow is startup/onboarding.
 - After `v1.0.1` is tagged and published, ongoing work resumes from `1.1.0-dev`.
 - During active post-release stabilization, the development version should advance with meaningful behavior or critical-fix checkpoints so local builds and packaged test executables are easy to distinguish.
-- The current post-`v1.0.1` stabilization line continues from `1.1.4-dev`.
+- `v1.2.0` is the first minor release after the initial stabilization cycle. It promotes the configuration wizard, tutorial, reset flow, and wizard-driven layout behavior to the stable line.
+- After `v1.2.0` is tagged and published, ongoing work should continue from `1.3.0-dev`.
 
 ## Development Practice Decisions
 
