@@ -68,6 +68,8 @@ const api: LplApi = {
   updateWidgetLayouts: (input: UpdateWidgetGridInput[]) => ipcRenderer.invoke('widgets:updateLayouts', input),
   deleteWidget: (widgetId: string) => ipcRenderer.invoke('widgets:delete', widgetId),
   listArchive: (filters) => ipcRenderer.invoke('archive:list', filters),
+  fetchWeatherApproximateLocation: () => ipcRenderer.invoke('weather:approximateLocation'),
+  fetchWeatherForecast: (input) => ipcRenderer.invoke('weather:forecast', input),
   openExternalUrl: (url: string) => ipcRenderer.invoke('app:openExternalUrl', url),
   onDataChanged: (callback) => {
     const listener = (): void => callback()

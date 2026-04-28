@@ -63,6 +63,7 @@ import type {
   UpdateColumnInput,
   UpdateWidgetInput,
   WidgetType,
+  WeatherApproximateLocation,
   WorldClockLocation
 } from '@shared/domain'
 
@@ -4855,7 +4856,7 @@ function DisplayBoard({
           </div>
           <div className="top-summary" data-tutorial-id="display-summary-row">
             {snapshot.summarySlots.filter(isSummarySlotDefined).map((slot) => (
-              <div className="summary-slot top" key={slot.slotIndex}>
+              <div className={`summary-slot top summary-tone-${summaryToneForSlot(slot)}`} key={slot.slotIndex} title={`${slot.label}: ${slot.value}`}>
                 <span>{slot.label}</span>
                 <strong>{slot.value}</strong>
               </div>
@@ -5710,22 +5711,18 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
       try {
         const location = await resolveWeatherLocation()
         const unit = widget.config.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
-        const response = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,apparent_temperature,weather_code,is_day&temperature_unit=${unit}&timezone=auto`
-        )
-        if (!response.ok) throw new Error(`weather-http-${response.status}`)
-        const payload = (await response.json()) as {
-          current?: { temperature_2m?: number; apparent_temperature?: number; weather_code?: number; is_day?: number }
-        }
+        const payload = await window.lpl.fetchWeatherForecast({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          temperatureUnit: unit
+        })
         if (cancelled) return
-        const current = payload.current
-        if (!current || current.temperature_2m === undefined) throw new Error('No weather data returned.')
         const unitSymbol = unit === 'fahrenheit' ? 'F' : 'C'
         setState({
           loading: false,
           kicker: location.kicker,
-          text: `${Math.round(current.temperature_2m)}°${unitSymbol}`,
-          detail: `${weatherCodeLabel(current.weather_code ?? 0, current.is_day === 1)} · Feels like ${Math.round(current.apparent_temperature ?? current.temperature_2m)}°${unitSymbol}`
+          text: `${Math.round(payload.temperature)}°${unitSymbol}`,
+          detail: `${weatherCodeLabel(payload.weatherCode, payload.isDay)} · Feels like ${Math.round(payload.apparentTemperature)}°${unitSymbol}`
         })
       } catch (error) {
         if (cancelled) return
@@ -10072,58 +10069,12 @@ async function resolveWeatherLocation(): Promise<{ latitude: number; longitude: 
   }
 }
 
-async function requestApproximateWeatherLocation(previousError: unknown): Promise<{ latitude: number; longitude: number; kicker: string }> {
-  const providers: Array<() => Promise<{ latitude: number; longitude: number; kicker: string }>> = [
-    async () => {
-      const response = await fetch('https://ipwho.is/')
-      if (!response.ok) throw new Error(`ip-location-http-${response.status}`)
-      const payload = (await response.json()) as {
-        success?: boolean
-        latitude?: number
-        longitude?: number
-        city?: string
-        region?: string
-        country?: string
-      }
-      if (payload.success === false || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
-        throw new Error('ip-location-missing')
-      }
-      const locationLabel = [payload.city, payload.region || payload.country].filter(Boolean).join(', ')
-      return {
-        latitude: Number(payload.latitude),
-        longitude: Number(payload.longitude),
-        kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
-      }
-    },
-    async () => {
-      const response = await fetch('https://ipapi.co/json/')
-      if (!response.ok) throw new Error(`ip-location-http-${response.status}`)
-      const payload = (await response.json()) as {
-        latitude?: number
-        longitude?: number
-        city?: string
-        region?: string
-        country_name?: string
-      }
-      if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) throw new Error('ip-location-missing')
-      const locationLabel = [payload.city, payload.region || payload.country_name].filter(Boolean).join(', ')
-      return {
-        latitude: Number(payload.latitude),
-        longitude: Number(payload.longitude),
-        kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
-      }
-    }
-  ]
-
-  let lastError: unknown = previousError
-  for (const provider of providers) {
-    try {
-      return await provider()
-    } catch (error) {
-      lastError = error
-    }
+async function requestApproximateWeatherLocation(previousError: unknown): Promise<WeatherApproximateLocation> {
+  try {
+    return await window.lpl.fetchWeatherApproximateLocation()
+  } catch (error) {
+    throw error ?? previousError
   }
-  throw lastError
 }
 
 function weatherUnavailableDetail(error: unknown): string {
@@ -10136,13 +10087,23 @@ function weatherUnavailableDetail(error: unknown): string {
   if (error instanceof Error && error.message.startsWith('weather-http-')) {
     return 'The weather service did not respond successfully. Please try again in a moment.'
   }
-  if (error instanceof Error && error.message.startsWith('ip-location-http-')) {
+  if (error instanceof Error && (error.message.startsWith('ip-location-http-') || error.message === 'ip-location-network')) {
     return 'Approximate location lookup failed. Check connectivity and try again.'
+  }
+  if (error instanceof Error && (error.message === 'weather-network' || error.message === 'weather-missing')) {
+    return 'The weather service could not be reached. Check connectivity and try again.'
   }
   if (error instanceof TypeError) {
     return 'The weather location service could not be reached. Check connectivity and try again.'
   }
   return 'Location permission or weather service unavailable.'
+}
+
+function summaryToneForSlot(slot: SummarySlot): 'positive' | 'alert' {
+  if (slot.aggregationMethod === 'total_purchases' || slot.aggregationMethod === 'overdue_items' || slot.aggregationMethod === 'overdue_tasks') {
+    return 'alert'
+  }
+  return 'positive'
 }
 
 const wordBank = [

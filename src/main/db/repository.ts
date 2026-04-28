@@ -2700,7 +2700,11 @@ export class LifePlanRepository {
     if (totals.size === 0) return '0'
     return [...totals.entries()]
       .filter(([, total]) => total !== 0)
-      .map(([currency, total]) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(total))
+      .map(([currency, total]) => {
+        const roundedTotal = total >= 0 ? Math.ceil(total) : Math.floor(total)
+        const amount = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(roundedTotal)
+        return `${currency} ${amount}`
+      })
       .join(' | ') || '0'
   }
 

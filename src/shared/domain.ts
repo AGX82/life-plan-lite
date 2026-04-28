@@ -251,6 +251,19 @@ export type DisplayState = {
   displays: DisplayInfo[]
 }
 
+export type WeatherApproximateLocation = {
+  latitude: number
+  longitude: number
+  kicker: string
+}
+
+export type WeatherForecast = {
+  temperature: number
+  apparentTemperature: number
+  weatherCode: number
+  isDay: boolean
+}
+
 export type CloseConfirmationMode = 'with_comments' | 'without_comments' | 'none'
 
 export type AppTheme = 'black_glass_blue' | 'liquid_gunmetal' | 'midnight_clear'
@@ -508,6 +521,8 @@ export type LplApi = {
   updateWidgetLayouts: (input: UpdateWidgetGridInput[]) => Promise<BoardSnapshot>
   deleteWidget: (widgetId: string) => Promise<BoardSnapshot>
   listArchive: (filters?: { listId?: string; closedAfter?: string; closedBefore?: string }) => Promise<ArchiveRecord[]>
+  fetchWeatherApproximateLocation: () => Promise<WeatherApproximateLocation>
+  fetchWeatherForecast: (input: { latitude: number; longitude: number; temperatureUnit: 'celsius' | 'fahrenheit' }) => Promise<WeatherForecast>
   openExternalUrl: (url: string) => Promise<void>
   onDataChanged: (callback: () => void) => () => void
 }

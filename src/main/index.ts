@@ -24,7 +24,9 @@ import type {
   UpdateListGridInput,
   UpdateListInput,
   UpdateWidgetGridInput,
-  UpdateWidgetInput
+  UpdateWidgetInput,
+  WeatherApproximateLocation,
+  WeatherForecast
 } from '../shared/domain'
 
 let adminWindow: BrowserWindow | null = null
@@ -242,6 +244,135 @@ function handleMutation<T extends unknown[], R>(action: (...args: T) => R): (...
   }
 }
 
+async function fetchJson<T>(url: string): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10000)
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': `Life Plan Lite/${app.getVersion()}`
+      }
+    })
+    return (await response.json()) as T
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function getApproximateWeatherLocation(): Promise<WeatherApproximateLocation> {
+  const providers: Array<() => Promise<WeatherApproximateLocation>> = [
+    async () => {
+      let payload: {
+        success?: boolean
+        latitude?: number
+        longitude?: number
+        city?: string
+        region?: string
+        country?: string
+      }
+      try {
+        payload = await fetchJson('https://ipwho.is/')
+      } catch {
+        throw new Error('ip-location-network')
+      }
+      if (payload.success === false || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
+        throw new Error('ip-location-missing')
+      }
+      const locationLabel = [payload.city, payload.region || payload.country].filter(Boolean).join(', ')
+      return {
+        latitude: Number(payload.latitude),
+        longitude: Number(payload.longitude),
+        kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
+      }
+    },
+    async () => {
+      let payload: {
+        latitude?: number
+        longitude?: number
+        city?: string
+        region?: string
+        country_name?: string
+      }
+      try {
+        payload = await fetchJson('https://ipapi.co/json/')
+      } catch {
+        throw new Error('ip-location-network')
+      }
+      if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
+        throw new Error('ip-location-missing')
+      }
+      const locationLabel = [payload.city, payload.region || payload.country_name].filter(Boolean).join(', ')
+      return {
+        latitude: Number(payload.latitude),
+        longitude: Number(payload.longitude),
+        kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
+      }
+    }
+  ]
+
+  let lastError: unknown = new Error('ip-location-network')
+  for (const provider of providers) {
+    try {
+      return await provider()
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
+}
+
+async function getWeatherForecast(input: {
+  latitude: number
+  longitude: number
+  temperatureUnit: 'celsius' | 'fahrenheit'
+}): Promise<WeatherForecast> {
+  const query = new URLSearchParams({
+    latitude: String(input.latitude),
+    longitude: String(input.longitude),
+    current: 'temperature_2m,apparent_temperature,weather_code,is_day',
+    temperature_unit: input.temperatureUnit,
+    timezone: 'auto'
+  })
+
+  let response: Response
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+    try {
+      response = await fetch(`https://api.open-meteo.com/v1/forecast?${query.toString()}`, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': `Life Plan Lite/${app.getVersion()}`
+        }
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    throw new Error('weather-network')
+  }
+
+  if (!response.ok) throw new Error(`weather-http-${response.status}`)
+  const payload = (await response.json()) as {
+    current?: {
+      temperature_2m?: number
+      apparent_temperature?: number
+      weather_code?: number
+      is_day?: number
+    }
+  }
+  const current = payload.current
+  if (!current || !Number.isFinite(current.temperature_2m)) throw new Error('weather-missing')
+
+  return {
+    temperature: Number(current.temperature_2m),
+    apparentTemperature: Number(current.apparent_temperature ?? current.temperature_2m),
+    weatherCode: Number(current.weather_code ?? 0),
+    isDay: Number(current.is_day ?? 1) === 1
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('boards:list', () => repository.listBoards())
   ipcMain.handle('boards:activeSnapshot', (_event, mode: 'admin' | 'display' = 'admin') =>
@@ -312,6 +443,10 @@ function registerIpc(): void {
   )
   ipcMain.handle('widgets:delete', (_event, widgetId: string) => handleMutation(repository.deleteWidget.bind(repository))(widgetId))
   ipcMain.handle('archive:list', (_event, filters) => repository.listArchive(filters))
+  ipcMain.handle('weather:approximateLocation', () => getApproximateWeatherLocation())
+  ipcMain.handle('weather:forecast', (_event, input: { latitude: number; longitude: number; temperatureUnit: 'celsius' | 'fahrenheit' }) =>
+    getWeatherForecast(input)
+  )
   ipcMain.handle('app:openExternalUrl', async (_event, url: string) => {
     const parsed = new URL(url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported URL protocol.')

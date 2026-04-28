@@ -241,6 +241,16 @@ Date: 2026-04-27
 - Before clean packaging/testing that might affect local app data, back up the current user database/config so the dev environment can be restored.
 - Weather widgets rely on Electron geolocation permission handling and should explicitly request/allow geolocation at the session level instead of failing silently.
 
+## Post-v1.3.1 Polish Decisions
+
+Date: 2026-04-28
+
+- Packaged weather behavior should not depend on renderer-side third-party fetches alone. Weather fallback location lookup and weather API retrieval should use Electron's desktop-side bridge so production builds remain reliable even when packaged renderer networking behaves differently from dev.
+- Board top-summary slots should size primarily to their actual content instead of expanding like equal-width pills.
+- Top-summary labels should stay white and slightly more readable; summary values carry the semantic accent color.
+- Board-level cost/purchase summaries should render in the alert color family, while counts and most other indicators stay in the positive color family unless explicitly reclassified later.
+- Total Purchases board summaries should display rounded whole-number totals without decimals, grouped by currency code.
+
 ## Release Decisions
 
 Date: 2026-04-27
@@ -258,6 +268,8 @@ Date: 2026-04-27
 - The current post-`v1.2.0` development line continues from `1.2.1-dev`.
 - `v1.3.0` is the next stable minor release and promotes the refined guided tutorial experience, the synthetic walkthrough board, and the polished admin-to-board onboarding flow to the public line.
 - After `v1.3.0`, ongoing development continues from `1.3.1-dev` until the next stable release is intentionally cut.
+- `v1.3.1` is a hotfix release for the `v1.3.x` line focused on packaged weather reliability and board summary readability.
+- After `v1.3.1`, ongoing development resumes from `1.3.2-dev`.
 
 ## Forward Planning Decisions
 
