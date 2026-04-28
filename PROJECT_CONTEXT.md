@@ -295,6 +295,17 @@ Date: 2026-04-28
 - List Contents should keep the header fixed while rows scroll beneath it; content should never visually scroll over the header.
 - Database migration, export, and import are explicit backlog items and are strategically aligned with the pre-cloud transition work rather than being optional utilities.
 
+## Post-v1.3 Polish Decisions
+
+Date: 2026-04-28
+
+- The navigation tree should start with lists collapsed on application launch. Expansions made during the session may remain while the app is open, but startup should reset to the calmer collapsed state.
+- Word of the Day widgets use a square aspect model with a minimum size of 2x2 board units.
+- Widget editors should always expose a display-style selector. If a widget currently supports only one presentation mode, the selector should still be present and show a single default option.
+- Widget setup flows should not offer multiple visual mode choices unless those modes are actually supported in the current product line.
+- Board summary slots in the display header should use a tighter visual treatment than the main board body and should size from a readable minimum width instead of forcing all slots into equal-width white blocks.
+- Weather widget production fallback should prefer resilient approximate-location lookup paths so packaged builds are not overly dependent on one browser-side location service succeeding.
+
 ## Development Practice Decisions
 
 - Record future behavior, requirement, and rationale decisions in this file as they are made.

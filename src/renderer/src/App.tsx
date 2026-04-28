@@ -300,11 +300,11 @@ const birthdayBoardViewOptions: Array<{ value: BirthdayBoardView; label: string 
   { value: 'all', label: 'All birthdays' }
 ]
 const wizardWidgetLayoutOptions: Record<WidgetType, string[]> = {
-  clock: ['Digital with color', 'Digital'],
-  weather: ['Compact', 'Detailed'],
-  word_of_day: ['Compact', 'Detailed'],
+  clock: ['Default'],
+  weather: ['Default'],
+  word_of_day: ['Default'],
   world_clocks: ['Digital', 'Analogue'],
-  countdown: ['Compact', 'Detailed']
+  countdown: ['Default']
 }
 const fallbackWorldClockTimeZones = [
   'Europe/Bucharest',
@@ -4464,6 +4464,19 @@ function WidgetEditorPanel({
     })
   }
 
+  function widgetLayoutValue(): string {
+    if (type === 'world_clocks') return config.worldClocks?.style === 'analogue' ? 'Analogue' : 'Digital'
+    return 'Default'
+  }
+
+  function applyWidgetLayout(layout: string): void {
+    if (type !== 'world_clocks') return
+    updateWorldClockConfig((current) => ({
+      ...current,
+      style: layout === 'Analogue' ? 'analogue' : 'digital'
+    }))
+  }
+
   return (
     <form className="editor-card" onSubmit={submit}>
       <EditorHeading eyebrow="Widget" title={widget.name} />
@@ -4497,6 +4510,16 @@ function WidgetEditorPanel({
         <label className="toggle-field">
           <input checked={displayEnabled} onChange={(event) => setDisplayEnabled(event.target.checked)} type="checkbox" />
           <span>Show widget on board</span>
+        </label>
+        <label>
+          <span>Display style</span>
+          <select onChange={(event) => applyWidgetLayout(event.target.value)} value={widgetLayoutValue()}>
+            {wizardWidgetLayoutOptions[type].map((layout) => (
+              <option key={layout} value={layout}>
+                {layout}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="geometry-row widget-geometry-row">
           {(['w', 'h', 'x', 'y'] as const).map((key) => (
@@ -5178,7 +5201,6 @@ type WidgetAspectSpec = {
 }
 
 function widgetAspectSpec(type: WidgetType, config: BoardWidgetConfig): WidgetAspectSpec {
-  if (type === 'word_of_day') return { ratioW: 3, ratioH: 2, minScale: 1 }
   if (type === 'world_clocks') {
     const count = clamp(config.worldClocks?.locations?.length ?? 2, 2, 16)
     return { ratioW: count, ratioH: 2, minScale: 1 }
@@ -6715,7 +6737,7 @@ function DependencyTreePicker({
   }
 
   function renderListRows(list: BoardList): ReactElement {
-    const expanded = expandedLists[list.id] ?? true
+                const expanded = expandedLists[list.id] ?? false
     const childGroups = list.groups.filter((group) => !group.parentGroupId)
     const rootItems = list.items.filter((candidate) => !candidate.groupId && candidate.id !== currentItemId)
     const hasChildren = childGroups.length > 0 || rootItems.length > 0
@@ -8782,7 +8804,6 @@ function wizardPreferredGrids(templateType: WizardTemplateType): Array<{ w: numb
 
 function wizardWidgetGridSize(widget: WizardWidgetDraft): { w: number; h: number } {
   if (widget.type === 'world_clocks') return { w: 2, h: 2 }
-  if (widget.type === 'word_of_day') return { w: 3, h: 2 }
   return { w: 2, h: 2 }
 }
 
@@ -10052,27 +10073,57 @@ async function resolveWeatherLocation(): Promise<{ latitude: number; longitude: 
 }
 
 async function requestApproximateWeatherLocation(previousError: unknown): Promise<{ latitude: number; longitude: number; kicker: string }> {
-  try {
-    const response = await fetch('https://ipapi.co/json/')
-    if (!response.ok) throw new Error(`ip-location-http-${response.status}`)
-    const payload = (await response.json()) as {
-      latitude?: number
-      longitude?: number
-      city?: string
-      region?: string
-      country_name?: string
+  const providers: Array<() => Promise<{ latitude: number; longitude: number; kicker: string }>> = [
+    async () => {
+      const response = await fetch('https://ipwho.is/')
+      if (!response.ok) throw new Error(`ip-location-http-${response.status}`)
+      const payload = (await response.json()) as {
+        success?: boolean
+        latitude?: number
+        longitude?: number
+        city?: string
+        region?: string
+        country?: string
+      }
+      if (payload.success === false || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
+        throw new Error('ip-location-missing')
+      }
+      const locationLabel = [payload.city, payload.region || payload.country].filter(Boolean).join(', ')
+      return {
+        latitude: Number(payload.latitude),
+        longitude: Number(payload.longitude),
+        kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
+      }
+    },
+    async () => {
+      const response = await fetch('https://ipapi.co/json/')
+      if (!response.ok) throw new Error(`ip-location-http-${response.status}`)
+      const payload = (await response.json()) as {
+        latitude?: number
+        longitude?: number
+        city?: string
+        region?: string
+        country_name?: string
+      }
+      if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) throw new Error('ip-location-missing')
+      const locationLabel = [payload.city, payload.region || payload.country_name].filter(Boolean).join(', ')
+      return {
+        latitude: Number(payload.latitude),
+        longitude: Number(payload.longitude),
+        kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
+      }
     }
-    if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) throw new Error('ip-location-missing')
-    const locationLabel = [payload.city, payload.region || payload.country_name].filter(Boolean).join(', ')
-    return {
-      latitude: Number(payload.latitude),
-      longitude: Number(payload.longitude),
-      kicker: locationLabel ? `Approximate · ${locationLabel}` : 'Approximate location'
+  ]
+
+  let lastError: unknown = previousError
+  for (const provider of providers) {
+    try {
+      return await provider()
+    } catch (error) {
+      lastError = error
     }
-  } catch (fallbackError) {
-    if (previousError instanceof Error) throw previousError
-    throw fallbackError
   }
+  throw lastError
 }
 
 function weatherUnavailableDetail(error: unknown): string {
@@ -10087,6 +10138,9 @@ function weatherUnavailableDetail(error: unknown): string {
   }
   if (error instanceof Error && error.message.startsWith('ip-location-http-')) {
     return 'Approximate location lookup failed. Check connectivity and try again.'
+  }
+  if (error instanceof TypeError) {
+    return 'The weather location service could not be reached. Check connectivity and try again.'
   }
   return 'Location permission or weather service unavailable.'
 }
