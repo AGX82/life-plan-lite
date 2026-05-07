@@ -25,7 +25,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { FormEvent, PointerEvent, useEffect, useRef, useState } from 'react'
+import { Fragment, FormEvent, PointerEvent, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, Dispatch, ReactElement, SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import lplLogo from './assets/lpl_logo.png'
@@ -64,8 +64,12 @@ import type {
   UpdateWidgetInput,
   WidgetType,
   WeatherApproximateLocation,
+  WeatherLocationSearchResult,
+  WishlistRecommendationProfile,
   WorldClockLocation
 } from '@shared/domain'
+import HelpModal from './help/HelpModal'
+import { tutorialSteps } from './tutorial/tutorialContent'
 
 type Route = 'admin' | 'display'
 type TutorialScene = 'admin' | 'display'
@@ -149,6 +153,8 @@ type TutorialTargetId =
   | 'display-summary-row'
   | 'display-day-actions'
   | 'display-primary-list-header'
+  | 'display-wishlist-header'
+  | 'display-wishlist-table'
   | 'display-add-item'
   | 'display-edit-list'
   | 'display-list-summary'
@@ -174,6 +180,21 @@ type TutorialSession = {
   displaySnapshot: BoardSnapshot
   boards: BoardSummary[]
   selectedNode: SelectedNode
+}
+
+type HelpArticleSection = {
+  title?: string
+  paragraphs: string[]
+  bullets?: string[]
+}
+
+type HelpArticle = {
+  id: string
+  title: string
+  category: string
+  keywords: string[]
+  summary: string
+  sections: HelpArticleSection[]
 }
 
 const columnTypes: ColumnType[] = ['text', 'integer', 'decimal', 'currency', 'duration', 'date', 'boolean', 'choice', 'hyperlink']
@@ -231,11 +252,13 @@ const listTemplateOptions: Array<{ value: ListTemplateType; label: string; descr
   { value: 'todo', label: 'To Do', description: 'Tasks with deadlines, priority, people, effort, progress and comments.' },
   { value: 'shopping_list', label: 'Shopping List', description: 'Products, pieces, store, needed-by date, price, calculated cost and link.' },
   { value: 'wishlist', label: 'Wishlist', description: 'Desired products with links and a fun Wishmeter ranking.' },
+  { value: 'project', label: 'Project', description: 'High-level project tracking with hierarchy, milestones, dependencies, and gantt context.' },
   { value: 'health', label: 'Health', description: 'One health list with check-ups, recurring appointments, investigations and treatment.' },
   { value: 'trips_events', label: 'Trips & Events', description: 'Plans with start/end dates, type, topic and location.' },
   { value: 'birthday_calendar', label: 'Birthday Calendar', description: 'Birthdays with turning age, location and gift-task action.' },
   { value: 'custom', label: 'Build Custom List', description: 'Start with a single title field and shape the rest yourself.' }
 ]
+
 type WizardTemplateType = Exclude<ListTemplateType, 'custom'>
 type WizardMode = 'firstRun' | 'quickAdd' | 'newBoard' | 'reset'
 type WizardStepId = 'mode' | 'welcome' | 'templates' | 'lists' | 'specifics' | 'sorting' | 'finalTouches' | 'widgets' | 'done'
@@ -300,12 +323,18 @@ const birthdayBoardViewOptions: Array<{ value: BirthdayBoardView; label: string 
   { value: 'next_2_months', label: 'Next 2 months' },
   { value: 'all', label: 'All birthdays' }
 ]
+const wishlistRecommendationProfileOptions: Array<{ value: WishlistRecommendationProfile; label: string; description: string }> = [
+  { value: 'default', label: 'Default', description: 'Wish-led recommendation for typical wishlist planning.' },
+  { value: 'balanced', label: 'Balanced', description: 'Wish, priority, and price all influence the result materially.' },
+  { value: 'priority_first', label: 'Priority First', description: 'Practical importance has the strongest voice.' },
+  { value: 'value_first', label: 'Value First', description: 'Price efficiency leads, with wish mostly breaking ties.' }
+]
 const wizardWidgetLayoutOptions: Record<WidgetType, string[]> = {
-  clock: ['Default'],
+  clock: ['Segmented', 'Split Date'],
   weather: ['Default'],
   word_of_day: ['Default'],
-  world_clocks: ['Digital', 'Analogue'],
-  countdown: ['Default']
+  world_clocks: ['Panel'],
+  countdown: ['Segmented']
 }
 const fallbackWorldClockTimeZones = [
   'Europe/Bucharest',
@@ -796,6 +825,7 @@ function AdminApp({
   const [boardMenu, setBoardMenu] = useState<BoardRailMenuState>(null)
   const [boardDeleteDialog, setBoardDeleteDialog] = useState<BoardSummary | null>(null)
   const [newListDialogOpen, setNewListDialogOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const allItems = snapshot.lists.flatMap((list) => list.items)
 
   function closeMenu(): void {
@@ -851,9 +881,9 @@ function AdminApp({
             <Settings2 size={18} />
             LPL Wizard
           </button>
-          <button className="icon-button wide" data-tutorial-id="tutorial-launch" disabled={busy} onClick={onOpenTutorial} type="button">
+          <button className="icon-button wide" data-tutorial-id="tutorial-launch" disabled={busy} onClick={() => setHelpOpen(true)} type="button">
             <BookOpenText size={18} />
-            Tutorial
+            Help
           </button>
           <div className="side-action-group" data-tutorial-id="board-display-actions">
             <BoardVisibilityControl busy={busy} displayState={displayState} runAction={runAction} />
@@ -999,6 +1029,15 @@ function AdminApp({
           title={globalMessageDialog.title}
           message={globalMessageDialog.message}
           onClose={() => setGlobalMessageDialog(null)}
+        />
+      )}
+      {helpOpen && (
+        <HelpModal
+          onClose={() => setHelpOpen(false)}
+          onStartTour={() => {
+            setHelpOpen(false)
+            onOpenTutorial()
+          }}
         />
       )}
       {wizardOpen && (
@@ -1724,257 +1763,6 @@ function GuidedTutorial({
   )
 }
 
-function tutorialSteps(snapshot: BoardSnapshot): TutorialStep[] {
-  const steps: TutorialStep[] = [
-    {
-      id: 'boards',
-      scene: 'admin',
-      targetId: 'boards-list',
-      title: 'Your boards live here',
-      body:
-        'The active board stays on top. Click any board to load it into the editor, and right-click a board when you want quick actions like duplicate or delete.'
-    },
-    {
-      id: 'tree',
-      scene: 'admin',
-      targetId: 'tree',
-      title: 'This is the navigation tree',
-      body:
-        'This pane maps the content of the loaded board. It shows the structure of the board and lets you move quickly between lists, groups, items, and widgets.'
-    },
-    {
-      id: 'tree-lists',
-      scene: 'admin',
-      targetId: 'tree-lists-section',
-      title: 'Lists sit at the top of the tree',
-      body:
-        'The upper part of the navigation tree is for lists. This is where you add new lists and drill into their groups and tasks.'
-    },
-    {
-      id: 'tree-widgets',
-      scene: 'admin',
-      targetId: 'tree-widgets-section',
-      title: 'Widgets live in their own section',
-      body:
-        'The lower part of the navigation tree is for widgets. From here you can add, edit, and remove the board widgets that support your daily view.'
-    },
-    {
-      id: 'edit-board',
-      scene: 'admin',
-      targetId: 'edit-panel',
-      title: 'The edit panel is where the work happens',
-      body:
-        'This is the main working area of the app. Based on what you select, this panel switches between board, list, group, task, and widget editing so the right controls appear in the same place.',
-      selection: { kind: 'board', id: snapshot.id }
-    }
-  ]
-
-  const firstList = snapshot.lists[0]
-  if (firstList) {
-    steps.push(
-      {
-        id: 'list-tab-properties',
-        scene: 'admin',
-        targetId: 'list-editor-shell',
-        title: 'List Properties sets the operating rules',
-        body:
-          'This is where you name the list, choose the template, control board visibility, enable deadlines, and set the main size and placement defaults.',
-        selection: { kind: 'list', id: firstList.id },
-        activateTarget: true,
-        clickTargetId: 'list-tab-properties'
-      },
-      {
-        id: 'list-tab-structure',
-        scene: 'admin',
-        targetId: 'list-editor-shell',
-        title: 'List Structure defines the fields',
-        body:
-          'Use this tab to show or hide columns, change field types, decide which ones are required, and control the order in which fields appear on the board.',
-        selection: { kind: 'list', id: firstList.id },
-        activateTarget: true,
-        clickTargetId: 'list-tab-structure'
-      },
-      {
-        id: 'list-tab-contents',
-        scene: 'admin',
-        targetId: 'list-editor-shell',
-        title: 'List Contents is where the entries live',
-        body:
-          'Add items and groups here, then edit or reorganize the actual content of the list. This is the working area for day-to-day data inside that list.',
-        selection: { kind: 'list', id: firstList.id },
-        activateTarget: true,
-        clickTargetId: 'list-tab-contents'
-      },
-      {
-        id: 'list-tab-settings',
-        scene: 'admin',
-        targetId: 'list-editor-shell',
-        title: 'List Settings handles behavior details',
-        body:
-          'This tab is for the list-level options that shape how entries behave, which includes template-specific controls and automation-related settings.',
-        selection: { kind: 'list', id: firstList.id },
-        activateTarget: true,
-        clickTargetId: 'list-tab-settings'
-      },
-      {
-        id: 'list-tab-summary',
-        scene: 'admin',
-        targetId: 'list-editor-shell',
-        title: 'List Summary controls what the list reports',
-        body:
-          'Define the summary values shown for the list here, like counts, totals, or deadline-oriented rollups. These summaries also feed into board-level reporting.',
-        selection: { kind: 'list', id: firstList.id },
-        activateTarget: true,
-        clickTargetId: 'list-tab-summary'
-      }
-    )
-  }
-
-  steps.push(
-    {
-      id: 'live-layout',
-      scene: 'admin',
-      targetId: 'live-layout',
-      title: 'Live Layout is an active tool',
-      body:
-        'This is where you resize, reposition, and rebalance the visible board. Dragging here is not just a preview: it updates the board layout and can swap or push neighboring elements to make space.'
-    },
-    {
-      id: 'wizard',
-      scene: 'admin',
-      targetId: 'wizard-launch',
-      title: 'The wizard is your friend',
-      body:
-        'Use the LPL Wizard when you want to create several lists quickly, add a new board in a guided flow, or reset the app without rebuilding everything by hand.'
-    },
-    {
-      id: 'tutorial-launch',
-      scene: 'admin',
-      targetId: 'tutorial-launch',
-      title: 'You can always run this tutorial again',
-      body:
-        'Use the Tutorial button any time you want a refresher. It is meant to be a reusable guided walkthrough, not only a first-run feature.'
-    },
-    {
-      id: 'settings',
-      scene: 'admin',
-      targetId: 'app-settings',
-      title: 'Application Settings affect the whole workspace',
-      body:
-        'This panel controls the global behavior of the app. It is where you manage close confirmation, display targeting, and the current visual theme.'
-    },
-    {
-      id: 'close-confirmation',
-      scene: 'admin',
-      targetId: 'close-confirmation',
-      title: 'Close confirmation controls how items are closed',
-      body:
-        'Here you decide whether finishing or cancelling an item should ask for comments, ask without comments, or happen immediately. It affects the way closure actions behave across the app.'
-    },
-    {
-      id: 'theme',
-      scene: 'admin',
-      targetId: 'theme-select',
-      title: 'Themes let you switch the visual style',
-      body:
-        'You can move between the built-in themes here. The theme changes the look and contrast of the workspace without changing the structure or data.'
-    },
-    {
-      id: 'display-target',
-      scene: 'admin',
-      targetId: 'display-target',
-      title: 'Choose the display before showing the board',
-      body:
-        'If you use more than one monitor, set the target display here first. LPL uses this selection when it opens the fullscreen board window.'
-    },
-    {
-      id: 'board-display-actions',
-      scene: 'admin',
-      targetId: 'board-display-actions',
-      title: 'Show Board, Hide Board, and View Here',
-      body:
-        'Show Board opens the board window on the selected display. Hide Board closes that display window. View Here opens the same board view inside this window so you can inspect the board locally.'
-    },
-    {
-      id: 'display-intro',
-      scene: 'admin',
-      targetId: 'board-display-actions',
-      title: "Let's step into the live board",
-      body:
-        'When you are ready to leave setup behind, View Here opens the actual board inside this window. That is the same live surface you will use day to day.',
-      activateTarget: true,
-      clickTargetId: 'view-here-action'
-    },
-    {
-      id: 'display-board-intro',
-      scene: 'display',
-      targetId: 'display-board-shell',
-      title: 'This is the board you will actually live in',
-      body:
-        'This is the main working surface of Life Plan Lite. The editor is there to help you set up structure and make occasional deeper changes, but most of the time this live board is where you will review, update, and move your planning forward.',
-      maskless: true,
-      centerCard: true
-    },
-    {
-      id: 'display-summary-row',
-      scene: 'display',
-      targetId: 'display-summary-row',
-      title: 'The board header keeps key summaries visible',
-      body:
-        'This summary row keeps the board-level rollups in view while you work. These values are configured in the edit panel under Board Summary and act as the quick status line for the whole board.'
-    },
-    {
-      id: 'display-day-actions',
-      scene: 'display',
-      targetId: 'display-day-actions',
-      title: 'These quick filters help with day-focused planning',
-      body:
-        'The 24 and day buttons help you focus on immediate time windows. They are quick board-level lenses for what matters today and in the next day.'
-    },
-    {
-      id: 'display-add-item',
-      scene: 'display',
-      targetId: 'display-add-item',
-      title: 'You can add new items directly from the board',
-      body:
-        'After the initial setup, many everyday actions can happen directly on the live board. Adding a new item does not require going back through the full list editor.'
-    },
-    {
-      id: 'display-edit-list',
-      scene: 'display',
-      targetId: 'display-edit-list',
-      title: 'You can also open list settings from the board',
-      body:
-        'The board is not just for reading. It also gives you direct access to common list-level adjustments, so basic user-focused work stays close to the live context.'
-    },
-    {
-      id: 'display-list-summary',
-      scene: 'display',
-      targetId: 'display-list-summary',
-      title: 'List summaries keep the key signals visible',
-      body:
-        'These compact summaries surface the most useful roll-ups for the list, like counts, deadlines, and effort, without forcing you to scan the full table each time.'
-    },
-    {
-      id: 'display-list-table',
-      scene: 'display',
-      targetId: 'display-list-table',
-      title: 'Board lists show the right amount of detail',
-      body:
-        'A list may have many fields defined, but only a few need to stay visible on the board for readability. Clicking an item brings up its full detail editor, where you can see and edit all of the item fields.'
-    },
-    {
-      id: 'finish',
-      scene: 'display',
-      targetId: 'display-board-shell',
-      title: 'That is the core Life Plan Lite flow',
-      body:
-        'You now have the main mental map: boards and structure on the left, editing in the panel, layout management below, and the live board as the daily action surface. You can return to this tutorial any time.'
-    }
-  )
-
-  return steps
-}
 
 function sameSelectedNode(left: SelectedNode | null, right: SelectedNode | undefined): boolean {
   if (!left || !right) return false
@@ -3085,6 +2873,8 @@ function ListEditorPanel({
   const [showCreatedByOnBoard, setShowCreatedByOnBoard] = useState(list.showCreatedByOnBoard)
   const [showStatusOnBoard, setShowStatusOnBoard] = useState(list.showStatusOnBoard)
   const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>(list.templateConfig.birthday?.boardView ?? 'this_month')
+  const [wishlistProfile, setWishlistProfile] = useState<WishlistRecommendationProfile>(list.templateConfig.wishlist?.profile ?? 'default')
+  const [showWishlistAdvisedBuyOrder, setShowWishlistAdvisedBuyOrder] = useState(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
   const [newColumnName, setNewColumnName] = useState('')
   const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
   const [addColumnOnTop, setAddColumnOnTop] = useState(appSettings.addColumnOnTopByBoard[list.boardId] ?? false)
@@ -3119,6 +2909,8 @@ function ListEditorPanel({
     setShowCreatedByOnBoard(list.showCreatedByOnBoard)
     setShowStatusOnBoard(list.showStatusOnBoard)
     setBirthdayBoardView(list.templateConfig.birthday?.boardView ?? 'this_month')
+    setWishlistProfile(list.templateConfig.wishlist?.profile ?? 'default')
+    setShowWishlistAdvisedBuyOrder(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
     setMoveTargetBoardId('')
     setCopyTargetBoardId('')
     setActiveTab('properties')
@@ -3144,7 +2936,7 @@ function ListEditorPanel({
     setDisplayEnabled(list.displayEnabled)
   }, [list.displayEnabled, list.grid.h, list.grid.w, list.grid.x, list.grid.y])
 
-  const hasTemplateSettings = templateType === 'birthday_calendar'
+  const hasTemplateSettings = templateType === 'birthday_calendar' || templateType === 'wishlist'
 
   function submit(event: FormEvent): void {
     event.preventDefault()
@@ -3207,7 +2999,7 @@ function ListEditorPanel({
         listId: list.id,
         name,
         templateType,
-        templateConfig: listTemplateConfigForSave(templateType, listBehavior, birthdayBoardView),
+        templateConfig: listTemplateConfigForSave(templateType, listBehavior, birthdayBoardView, wishlistProfile, showWishlistAdvisedBuyOrder),
         grid: nextGrid,
         dueDateEnabled,
         dueDateColumnId: list.dueDateColumnId,
@@ -3412,6 +3204,10 @@ function ListEditorPanel({
                           setSortColumnId(birthdayColumn?.id ?? null)
                           setSortDirection('asc')
                         }
+                        if (nextType === 'wishlist') {
+                          setWishlistProfile('default')
+                          setShowWishlistAdvisedBuyOrder(false)
+                        }
                       }}
                       value={templateType}
                     >
@@ -3590,16 +3386,33 @@ function ListEditorPanel({
           <section className="list-tab-panel" data-tutorial-id="list-panel-settings">
             {hasTemplateSettings ? (
               <div className="field-grid two">
-                <label>
-                  <span>Board birthday view</span>
-                  <select onChange={(event) => setBirthdayBoardView(event.target.value as BirthdayBoardView)} value={birthdayBoardView}>
-                    {birthdayBoardViewOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {templateType === 'birthday_calendar' && (
+                  <label>
+                    <span>Board birthday view</span>
+                    <select onChange={(event) => setBirthdayBoardView(event.target.value as BirthdayBoardView)} value={birthdayBoardView}>
+                      {birthdayBoardViewOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {templateType === 'wishlist' && (
+                  <label>
+                    <span>Recommendation profile</span>
+                    <select onChange={(event) => setWishlistProfile(event.target.value as WishlistRecommendationProfile)} value={wishlistProfile}>
+                      {wishlistRecommendationProfileOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <small className="field-help-text">
+                      {wishlistRecommendationProfileOptions.find((option) => option.value === wishlistProfile)?.description}
+                    </small>
+                  </label>
+                )}
               </div>
             ) : (
               <div className="empty-editor-state">No template-specific settings for this list.</div>
@@ -3669,6 +3482,15 @@ function ListEditorPanel({
                     showOnBoard={showStatusOnBoard}
                     typeLabel="system"
                   />
+                  {templateType === 'wishlist' && (
+                    <SystemColumnRow
+                      name="Advised Buy Order"
+                      onToggle={setShowWishlistAdvisedBuyOrder}
+                      showOnBoard={showWishlistAdvisedBuyOrder}
+                      statusLabel="Calculated"
+                      typeLabel="calculated"
+                    />
+                  )}
                   {visibleColumns(list).map((column) => (
                     <ColumnRow
                       column={column}
@@ -3788,18 +3610,20 @@ function SystemColumnRow({
   name,
   onToggle,
   showOnBoard,
-  typeLabel
+  typeLabel,
+  statusLabel = 'System'
 }: {
   name: string
   onToggle: (checked: boolean) => void
   showOnBoard: boolean
   typeLabel: string
+  statusLabel?: string
 }): ReactElement {
   return (
     <div className="column-row system-column-row">
       <input disabled value={name} />
       <input disabled value={typeLabel} />
-      <span className="readonly-field">System</span>
+      <span className="readonly-field">{statusLabel}</span>
       <label>
         <input checked={showOnBoard} onChange={(event) => onToggle(event.target.checked)} type="checkbox" />
         Show
@@ -4268,18 +4092,28 @@ function ItemEditorPanel({
   const [values, setValues] = useState<FormValues>(() => valuesForItem(item, editableColumns))
   const [dependencies, setDependencies] = useState<string[]>(item.dependencyItemIds)
   const [groupId, setGroupId] = useState<string | null>(item.groupId)
+  const [parentItemId, setParentItemId] = useState<string | null>(item.parentItemId)
   const [activeTab, setActiveTab] = useState<'details' | 'dependencies'>('details')
   const [closeDialog, setCloseDialog] = useState<{ action: 'completed' | 'cancelled' } | null>(null)
   const [closeComment, setCloseComment] = useState('')
   const [closing, setClosing] = useState(false)
   const confirmationMode = appSettings.closeConfirmationMode
+  const fieldColumns = projectEditableFieldColumns(list, editableColumns, values)
+  const currentProjectType = list.templateType === 'project' ? projectTypeFromValues(list, values) : null
 
   useEffect(() => {
     setValues(valuesForItem(item, editableColumns))
     setDependencies(item.dependencyItemIds)
     setGroupId(item.groupId)
+    setParentItemId(item.parentItemId)
     setActiveTab('details')
   }, [item.id])
+
+  useEffect(() => {
+    if (currentProjectType && isProjectMilestoneLikeType(currentProjectType) && parentItemId) {
+      setParentItemId(null)
+    }
+  }, [currentProjectType, parentItemId])
 
   function setValue(column: ListColumn, value: FieldValue): void {
     setValues((current) => ({ ...current, [column.id]: coerceInputValue(column, value) }))
@@ -4287,7 +4121,17 @@ function ItemEditorPanel({
 
   function submit(event: FormEvent): void {
     event.preventDefault()
-    runAction(() => window.lpl.updateItem({ itemId: item.id, groupId, values, dependencyItemIds: dependencies }))
+    runAction(() =>
+      submitProjectAwareItemMutation({
+        mode: 'edit',
+        item,
+        list,
+        groupId,
+        parentItemId,
+        values,
+        dependencyItemIds: dependencies
+      })
+    )
   }
 
   function requestClose(action: 'completed' | 'cancelled'): void {
@@ -4336,8 +4180,21 @@ function ItemEditorPanel({
                     ))}
                   </select>
                 </label>
+                {list.templateType === 'project' && !isProjectMilestoneLikeType(currentProjectType ?? 'task') && (
+                  <label>
+                    <span>Parent Task</span>
+                    <select onChange={(event) => setParentItemId(event.target.value || null)} value={parentItemId ?? ''}>
+                      <option value="">Project root</option>
+                      {projectParentOptions(list, item.id).map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
-              <ItemFields columns={editableColumns} setValue={setValue} values={values} />
+              <ItemFields columns={fieldColumns} setValue={setValue} values={values} />
             </section>
           )}
           {activeTab === 'dependencies' && (
@@ -4403,6 +4260,10 @@ function WidgetEditorPanel({
   const [grid, setGrid] = useState(widget.grid)
   const [type, setType] = useState<WidgetType>(widget.type)
   const [config, setConfig] = useState<BoardWidgetConfig>(widget.config)
+  const [weatherSearchQuery, setWeatherSearchQuery] = useState('')
+  const [weatherSearchResults, setWeatherSearchResults] = useState<WeatherLocationSearchResult[]>([])
+  const [weatherSelectedResultId, setWeatherSelectedResultId] = useState('')
+  const [weatherSearchBusy, setWeatherSearchBusy] = useState(false)
   const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
 
   useEffect(() => {
@@ -4411,6 +4272,10 @@ function WidgetEditorPanel({
     setGrid(widget.grid)
     setType(widget.type)
     setConfig(widget.config)
+    setWeatherSearchQuery(widget.config.weather?.customLocation?.label ?? '')
+    setWeatherSearchResults([])
+    setWeatherSelectedResultId('')
+    setWeatherSearchBusy(false)
   }, [widget.id])
 
   function submit(event: FormEvent): void {
@@ -4465,16 +4330,98 @@ function WidgetEditorPanel({
     })
   }
 
+  function updateWeatherConfig(
+    updater: (current: NonNullable<BoardWidgetConfig['weather']>) => NonNullable<BoardWidgetConfig['weather']>
+  ): void {
+    setConfig((current) => ({
+      weather: updater(current.weather ?? defaultWeatherConfig())
+    }))
+  }
+
+  async function searchCustomWeatherLocations(): Promise<void> {
+    const query = weatherSearchQuery.trim()
+    if (query.length < 2) {
+      setMessageDialog({
+        title: 'Search Location',
+        message: 'Please enter at least 2 characters to search for a weather location.'
+      })
+      return
+    }
+    setWeatherSearchBusy(true)
+    try {
+      const results = await window.lpl.searchWeatherLocations(query)
+      setWeatherSearchResults(results)
+      if (results.length === 1) {
+        const match = results[0]
+        setWeatherSelectedResultId(match.id)
+        updateWeatherConfig((current) => ({
+          ...current,
+          locationMode: 'custom',
+          customLocation: {
+            label: match.label,
+            latitude: match.latitude,
+            longitude: match.longitude
+          }
+        }))
+        setWeatherSearchQuery(match.label)
+      }
+    } catch (error) {
+      setMessageDialog({
+        title: 'Weather Location Search',
+        message: weatherLocationSearchError(error)
+      })
+    } finally {
+      setWeatherSearchBusy(false)
+    }
+  }
+
+  function applyWeatherSearchResult(id: string): void {
+    const match = weatherSearchResults.find((entry) => entry.id === id)
+    if (!match) return
+    setWeatherSelectedResultId(id)
+    updateWeatherConfig((current) => ({
+      ...current,
+      locationMode: 'custom',
+      customLocation: {
+        label: match.label,
+        latitude: match.latitude,
+        longitude: match.longitude
+      }
+    }))
+    setWeatherSearchQuery(match.label)
+  }
+
   function widgetLayoutValue(): string {
-    if (type === 'world_clocks') return config.worldClocks?.style === 'analogue' ? 'Analogue' : 'Digital'
+    if (type === 'clock') return config.clock?.style === 'split_date' ? 'Split Date' : 'Segmented'
+    if (type === 'countdown') return 'Segmented'
+    if (type === 'world_clocks') return 'Panel'
     return 'Default'
   }
 
   function applyWidgetLayout(layout: string): void {
+    if (type === 'clock') {
+      setConfig((current) => ({
+        clock: {
+          showSeconds: current.clock?.showSeconds !== false,
+          style: layout === 'Split Date' ? 'split_date' : 'segmented'
+        }
+      }))
+      return
+    }
+    if (type === 'countdown') {
+      setConfig((current) => ({
+        countdown: {
+          label: current.countdown?.label ?? 'Next milestone',
+          targetAt: current.countdown?.targetAt ?? '',
+          style: 'segmented'
+        }
+      }))
+      return
+    }
     if (type !== 'world_clocks') return
     updateWorldClockConfig((current) => ({
       ...current,
-      style: layout === 'Analogue' ? 'analogue' : 'digital'
+      style: 'panel'
     }))
   }
 
@@ -4541,26 +4488,98 @@ function WidgetEditorPanel({
       <section className="inline-config-panel">
         <EditorHeading eyebrow="Configuration" title={widgetTypes.find((entry) => entry.value === type)?.label ?? 'Widget'} />
         {type === 'clock' && (
-          <label className="toggle-field">
-            <input
-              checked={config.clock?.showSeconds !== false}
-              onChange={(event) => setConfig({ clock: { showSeconds: event.target.checked } })}
-              type="checkbox"
-            />
-            <span>Show seconds</span>
-          </label>
+          <>
+            <label className="toggle-field">
+              <input
+                checked={config.clock?.showSeconds !== false}
+                onChange={(event) =>
+                  setConfig({
+                    clock: {
+                      showSeconds: event.target.checked,
+                      style: config.clock?.style === 'split_date' ? 'split_date' : 'segmented'
+                    }
+                  })
+                }
+                type="checkbox"
+              />
+              <span>Show seconds</span>
+            </label>
+          </>
         )}
         {type === 'weather' && (
-          <label>
-            <span>Temperature unit</span>
-            <select
-              onChange={(event) => setConfig({ weather: { temperatureUnit: event.target.value === 'fahrenheit' ? 'fahrenheit' : 'celsius' } })}
-              value={config.weather?.temperatureUnit ?? 'celsius'}
-            >
-              <option value="celsius">Celsius</option>
-              <option value="fahrenheit">Fahrenheit</option>
-            </select>
-          </label>
+          <div className="field-grid two weather-config-panel">
+            <label>
+              <span>Temperature unit</span>
+              <select
+                onChange={(event) =>
+                  updateWeatherConfig((current) => ({
+                    ...current,
+                    temperatureUnit: event.target.value === 'fahrenheit' ? 'fahrenheit' : 'celsius'
+                  }))
+                }
+                value={config.weather?.temperatureUnit ?? 'celsius'}
+              >
+                <option value="celsius">Celsius</option>
+                <option value="fahrenheit">Fahrenheit</option>
+              </select>
+            </label>
+            <label>
+              <span>Location source</span>
+              <select
+                onChange={(event) =>
+                  updateWeatherConfig((current) => ({
+                    ...current,
+                    locationMode: event.target.value === 'custom' ? 'custom' : 'current',
+                    customLocation: event.target.value === 'custom' ? current.customLocation : null
+                  }))
+                }
+                value={config.weather?.locationMode ?? 'current'}
+              >
+                <option value="current">Current location</option>
+                <option value="custom">Custom location</option>
+              </select>
+            </label>
+            {config.weather?.locationMode === 'custom' && (
+              <>
+                <label className="weather-search-field">
+                  <span>Search location</span>
+                  <input
+                    onChange={(event) => setWeatherSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void searchCustomWeatherLocations()
+                      }
+                    }}
+                    placeholder="Search city or region"
+                    value={weatherSearchQuery}
+                  />
+                </label>
+                <button className="icon-button" disabled={weatherSearchBusy} onClick={() => void searchCustomWeatherLocations()} type="button">
+                  <Globe2 size={16} />
+                  {weatherSearchBusy ? 'Searching…' : 'Search'}
+                </button>
+                <label className="weather-search-results">
+                  <span>Matching locations</span>
+                  <select
+                    onChange={(event) => applyWeatherSearchResult(event.target.value)}
+                    value={weatherSelectedResultId}
+                  >
+                    <option value="">Select location…</option>
+                    {weatherSearchResults.map((result) => (
+                      <option key={result.id} value={result.id}>
+                        {result.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="weather-selected-location">
+                  <span>Selected</span>
+                  <strong>{config.weather?.customLocation?.label ?? 'No custom location selected yet'}</strong>
+                </div>
+              </>
+            )}
+          </div>
         )}
         {type === 'word_of_day' && (
           <label>
@@ -4578,16 +4597,6 @@ function WidgetEditorPanel({
                 <option key={timeZone} value={timeZone} />
               ))}
             </datalist>
-            <label>
-              <span>Display style</span>
-              <select
-                onChange={(event) => updateWorldClockConfig((current) => ({ ...current, style: event.target.value === 'analogue' ? 'analogue' : 'digital' }))}
-                value={config.worldClocks?.style ?? 'digital'}
-              >
-                <option value="digital">Digital</option>
-                <option value="analogue">Analogue</option>
-              </select>
-            </label>
             <label className="toggle-field">
               <input
                 checked={Boolean(config.worldClocks?.showSeconds)}
@@ -4645,18 +4654,22 @@ function WidgetEditorPanel({
           <div className="field-grid two">
             <label>
               <span>Countdown label</span>
-              <input
-                onChange={(event) => setConfig({ countdown: { label: event.target.value, targetAt: config.countdown?.targetAt ?? '' } })}
-                value={config.countdown?.label ?? 'Next milestone'}
-              />
-            </label>
-            <label>
-              <span>Target date & time</span>
-              <input
-                onChange={(event) => setConfig({ countdown: { label: config.countdown?.label ?? 'Next milestone', targetAt: event.target.value } })}
-                type="datetime-local"
-                value={config.countdown?.targetAt ?? ''}
-              />
+                <input
+                  onChange={(event) =>
+                    setConfig({ countdown: { label: event.target.value, targetAt: config.countdown?.targetAt ?? '', style: 'segmented' } })
+                  }
+                  value={config.countdown?.label ?? 'Next milestone'}
+                />
+              </label>
+              <label>
+                <span>Target date & time</span>
+                <input
+                  onChange={(event) =>
+                    setConfig({ countdown: { label: config.countdown?.label ?? 'Next milestone', targetAt: event.target.value, style: 'segmented' } })
+                  }
+                  type="datetime-local"
+                  value={config.countdown?.targetAt ?? ''}
+                />
             </label>
           </div>
         )}
@@ -4976,36 +4989,6 @@ function DisplayBoard({
   )
 }
 
-function MessageModal({
-  message,
-  onClose,
-  title
-}: {
-  message: string
-  onClose: () => void
-  title: string
-}): ReactElement {
-  return (
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div aria-modal="true" className="modal-card message-modal" onClick={(event) => event.stopPropagation()} role="dialog">
-        <div className="modal-header">
-          <div>
-            <p className="eyebrow">Notice</p>
-            <h3>{title}</h3>
-          </div>
-        </div>
-        <div className="modal-body">
-          <p>{message}</p>
-        </div>
-        <div className="modal-actions">
-          <button className="primary-button" onClick={onClose} type="button">
-            OK
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function ConfirmActionModal({
   busy,
@@ -5042,6 +5025,37 @@ function ConfirmActionModal({
           </button>
           <button className={destructive ? 'danger-button' : 'primary-button'} disabled={busy} onClick={() => void onConfirm()} type="button">
             {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MessageModal({
+  title,
+  message,
+  onClose
+}: {
+  title: string
+  message: string
+  onClose: () => void
+}): ReactElement {
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div aria-modal="true" className="modal-card message-modal" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Notice</p>
+            <h3>{title}</h3>
+          </div>
+        </div>
+        <div className="modal-body">
+          <p>{message}</p>
+        </div>
+        <div className="modal-actions">
+          <button autoFocus className="primary-button" onClick={onClose} type="button">
+            OK
           </button>
         </div>
       </div>
@@ -5202,6 +5216,7 @@ type WidgetAspectSpec = {
 }
 
 function widgetAspectSpec(type: WidgetType, config: BoardWidgetConfig): WidgetAspectSpec {
+  if (type === 'countdown') return { ratioW: 3, ratioH: 2, minScale: 1 }
   if (type === 'world_clocks') {
     const count = clamp(config.worldClocks?.locations?.length ?? 2, 2, 16)
     return { ratioW: count, ratioH: 2, minScale: 1 }
@@ -5310,10 +5325,11 @@ function BoardListView({
   tutorialAnchor?: boolean
 }): ReactElement {
   const columns = boardVisibleColumns(list)
-  const rows = boardDisplayRows(list)
   const displayColumns = birthdayBoardColumns(list, columns)
+  const [sortState, setSortState] = useState<BoardListSortState | null>(null)
+  const rows = sortBoardDisplayRows(list, boardDisplayRows(list), displayColumns, sortState)
   const listSummaries = listSummaryValues(list)
-  const itemCount = list.items.length
+  const itemCount = boardVisibleItemCount(list)
   const groupCount = list.groups.length
   const drag = useRef<{
     mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
@@ -5322,6 +5338,38 @@ function BoardListView({
     grid: BoardList['grid']
     rect: DOMRect
   } | null>(null)
+
+  useEffect(() => {
+    setSortState(null)
+  }, [list.id])
+
+  function toggleSort(key: string, defaultDirection: BoardListSortDirection): void {
+    setSortState((current) => {
+      if (!current || current.key !== key) return { key, direction: defaultDirection }
+      return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+    })
+  }
+
+  function renderSortableHeader(label: string, key: string, defaultDirection: BoardListSortDirection): ReactElement {
+    const active = sortState?.key === key ? sortState.direction : null
+    const indicator = active === 'asc' ? '↑' : active === 'desc' ? '↓' : '↕'
+    return (
+      <button
+        className={`board-sort-button ${active ? 'active' : ''}`}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          toggleSort(key, defaultDirection)
+        }}
+        type="button"
+      >
+        <span>{label}</span>
+        <span className="board-sort-indicator" aria-hidden="true">
+          {indicator}
+        </span>
+      </button>
+    )
+  }
 
   function startDrag(event: PointerEvent, mode: NonNullable<typeof drag.current>['mode']): void {
     if (!editable) return
@@ -5431,15 +5479,16 @@ function BoardListView({
           <table>
             <thead>
               <tr>
-                {list.showItemIdOnBoard && <th>ID</th>}
+                {list.showItemIdOnBoard && <th>{renderSortableHeader('ID', '__itemId', 'asc')}</th>}
                 {list.showDependenciesOnBoard && <th>Dep</th>}
-                {list.showCreatedAtOnBoard && <th>Created At</th>}
-                {list.showCreatedByOnBoard && <th>Created By</th>}
-                  {displayColumns.map((column) => (
-                    <th key={column.key}>{column.label}</th>
-                  ))}
-                  {list.dueDateEnabled && list.showStatusOnBoard && <th>Status</th>}
-                  {(onCloseItem || onGiftItem) && <th className="row-actions-heading" />}
+                {list.showCreatedAtOnBoard && <th>{renderSortableHeader('Created At', '__createdAt', 'desc')}</th>}
+                {list.showCreatedByOnBoard && <th>{renderSortableHeader('Created By', '__createdBy', 'asc')}</th>}
+                {displayColumns.map((column) => {
+                  const meta = boardSortMetaForDisplayColumn(list, column)
+                  return <th key={column.key}>{meta ? renderSortableHeader(column.label, meta.key, meta.defaultDirection) : column.label}</th>
+                })}
+                {list.dueDateEnabled && list.showStatusOnBoard && <th>Status</th>}
+                {(onCloseItem || onGiftItem) && <th className="row-actions-heading" />}
               </tr>
             </thead>
             <tbody>
@@ -5468,11 +5517,9 @@ function BoardListView({
                     {list.showDependenciesOnBoard && <td>{row.item.dependencyCodes.join(', ') || '-'}</td>}
                     {list.showCreatedAtOnBoard && <td>{formatSystemDate(row.item.createdAt)}</td>}
                     {list.showCreatedByOnBoard && <td>{row.item.createdBy}</td>}
-                    {displayColumns.map((column) => (
+                    {displayColumns.map((column, index) => (
                       <td key={column.key}>
-                        {column.kind === 'real'
-                          ? formatBirthdayAwareCellValue(row.item, column.column, list)
-                          : birthdayTurningLabel(row.item, list)}
+                        {formatBoardDisplayValue(row.item, column, list, row.depth, index === 0)}
                       </td>
                     ))}
                     {list.dueDateEnabled && list.showStatusOnBoard && <td>{row.item.deadlineStatus}</td>}
@@ -5668,31 +5715,47 @@ function CompactWidgetPreview({ widget }: { widget: BoardWidget }): ReactElement
 
 function ClockWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
   const now = useNow(widget.config.clock?.showSeconds ? 1000 : 60000)
-  const parts = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  }).formatToParts(now)
-  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00'
-  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00'
-  const dayPeriod = (parts.find((part) => part.type === 'dayPeriod')?.value ?? 'AM').toUpperCase()
+  const parts = clockTimeParts(now)
   const seconds = now.toLocaleTimeString(undefined, { second: '2-digit' })
+  const style = widget.config.clock?.style === 'split_date' ? 'split_date' : 'segmented'
 
-  return (
-    <div className={`widget-content clock-widget ${compact ? 'compact-widget' : ''}`}>
-      <span className="clock-date-line">{formatWidgetDate(now)}</span>
-      <div className="clock-segment-row" role="presentation">
-        <div className="clock-segment">
-          <span>{hour}</span>
-        </div>
-        <div className="clock-segment">
-          <span>{minute}</span>
-        </div>
-        <div className="clock-segment meridiem">
-          <span>{dayPeriod}</span>
+  if (style === 'split_date') {
+    return (
+      <div className={`widget-content widget-digital-shell clock-style-split ${compact ? 'compact-widget' : ''}`}>
+        <div className="clock-split-layout" role="presentation">
+          <div className="clock-split-primary">
+            <div className="segment-box segment-box-wide">
+              <span className="segment-box-time-inline">
+                {parts.hour}:{parts.minute}
+                {widget.config.clock?.showSeconds && <small className="segment-box-seconds-inline">:{seconds}</small>}
+              </span>
+            </div>
+          </div>
+          <div className="clock-split-side">
+            <span className="clock-split-weekday">{now.toLocaleDateString(undefined, { weekday: 'long' })}</span>
+            <strong className="clock-split-day">{now.getDate()}</strong>
+            <span className="clock-split-month">{now.toLocaleDateString(undefined, { month: 'long' })}</span>
+          </div>
         </div>
       </div>
-      {widget.config.clock?.showSeconds && <span className="clock-seconds-line">Seconds {seconds}</span>}
+    )
+  }
+
+  return (
+    <div className={`widget-content widget-digital-shell clock-style-segmented ${compact ? 'compact-widget' : ''}`}>
+      <span className="widget-date-line">{formatWidgetDate(now)}</span>
+      <div className="segment-box-row three" role="presentation">
+        <div className="segment-box">
+          <span className="segment-box-value">{parts.hour}</span>
+        </div>
+        <div className="segment-box">
+          <span className="segment-box-value">{parts.minute}</span>
+        </div>
+        <div className="segment-box segment-box-meridiem">
+          <span className="segment-box-value">{parts.dayPeriod}</span>
+        </div>
+      </div>
+      {widget.config.clock?.showSeconds && <span className="widget-detail-line">Seconds {seconds}</span>}
     </div>
   )
 }
@@ -5709,7 +5772,7 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
     let cancelled = false
     async function loadWeather(): Promise<void> {
       try {
-        const location = await resolveWeatherLocation()
+        const location = await resolveWeatherLocation(widget.config.weather)
         const unit = widget.config.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
         const payload = await window.lpl.fetchWeatherForecast({
           latitude: location.latitude,
@@ -5740,7 +5803,14 @@ function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWid
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [widget.config.weather?.temperatureUnit, widget.id])
+  }, [
+    widget.config.weather?.customLocation?.label,
+    widget.config.weather?.customLocation?.latitude,
+    widget.config.weather?.customLocation?.longitude,
+    widget.config.weather?.locationMode,
+    widget.config.weather?.temperatureUnit,
+    widget.id
+  ])
 
   return (
     <div className={`widget-content weather-widget ${compact ? 'compact-widget' : ''}`}>
@@ -5767,25 +5837,23 @@ function WordOfDayWidget({ compact, widget }: { compact: boolean; widget: BoardW
 function WorldClocksWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
   const now = useNow(widget.config.worldClocks?.showSeconds ? 1000 : 60000)
   const locations = widget.config.worldClocks?.locations ?? []
-  const analogue = widget.config.worldClocks?.style === 'analogue'
   return (
-    <div className={`widget-content world-clocks-widget ${compact ? 'compact-widget' : ''} ${analogue ? 'analogue-mode' : 'digital-mode'}`}>
+    <div className={`widget-content widget-digital-shell world-clocks-widget ${compact ? 'compact-widget' : ''}`}>
       {locations.map((location) => (
-        <div className={`world-clock-tile ${analogue ? 'analogue-tile' : 'digital-tile'}`} key={location.id}>
-          <span>{location.label}</span>
-          {analogue ? (
-            <AnalogueClockFace now={now} showSeconds={Boolean(widget.config.worldClocks?.showSeconds)} timeZone={location.timeZone} />
-          ) : (
-            <strong>
+        <div className="world-clock-entry" key={location.id}>
+          <span className="widget-date-line world-clock-location">{location.label}</span>
+          <div className="segment-box world-clock-tile">
+            <small className="world-clock-date-inline">{formatZonedWidgetDate(now, location.timeZone)}</small>
+            <strong className="segment-box-value world-clock-time">
               {new Intl.DateTimeFormat(undefined, {
                 hour: '2-digit',
                 minute: '2-digit',
-                second: widget.config.worldClocks?.showSeconds ? '2-digit' : undefined,
+                hour12: false,
                 timeZone: location.timeZone
               }).format(now)}
             </strong>
-          )}
-          <small>{timeZoneOffsetLabel(location.timeZone, now)}</small>
+          </div>
+          <span className="widget-detail-line world-clock-weekday">{formatZonedWeekday(now, location.timeZone)}</span>
         </div>
       ))}
     </div>
@@ -5815,25 +5883,31 @@ function CountdownWidget({ compact, widget }: { compact: boolean; widget: BoardW
   const days = Math.floor(totalMinutes / (60 * 24))
   const hours = Math.floor((totalMinutes % (60 * 24)) / 60)
   const minutes = totalMinutes % 60
+  const seconds = Math.floor((absolute % 60000) / 1000)
 
   return (
-    <div className={`widget-content countdown-widget ${compact ? 'compact-widget' : ''}`}>
+    <div className={`widget-content widget-digital-shell countdown-widget ${compact ? 'compact-widget' : ''}`}>
       <span className="widget-kicker">{label}</span>
-      <div className="countdown-value-row">
-        <div className="countdown-badge">
-          <strong>{days}</strong>
-          <span>days</span>
+      <div className="segment-box-row four">
+        <div className="segment-box">
+          <span className="segment-box-value">{String(days).padStart(2, '0')}</span>
         </div>
-        <div className="countdown-badge">
-          <strong>{hours}</strong>
-          <span>hours</span>
+        <div className="segment-box">
+          <span className="segment-box-value">{String(hours).padStart(2, '0')}</span>
         </div>
-        <div className="countdown-badge">
-          <strong>{minutes}</strong>
-          <span>min</span>
+        <div className="segment-box">
+          <span className="segment-box-value">{String(minutes).padStart(2, '0')}</span>
+        </div>
+        <div className="segment-box">
+          <span className="segment-box-value">{String(seconds).padStart(2, '0')}</span>
         </div>
       </div>
-      <p>{diff >= 0 ? `Until ${formatWidgetDateTime(validTarget)}` : `Passed ${compactDuration(absolute)} ago`}</p>
+      <div className="segment-box-label-row four">
+        <span>Days</span>
+        <span>Hours</span>
+        <span>Minutes</span>
+        <span>Seconds</span>
+      </div>
     </div>
   )
 }
@@ -5884,28 +5958,50 @@ function BoardItemModal({
   snapshot: BoardSnapshot
 }): ReactElement {
   const editableColumns = editableItemColumns(list)
-  const [values, setValues] = useState<FormValues>(() => (item ? valuesForItem(item, editableColumns) : blankValues(editableColumns)))
+  const [values, setValues] = useState<FormValues>(() => (item ? valuesForItem(item, editableColumns) : blankValues(editableColumns, list)))
   const [dependencies, setDependencies] = useState<string[]>(item?.dependencyItemIds ?? [])
   const [groupId, setGroupId] = useState<string | null>(item?.groupId ?? initialGroupId ?? null)
+  const [parentItemId, setParentItemId] = useState<string | null>(item?.parentItemId ?? null)
+  const fieldColumns = projectEditableFieldColumns(list, editableColumns, values)
+  const currentProjectType = list.templateType === 'project' ? projectTypeFromValues(list, values) : null
 
   useEffect(() => {
-    setValues(item ? valuesForItem(item, editableColumns) : blankValues(editableColumns))
+    setValues(item ? valuesForItem(item, editableColumns) : blankValues(editableColumns, list))
     setDependencies(item?.dependencyItemIds ?? [])
     setGroupId(item?.groupId ?? initialGroupId ?? null)
+    setParentItemId(item?.parentItemId ?? null)
   }, [initialGroupId, item?.id, list.id])
+
+  useEffect(() => {
+    if (currentProjectType && isProjectMilestoneLikeType(currentProjectType) && parentItemId) {
+      setParentItemId(null)
+    }
+  }, [currentProjectType, parentItemId])
 
   function setValue(column: ListColumn, value: FieldValue): void {
     setValues((current) => ({ ...current, [column.id]: coerceInputValue(column, value) }))
   }
 
+  const wishlistScore =
+    mode === 'edit' && item && list.templateType === 'wishlist' && item.wishlistRecommendation
+      ? {
+          label: `Buy Score: ${(((item.wishlistRecommendation.buyScore ?? 0) * 100)).toFixed(1)}%`,
+          title: wishlistScoreTooltip(item)
+        }
+      : null
+
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault()
     const result = await runAction(async () => {
-      if (mode === 'edit' && item) {
-        return window.lpl.updateItem({ itemId: item.id, groupId, values, dependencyItemIds: dependencies })
-      }
-
-      return window.lpl.createItem({ listId: list.id, groupId, values, dependencyItemIds: dependencies })
+      return submitProjectAwareItemMutation({
+        mode,
+        item,
+        list,
+        groupId,
+        parentItemId,
+        values,
+        dependencyItemIds: dependencies
+      })
     })
     if (result && 'lists' in result) onClose()
   }
@@ -5924,6 +6020,14 @@ function BoardItemModal({
               <p className="eyebrow">{mode === 'edit' ? 'Edit Item' : 'Quick Add Item'}</p>
               <h3>{mode === 'edit' && item ? itemTitle(item, list) : list.name}</h3>
             </div>
+            {wishlistScore && (
+              <div
+                className={`modal-meta-chip ${item?.wishlistRecommendation?.missingInputs.length ? 'partial' : ''}`}
+                title={wishlistScore.title}
+              >
+                {wishlistScore.label}
+              </div>
+            )}
           </div>
           <div className="modal-body modal-body-form">
             <div className="field-grid two">
@@ -5938,8 +6042,21 @@ function BoardItemModal({
                   ))}
                 </select>
               </label>
+              {list.templateType === 'project' && !isProjectMilestoneLikeType(currentProjectType ?? 'task') && (
+                <label>
+                  <span>Parent Task</span>
+                  <select onChange={(event) => setParentItemId(event.target.value || null)} value={parentItemId ?? ''}>
+                    <option value="">Project root</option>
+                    {projectParentOptions(list, item?.id ?? null).map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
-            <ItemFields columns={editableColumns} setValue={setValue} values={values} />
+            <ItemFields columns={fieldColumns} setValue={setValue} values={values} />
             <DependencyTreePicker
               currentItemId={item?.id ?? ''}
               dependencies={dependencies}
@@ -5987,6 +6104,8 @@ function BoardListSettingsModal({
   const [showCreatedByOnBoard, setShowCreatedByOnBoard] = useState(list.showCreatedByOnBoard)
   const [showStatusOnBoard, setShowStatusOnBoard] = useState(list.showStatusOnBoard)
   const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>(list.templateConfig.birthday?.boardView ?? 'this_month')
+  const [wishlistProfile, setWishlistProfile] = useState<WishlistRecommendationProfile>(list.templateConfig.wishlist?.profile ?? 'default')
+  const [showWishlistAdvisedBuyOrder, setShowWishlistAdvisedBuyOrder] = useState(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
   const [newColumnName, setNewColumnName] = useState('')
   const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
   const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
@@ -6009,6 +6128,8 @@ function BoardListSettingsModal({
     setShowCreatedByOnBoard(list.showCreatedByOnBoard)
     setShowStatusOnBoard(list.showStatusOnBoard)
     setBirthdayBoardView(list.templateConfig.birthday?.boardView ?? 'this_month')
+    setWishlistProfile(list.templateConfig.wishlist?.profile ?? 'default')
+    setShowWishlistAdvisedBuyOrder(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
     setColumnDrafts(columnDraftsForList(list))
   }, [
     list.deadlineMandatory,
@@ -6072,7 +6193,7 @@ function BoardListSettingsModal({
         listId: list.id,
         name,
         templateType: list.templateType,
-        templateConfig: listTemplateConfigForSave(list.templateType, listBehavior, birthdayBoardView),
+        templateConfig: listTemplateConfigForSave(list.templateType, listBehavior, birthdayBoardView, wishlistProfile, showWishlistAdvisedBuyOrder),
         grid: nextGrid,
         dueDateEnabled,
         dueDateColumnId: list.dueDateColumnId,
@@ -6237,6 +6358,21 @@ function BoardListSettingsModal({
                     </select>
                   </label>
                 )}
+                {list.templateType === 'wishlist' && (
+                  <label>
+                    <span>Recommendation profile</span>
+                    <select onChange={(event) => setWishlistProfile(event.target.value as WishlistRecommendationProfile)} value={wishlistProfile}>
+                      {wishlistRecommendationProfileOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <small className="field-help-text">
+                      {wishlistRecommendationProfileOptions.find((option) => option.value === wishlistProfile)?.description}
+                    </small>
+                  </label>
+                )}
               </div>
             </section>
             <section className="modal-section">
@@ -6273,6 +6409,15 @@ function BoardListSettingsModal({
                   showOnBoard={showStatusOnBoard}
                   typeLabel="system"
                 />
+                {list.templateType === 'wishlist' && (
+                  <SystemColumnRow
+                    name="Advised Buy Order"
+                    onToggle={setShowWishlistAdvisedBuyOrder}
+                    showOnBoard={showWishlistAdvisedBuyOrder}
+                    statusLabel="Calculated"
+                    typeLabel="calculated"
+                  />
+                )}
                 {visibleColumns(list).map((column) => (
                   <ColumnRow
                     column={column}
@@ -6702,7 +6847,7 @@ function DependencyTreePicker({
   function renderGroupRows(group: ItemGroup, list: BoardList, depth: number): ReactElement {
     const expanded = expandedGroups[group.id] ?? true
     const childGroups = list.groups.filter((candidate) => candidate.parentGroupId === group.id)
-    const childItems = list.items.filter((candidate) => candidate.groupId === group.id && candidate.id !== currentItemId)
+    const childItems = projectRootItemsForBucket(list, group.id).filter((candidate) => candidate.id !== currentItemId)
     const hasChildren = childGroups.length > 0 || childItems.length > 0
 
     return (
@@ -6726,7 +6871,7 @@ function DependencyTreePicker({
         {expanded && (
           <>
             {childGroups.map((child) => renderGroupRows(child, list, depth + 1))}
-            {childItems.map((child) => renderItemRow(child, list, depth + 1))}
+            {childItems.map((child) => renderProjectDependencyItemRows(child, list, depth + 1, currentItemId, dependencies, setDependencies))}
           </>
         )}
       </div>
@@ -6734,9 +6879,9 @@ function DependencyTreePicker({
   }
 
   function renderListRows(list: BoardList): ReactElement {
-                const expanded = expandedLists[list.id] ?? false
+    const expanded = expandedLists[list.id] ?? false
     const childGroups = list.groups.filter((group) => !group.parentGroupId)
-    const rootItems = list.items.filter((candidate) => !candidate.groupId && candidate.id !== currentItemId)
+    const rootItems = projectRootItemsForBucket(list, null).filter((candidate) => candidate.id !== currentItemId)
     const hasChildren = childGroups.length > 0 || rootItems.length > 0
 
     return (
@@ -6760,7 +6905,7 @@ function DependencyTreePicker({
         {expanded && (
           <>
             {childGroups.map((group) => renderGroupRows(group, list, 2))}
-            {rootItems.map((rootItem) => renderItemRow(rootItem, list, 2))}
+            {rootItems.map((rootItem) => renderProjectDependencyItemRows(rootItem, list, 2, currentItemId, dependencies, setDependencies))}
           </>
         )}
       </div>
@@ -6898,6 +7043,7 @@ function placeListForDisplaySizes(
 function listTemplateGridSizes(templateType: ListTemplateType): Array<Pick<BoardList['grid'], 'w' | 'h'>> {
   if (templateType === 'todo') return [{ w: 6, h: 4 }, { w: 6, h: 3 }, { w: 6, h: 2 }, { w: 5, h: 4 }, { w: 5, h: 3 }, { w: 5, h: 2 }, { w: 4, h: 3 }, { w: 4, h: 2 }]
   if (templateType === 'shopping_list') return [{ w: 4, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
+  if (templateType === 'project') return [{ w: 10, h: 4 }, { w: 10, h: 3 }, { w: 11, h: 4 }, { w: 12, h: 4 }, { w: 10, h: 2 }]
   if (templateType === 'health') return [{ w: 5, h: 4 }, { w: 5, h: 3 }, { w: 4, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
   if (templateType === 'wishlist' || templateType === 'birthday_calendar') return [{ w: 6, h: 4 }, { w: 6, h: 3 }, { w: 5, h: 4 }, { w: 5, h: 3 }, { w: 4, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
   return [{ w: 4, h: 2 }, { w: 3, h: 2 }, { w: 2, h: 2 }]
@@ -8088,11 +8234,29 @@ function visibleColumns(list: BoardList): ListColumn[] {
 }
 
 function isComputedTemplateColumn(list: BoardList, column: ListColumn): boolean {
-  return list.templateType === 'shopping_list' && normalizeColumnName(column.name) === 'cost'
+  if (list.templateType === 'shopping_list' && normalizeColumnName(column.name) === 'cost') return true
+  return list.templateType === 'wishlist' && normalizeColumnName(column.name) === 'total cost'
 }
 
 function editableItemColumns(list: BoardList): ListColumn[] {
   return visibleColumns(list).filter((column) => !isComputedTemplateColumn(list, column))
+}
+
+function projectEditableFieldColumns(list: BoardList, columns: ListColumn[], values: FormValues): ListColumn[] {
+  if (list.templateType !== 'project') return columns
+  const type = projectTypeFromValues(list, values)
+  if (!isProjectMilestoneLikeType(type)) return columns
+  return columns
+    .filter((column) => {
+      const normalized = normalizeColumnName(column.name)
+      return !['responsible', 'planned end', 'actual end', 'effort', 'output / deliverable'].includes(normalized)
+    })
+    .map((column) => {
+      const normalized = normalizeColumnName(column.name)
+      if (normalized === 'planned start') return { ...column, name: 'Planned Date' }
+      if (normalized === 'actual start') return { ...column, name: 'Actual Date' }
+      return column
+    })
 }
 
 function boardVisibleColumns(list: BoardList): ListColumn[] {
@@ -8102,8 +8266,12 @@ function boardVisibleColumns(list: BoardList): ListColumn[] {
   return visibleColumns(list).filter((column) => column.showOnBoard)
 }
 
-function blankValues(columns: ListColumn[]): FormValues {
+function blankValues(columns: ListColumn[], list?: BoardList): FormValues {
   return columns.reduce<FormValues>((acc, column) => {
+    if (list?.templateType === 'wishlist' && normalizeColumnName(column.name) === 'pieces') {
+      acc[column.id] = 1
+      return acc
+    }
     acc[column.id] = column.type === 'boolean' ? false : column.type === 'choice' && column.choiceConfig?.selection === 'multi' ? [] : ''
     return acc
   }, {})
@@ -8117,9 +8285,428 @@ function valuesForItem(item: BoardItem, columns: ListColumn[]): FormValues {
   }, {})
 }
 
+type SubmitProjectItemMutationInput = {
+  mode: 'create' | 'edit'
+  item: BoardItem | null
+  list: BoardList
+  groupId: string | null
+  parentItemId: string | null
+  values: FormValues
+  dependencyItemIds: string[]
+}
+
+async function submitProjectAwareItemMutation(input: SubmitProjectItemMutationInput): Promise<BoardSnapshot> {
+  if (input.list.templateType !== 'project') {
+    if (input.mode === 'edit' && input.item) {
+      return window.lpl.updateItem({
+        itemId: input.item.id,
+        groupId: input.groupId,
+        parentItemId: input.parentItemId,
+        values: input.values,
+        dependencyItemIds: input.dependencyItemIds
+      })
+    }
+    return window.lpl.createItem({
+      listId: input.list.id,
+      groupId: input.groupId,
+      parentItemId: input.parentItemId,
+      values: input.values,
+      dependencyItemIds: input.dependencyItemIds
+    })
+  }
+
+  const normalizedValues = normalizeProjectSubmissionValues(input.list, input.values)
+  const dependencyAligned = alignProjectMilestonePlannedDate(input.list, normalizedValues, input.dependencyItemIds)
+  if (dependencyAligned.message) window.alert(dependencyAligned.message)
+  const normalizedParentItemId = isProjectMilestoneLikeType(projectTypeFromValues(input.list, normalizedValues)) ? null : input.parentItemId
+  const reconciliation = reconcileProjectParentDateRanges(input.list, input.item, normalizedParentItemId, dependencyAligned.values)
+  for (const update of reconciliation.parentUpdates) {
+    await window.lpl.updateItem({
+      itemId: update.item.id,
+      groupId: update.item.groupId,
+      parentItemId: update.item.parentItemId,
+      values: update.values,
+      dependencyItemIds: update.item.dependencyItemIds
+    })
+  }
+
+  if (input.mode === 'edit' && input.item) {
+    return window.lpl.updateItem({
+      itemId: input.item.id,
+      groupId: input.groupId,
+      parentItemId: normalizedParentItemId,
+      values: reconciliation.values,
+      dependencyItemIds: input.dependencyItemIds
+    })
+  }
+
+  return window.lpl.createItem({
+    listId: input.list.id,
+    groupId: input.groupId,
+    parentItemId: normalizedParentItemId,
+    values: reconciliation.values,
+    dependencyItemIds: input.dependencyItemIds
+  })
+}
+
+function normalizeProjectSubmissionValues(list: BoardList, values: FormValues): FormValues {
+  if (list.templateType !== 'project') return values
+  const type = projectTypeFromValues(list, values)
+  if (!isProjectMilestoneLikeType(type)) return values
+  const nextValues = { ...values }
+  const columns = projectDateColumns(list)
+  if (columns.plannedStart && columns.plannedEnd) {
+    nextValues[columns.plannedEnd.id] = nextValues[columns.plannedStart.id] ?? ''
+  }
+  if (columns.actualStart && columns.actualEnd) {
+    nextValues[columns.actualEnd.id] = nextValues[columns.actualStart.id] ?? ''
+  }
+  for (const column of list.columns) {
+    const normalized = normalizeColumnName(column.name)
+    if (['responsible', 'effort', 'output / deliverable'].includes(normalized)) {
+      nextValues[column.id] = column.type === 'boolean' ? false : column.type === 'choice' && column.choiceConfig?.selection === 'multi' ? [] : ''
+    }
+  }
+  return nextValues
+}
+
+function alignProjectMilestonePlannedDate(
+  list: BoardList,
+  values: FormValues,
+  dependencyItemIds: string[]
+): { values: FormValues; message: string | null } {
+  if (list.templateType !== 'project') return { values, message: null }
+  if (projectTypeFromValues(list, values) !== 'milestone') return { values, message: null }
+  if (dependencyItemIds.length === 0) return { values, message: null }
+
+  const columns = projectDateColumns(list)
+  const plannedStartColumn = columns.plannedStart
+  const plannedEndColumn = columns.plannedEnd
+  const currentPlannedDate = projectFieldDateValue(values, plannedStartColumn)
+  const latestDependencyDate = projectLatestDependencyPlannedDate(list, dependencyItemIds)
+  if (!plannedStartColumn || !latestDependencyDate) return { values, message: null }
+  if (currentPlannedDate && currentPlannedDate.getTime() >= latestDependencyDate.getTime()) return { values, message: null }
+
+  const nextValues = { ...values }
+  nextValues[plannedStartColumn.id] = formatProjectDateForMutation(latestDependencyDate, plannedStartColumn)
+  if (plannedEndColumn) nextValues[plannedEndColumn.id] = formatProjectDateForMutation(latestDependencyDate, plannedEndColumn)
+
+  return {
+    values: nextValues,
+    message: `Milestone planned date was updated to ${projectTimelineLabel(latestDependencyDate)} so it does not fall before the latest planned completion of its dependencies.`
+  }
+}
+
+function reconcileProjectParentDateRanges(
+  list: BoardList,
+  item: BoardItem | null,
+  parentItemId: string | null,
+  values: FormValues
+): {
+  values: FormValues
+  parentUpdates: Array<{ item: BoardItem; values: FormValues }>
+} {
+  const columns = projectDateColumns(list)
+  const parentChain = parentItemId ? projectParentChain(list, parentItemId) : []
+
+  const childPlannedStart = projectFieldDateValue(values, columns.plannedStart)
+  const childPlannedEnd = projectFieldDateValue(values, columns.plannedEnd)
+  const childActualStart = projectFieldDateValue(values, columns.actualStart)
+  const childActualEnd = projectFieldDateValue(values, columns.actualEnd)
+  const itemType = projectTypeFromValues(list, values)
+
+  const conflicts = [
+    ...projectRangeConflicts(list, parentChain, columns.plannedStart, columns.plannedEnd, childPlannedStart, childPlannedEnd),
+    ...projectRangeConflicts(list, parentChain, columns.actualStart, columns.actualEnd, childActualStart, childActualEnd),
+    ...(itemType === 'task'
+      ? projectTimelineConflicts(list, columns, {
+          plannedStart: childPlannedStart,
+          plannedEnd: childPlannedEnd,
+          actualStart: childActualStart,
+          actualEnd: childActualEnd
+        })
+      : [])
+  ]
+  if (conflicts.length === 0) return { values, parentUpdates: [] }
+
+  const shouldExtendParents = window.confirm(
+    `One or more project dates fall outside the current parent or project timeline.\n\n${conflicts.join('\n')}\n\nPress OK to extend the parent range(s) or project boundary items to fit the child.\nPress Cancel to confine the child dates inside the current ranges.`
+  )
+
+  if (shouldExtendParents) {
+    return {
+      values,
+      parentUpdates: [
+        ...projectParentRangeUpdates(parentChain, columns, {
+          plannedStart: childPlannedStart,
+          plannedEnd: childPlannedEnd,
+          actualStart: childActualStart,
+          actualEnd: childActualEnd
+        }),
+        ...(itemType === 'task'
+          ? projectTimelineBoundaryUpdates(list, columns, {
+              plannedStart: childPlannedStart,
+              plannedEnd: childPlannedEnd,
+              actualStart: childActualStart,
+              actualEnd: childActualEnd
+            })
+          : [])
+      ]
+    }
+  }
+
+  return {
+    values: confineProjectChildDatesToTimeline(
+      list,
+      confineProjectChildDates(values, parentChain, columns),
+      columns,
+      itemType === 'task'
+    ),
+    parentUpdates: []
+  }
+}
+
+function projectDateColumns(list: BoardList): {
+  plannedStart: ListColumn | null
+  plannedEnd: ListColumn | null
+  actualStart: ListColumn | null
+  actualEnd: ListColumn | null
+} {
+  return {
+    plannedStart: list.columns.find((column) => normalizeColumnName(column.name) === 'planned start') ?? null,
+    plannedEnd: list.columns.find((column) => normalizeColumnName(column.name) === 'planned end') ?? null,
+    actualStart: list.columns.find((column) => normalizeColumnName(column.name) === 'actual start') ?? null,
+    actualEnd: list.columns.find((column) => normalizeColumnName(column.name) === 'actual end') ?? null
+  }
+}
+
+function projectParentChain(list: BoardList, parentItemId: string): BoardItem[] {
+  const itemsById = projectItemMap(list)
+  const chain: BoardItem[] = []
+  let cursor = itemsById.get(parentItemId) ?? null
+  while (cursor) {
+    chain.push(cursor)
+    cursor = cursor.parentItemId ? (itemsById.get(cursor.parentItemId) ?? null) : null
+  }
+  return chain
+}
+
+function projectTimelineBoundaryItems(list: BoardList): { projectStart: BoardItem | null; projectEnd: BoardItem | null } {
+  const orderedItems = [...list.items].sort((left, right) => left.order - right.order)
+  return {
+    projectStart: orderedItems.find((item) => projectItemType(item, list) === 'project start') ?? null,
+    projectEnd: orderedItems.find((item) => projectItemType(item, list) === 'project end') ?? null
+  }
+}
+
+function projectFieldDateValue(values: FormValues | Record<string, FieldValue>, column: ListColumn | null): Date | null {
+  if (!column) return null
+  const raw = dateStringFromField(values[column.id])
+  return raw ? parseColumnDateValue(raw, column) : null
+}
+
+function formatProjectDateForMutation(date: Date, column: ListColumn | null): string {
+  if (!column || column.dateDisplayFormat === 'date') return date.toISOString().slice(0, 10)
+  if (column.dateDisplayFormat === 'datetime') return localDateTimeInputValue(date)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function projectRangeConflicts(
+  list: BoardList,
+  parentChain: BoardItem[],
+  startColumn: ListColumn | null,
+  endColumn: ListColumn | null,
+  childStart: Date | null,
+  childEnd: Date | null
+): string[] {
+  const conflicts: string[] = []
+  for (const parent of parentChain) {
+    const parentStart = projectFieldDateValue(parent.values, startColumn)
+    const parentEnd = projectFieldDateValue(parent.values, endColumn)
+    if (childStart && parentStart && childStart.getTime() < parentStart.getTime()) {
+      conflicts.push(`${itemTitle(parent, list)} ${startColumn?.name ?? 'Start'} would need to move earlier.`)
+    }
+    if (childStart && !parentStart && startColumn) {
+      conflicts.push(`${itemTitle(parent, list)} is missing ${startColumn.name}.`)
+    }
+    if (childEnd && parentEnd && childEnd.getTime() > parentEnd.getTime()) {
+      conflicts.push(`${itemTitle(parent, list)} ${endColumn?.name ?? 'End'} would need to move later.`)
+    }
+    if (childEnd && !parentEnd && endColumn) {
+      conflicts.push(`${itemTitle(parent, list)} is missing ${endColumn.name}.`)
+    }
+  }
+  return conflicts
+}
+
+function projectTimelineConflicts(
+  list: BoardList,
+  columns: ReturnType<typeof projectDateColumns>,
+  childDates: { plannedStart: Date | null; plannedEnd: Date | null; actualStart: Date | null; actualEnd: Date | null }
+): string[] {
+  const conflicts: string[] = []
+  const boundaries = projectTimelineBoundaryItems(list)
+  const projectPlannedStart = boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.plannedStart) : null
+  const projectPlannedEnd = boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.plannedStart) : null
+  const projectActualStart = boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.actualStart) : null
+  const projectActualEnd = boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.actualStart) : null
+
+  if (projectPlannedStart && childDates.plannedStart && childDates.plannedStart.getTime() < projectPlannedStart.getTime()) {
+    conflicts.push(`Planned start begins before Project Start (${projectTimelineLabel(projectPlannedStart)}).`)
+  }
+  if (projectPlannedEnd && childDates.plannedEnd && childDates.plannedEnd.getTime() > projectPlannedEnd.getTime()) {
+    conflicts.push(`Planned end falls after Project End (${projectTimelineLabel(projectPlannedEnd)}).`)
+  }
+  if (projectActualStart && childDates.actualStart && childDates.actualStart.getTime() < projectActualStart.getTime()) {
+    conflicts.push(`Actual start begins before Project Start (${projectTimelineLabel(projectActualStart)}).`)
+  }
+  if (projectActualEnd && childDates.actualEnd && childDates.actualEnd.getTime() > projectActualEnd.getTime()) {
+    conflicts.push(`Actual end falls after Project End (${projectTimelineLabel(projectActualEnd)}).`)
+  }
+
+  return conflicts
+}
+
+function projectParentRangeUpdates(
+  parentChain: BoardItem[],
+  columns: ReturnType<typeof projectDateColumns>,
+  childDates: { plannedStart: Date | null; plannedEnd: Date | null; actualStart: Date | null; actualEnd: Date | null }
+): Array<{ item: BoardItem; values: FormValues }> {
+  return parentChain
+    .map((parent) => {
+      const values: FormValues = {}
+      const updates: Array<[ListColumn | null, Date | null, Date | null, 'min' | 'max']> = [
+        [columns.plannedStart, projectFieldDateValue(parent.values, columns.plannedStart), childDates.plannedStart, 'min'],
+        [columns.plannedEnd, projectFieldDateValue(parent.values, columns.plannedEnd), childDates.plannedEnd, 'max'],
+        [columns.actualStart, projectFieldDateValue(parent.values, columns.actualStart), childDates.actualStart, 'min'],
+        [columns.actualEnd, projectFieldDateValue(parent.values, columns.actualEnd), childDates.actualEnd, 'max']
+      ]
+      for (const [column, parentDate, childDate, mode] of updates) {
+        if (!column || !childDate) continue
+        const shouldWrite =
+          !parentDate || (mode === 'min' ? childDate.getTime() < parentDate.getTime() : childDate.getTime() > parentDate.getTime())
+        if (shouldWrite) values[column.id] = formatProjectDateForMutation(childDate, column)
+      }
+      return Object.keys(values).length > 0 ? { item: parent, values } : null
+    })
+    .filter((entry): entry is { item: BoardItem; values: FormValues } => entry !== null)
+}
+
+function projectTimelineBoundaryUpdates(
+  list: BoardList,
+  columns: ReturnType<typeof projectDateColumns>,
+  childDates: { plannedStart: Date | null; plannedEnd: Date | null; actualStart: Date | null; actualEnd: Date | null }
+): Array<{ item: BoardItem; values: FormValues }> {
+  const boundaries = projectTimelineBoundaryItems(list)
+  const updates = new Map<string, { item: BoardItem; values: FormValues }>()
+
+  const updateBoundaryDate = (item: BoardItem | null, sourceDate: Date | null, startColumn: ListColumn | null, endColumn: ListColumn | null): void => {
+    if (!item || !sourceDate || !startColumn) return
+    const current = updates.get(item.id) ?? { item, values: valuesForItem(item, editableItemColumns(list)) }
+    current.values[startColumn.id] = formatProjectDateForMutation(sourceDate, startColumn)
+    if (endColumn) current.values[endColumn.id] = formatProjectDateForMutation(sourceDate, endColumn)
+    updates.set(item.id, current)
+  }
+
+  const currentProjectPlannedStart = boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.plannedStart) : null
+  const currentProjectPlannedEnd = boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.plannedStart) : null
+  const currentProjectActualStart = boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.actualStart) : null
+  const currentProjectActualEnd = boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.actualStart) : null
+
+  if (childDates.plannedStart && (!currentProjectPlannedStart || childDates.plannedStart.getTime() < currentProjectPlannedStart.getTime())) {
+    updateBoundaryDate(boundaries.projectStart, childDates.plannedStart, columns.plannedStart, columns.plannedEnd)
+  }
+  if (childDates.plannedEnd && (!currentProjectPlannedEnd || childDates.plannedEnd.getTime() > currentProjectPlannedEnd.getTime())) {
+    updateBoundaryDate(boundaries.projectEnd, childDates.plannedEnd, columns.plannedStart, columns.plannedEnd)
+  }
+  if (childDates.actualStart && (!currentProjectActualStart || childDates.actualStart.getTime() < currentProjectActualStart.getTime())) {
+    updateBoundaryDate(boundaries.projectStart, childDates.actualStart, columns.actualStart, columns.actualEnd)
+  }
+  if (childDates.actualEnd && (!currentProjectActualEnd || childDates.actualEnd.getTime() > currentProjectActualEnd.getTime())) {
+    updateBoundaryDate(boundaries.projectEnd, childDates.actualEnd, columns.actualStart, columns.actualEnd)
+  }
+
+  return Array.from(updates.values())
+}
+
+function confineProjectChildDates(
+  values: FormValues,
+  parentChain: BoardItem[],
+  columns: ReturnType<typeof projectDateColumns>
+): FormValues {
+  const nextValues: FormValues = { ...values }
+  const confine = (startColumn: ListColumn | null, endColumn: ListColumn | null): void => {
+    const lowerBound = parentChain
+      .map((parent) => projectFieldDateValue(parent.values, startColumn))
+      .filter((entry): entry is Date => entry !== null)
+      .sort((left, right) => right.getTime() - left.getTime())[0] ?? null
+    const upperBound = parentChain
+      .map((parent) => projectFieldDateValue(parent.values, endColumn))
+      .filter((entry): entry is Date => entry !== null)
+      .sort((left, right) => left.getTime() - right.getTime())[0] ?? null
+    const currentStart = projectFieldDateValue(nextValues, startColumn)
+    const currentEnd = projectFieldDateValue(nextValues, endColumn)
+    if (startColumn && currentStart && lowerBound && currentStart.getTime() < lowerBound.getTime()) {
+      nextValues[startColumn.id] = formatProjectDateForMutation(lowerBound, startColumn)
+    }
+    if (endColumn && currentEnd && upperBound && currentEnd.getTime() > upperBound.getTime()) {
+      nextValues[endColumn.id] = formatProjectDateForMutation(upperBound, endColumn)
+    }
+  }
+  confine(columns.plannedStart, columns.plannedEnd)
+  confine(columns.actualStart, columns.actualEnd)
+  return nextValues
+}
+
+function confineProjectChildDatesToTimeline(
+  list: BoardList,
+  values: FormValues,
+  columns: ReturnType<typeof projectDateColumns>,
+  active: boolean
+): FormValues {
+  if (!active) return values
+  const boundaries = projectTimelineBoundaryItems(list)
+  const nextValues: FormValues = { ...values }
+  const projectPlannedStart = boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.plannedStart) : null
+  const projectPlannedEnd = boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.plannedStart) : null
+  const projectActualStart = boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.actualStart) : null
+  const projectActualEnd = boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.actualStart) : null
+
+  const confine = (startColumn: ListColumn | null, endColumn: ListColumn | null, lowerBound: Date | null, upperBound: Date | null): void => {
+    const currentStart = projectFieldDateValue(nextValues, startColumn)
+    const currentEnd = projectFieldDateValue(nextValues, endColumn)
+    if (startColumn && currentStart && lowerBound && currentStart.getTime() < lowerBound.getTime()) {
+      nextValues[startColumn.id] = formatProjectDateForMutation(lowerBound, startColumn)
+    }
+    if (endColumn && currentEnd && upperBound && currentEnd.getTime() > upperBound.getTime()) {
+      nextValues[endColumn.id] = formatProjectDateForMutation(upperBound, endColumn)
+    }
+  }
+
+  confine(columns.plannedStart, columns.plannedEnd, projectPlannedStart, projectPlannedEnd)
+  confine(columns.actualStart, columns.actualEnd, projectActualStart, projectActualEnd)
+  return nextValues
+}
+
 function itemTitle(item: BoardItem, list: BoardList): string {
   const nameColumn = visibleColumns(list)[0]
   return String(item.values[nameColumn?.id] ?? item.displayCode)
+}
+
+function wishlistMissingInputLabel(input: 'wishmeter' | 'priority' | 'price'): string {
+  if (input === 'wishmeter') return 'Wishmeter'
+  if (input === 'priority') return 'Priority'
+  return 'Price'
+}
+
+function wishlistScoreTooltip(item: BoardItem): string {
+  const recommendation = item.wishlistRecommendation
+  if (!recommendation) return 'Buy Score is calculated from Wishmeter, Priority, and Price.'
+  if (recommendation.missingInputs.length === 0) {
+    return 'Buy Score is calculated from Wishmeter, Priority, and Price using the selected recommendation profile.'
+  }
+  const missing = recommendation.missingInputs.map(wishlistMissingInputLabel).join(', ')
+  return `${missing} ${recommendation.missingInputs.length === 1 ? 'is' : 'are'} missing and ${recommendation.missingInputs.length === 1 ? 'does' : 'do'} not impact the result.`
 }
 
 function normalizeColumnName(name: string): string {
@@ -8234,29 +8821,251 @@ function groupOptions(list: BoardList): Array<{ id: string; label: string }> {
   return options
 }
 
-function boardDisplayRows(list: BoardList): Array<{ kind: 'group'; group: ItemGroup } | { kind: 'item'; item: BoardItem }> {
+type BoardDisplayRow = { kind: 'group'; group: ItemGroup } | { kind: 'item'; item: BoardItem; depth: number }
+
+function projectTypeColumn(list: BoardList): ListColumn | null {
+  return list.columns.find((column) => normalizeColumnName(column.name) === 'type') ?? null
+}
+
+function projectItemType(item: BoardItem, list: BoardList): string {
+  const typeColumn = projectTypeColumn(list)
+  return normalizeColumnName(String((typeColumn ? item.values[typeColumn.id] : 'task') ?? 'task')) || 'task'
+}
+
+function projectTypeFromValues(list: BoardList, values: FormValues): string {
+  const typeColumn = projectTypeColumn(list)
+  const raw = typeColumn ? values[typeColumn.id] : 'task'
+  return normalizeColumnName(String(raw ?? 'task')) || 'task'
+}
+
+function isProjectMilestoneLikeType(type: string): boolean {
+  return type === 'milestone' || type === 'project start' || type === 'project end'
+}
+
+function isProjectBoundaryType(type: string): boolean {
+  return type === 'project start' || type === 'project end'
+}
+
+function projectParentEligible(item: BoardItem, list: BoardList): boolean {
+  return list.templateType === 'project' ? projectItemType(item, list) === 'task' : true
+}
+
+function projectItemMap(list: BoardList): Map<string, BoardItem> {
+  return new Map(list.items.map((item) => [item.id, item]))
+}
+
+function projectOrderingDate(item: BoardItem, list: BoardList): Date | null {
+  const columns = projectDateColumns(list)
+  return (
+    projectFieldDateValue(item.values, columns.actualEnd) ??
+    projectFieldDateValue(item.values, columns.plannedEnd) ??
+    projectFieldDateValue(item.values, columns.actualStart) ??
+    projectFieldDateValue(item.values, columns.plannedStart)
+  )
+}
+
+function projectPlannedCompletionDate(item: BoardItem, list: BoardList): Date | null {
+  const columns = projectDateColumns(list)
+  return projectFieldDateValue(item.values, columns.plannedEnd) ?? projectFieldDateValue(item.values, columns.plannedStart)
+}
+
+function projectLatestSubtreePlannedDate(list: BoardList, item: BoardItem): Date | null {
+  const candidateDates = [projectPlannedCompletionDate(item, list)]
+  for (const descendantId of projectDescendantIds(list, item.id)) {
+    const descendant = list.items.find((entry) => entry.id === descendantId)
+    if (descendant) candidateDates.push(projectPlannedCompletionDate(descendant, list))
+  }
+  return candidateDates
+    .filter((entry): entry is Date => entry !== null)
+    .sort((left, right) => right.getTime() - left.getTime())[0] ?? null
+}
+
+function projectLatestDependencyPlannedDate(list: BoardList, dependencyItemIds: string[]): Date | null {
+  return dependencyItemIds
+    .map((dependencyId) => list.items.find((item) => item.id === dependencyId))
+    .filter((item): item is BoardItem => item !== undefined)
+    .map((item) => projectLatestSubtreePlannedDate(list, item))
+    .filter((entry): entry is Date => entry !== null)
+    .sort((left, right) => right.getTime() - left.getTime())[0] ?? null
+}
+
+function projectDependencyAnchor(list: BoardList, item: BoardItem, peers: BoardItem[]): BoardItem | null {
+  if (!isProjectMilestoneLikeType(projectItemType(item, list)) || item.dependencyItemIds.length === 0) return null
+  const itemsById = projectItemMap(list)
+  const peerSubtrees = peers
+    .filter((peer) => peer.id !== item.id)
+    .map((peer) => ({ peer, ids: new Set<string>([peer.id, ...projectDescendantIds(list, peer.id)]) }))
+
+  let anchor: BoardItem | null = null
+  let latestDate = Number.NEGATIVE_INFINITY
+  let latestIndex = -1
+
+  for (const dependencyId of item.dependencyItemIds) {
+    const dependency = itemsById.get(dependencyId)
+    if (!dependency) continue
+    const peerIndex = peerSubtrees.findIndex((candidate) => candidate.ids.has(dependencyId))
+    if (peerIndex < 0) continue
+    const dependencyDate = projectOrderingDate(dependency, list)?.getTime() ?? Number.NEGATIVE_INFINITY
+    if (dependencyDate > latestDate || (dependencyDate === latestDate && peerIndex > latestIndex)) {
+      anchor = peerSubtrees[peerIndex].peer
+      latestDate = dependencyDate
+      latestIndex = peerIndex
+    }
+  }
+
+  return anchor
+}
+
+function projectOrderedPeerItems(list: BoardList, items: BoardItem[]): BoardItem[] {
+  const ordered = [...items].sort((left, right) => left.order - right.order)
+  const milestoneItems = ordered.filter((item) => isProjectMilestoneLikeType(projectItemType(item, list)))
+
+  for (const milestone of milestoneItems) {
+    const anchor = projectDependencyAnchor(list, milestone, ordered)
+    if (!anchor || anchor.id === milestone.id) continue
+    const currentIndex = ordered.findIndex((candidate) => candidate.id === milestone.id)
+    const anchorIndex = ordered.findIndex((candidate) => candidate.id === anchor.id)
+    if (currentIndex < 0 || anchorIndex < 0 || currentIndex === anchorIndex + 1) continue
+    const [entry] = ordered.splice(currentIndex, 1)
+    const nextAnchorIndex = ordered.findIndex((candidate) => candidate.id === anchor.id)
+    ordered.splice(nextAnchorIndex + 1, 0, entry)
+  }
+
+  return ordered
+}
+
+function projectChildItems(list: BoardList, parentItemId: string, groupId: string | null): BoardItem[] {
+  return projectOrderedPeerItems(
+    list,
+    list.items.filter(
+      (item) => item.parentItemId === parentItemId && item.groupId === groupId && !isProjectMilestoneLikeType(projectItemType(item, list))
+    )
+  )
+}
+
+function projectRootItemsForBucket(list: BoardList, groupId: string | null): BoardItem[] {
+  const itemsById = projectItemMap(list)
+  return projectOrderedPeerItems(
+    list,
+    list.items
+      .filter((item) => item.groupId === groupId)
+      .filter((item) => !isProjectBoundaryType(projectItemType(item, list)))
+      .filter((item) => {
+        if (isProjectMilestoneLikeType(projectItemType(item, list))) return true
+        if (!item.parentItemId) return true
+        const parent = itemsById.get(item.parentItemId)
+        return !parent || parent.groupId !== groupId
+      })
+  )
+}
+
+function appendProjectRows(rows: BoardDisplayRow[], list: BoardList, item: BoardItem, depth: number, groupId: string | null): void {
+  rows.push({ kind: 'item', item, depth })
+  for (const child of projectChildItems(list, item.id, groupId)) {
+    appendProjectRows(rows, list, child, depth + 1, groupId)
+  }
+}
+
+function buildProjectOrderedRows(items: BoardItem[], list: BoardList): Array<{ kind: 'item'; item: BoardItem; depth: number }> {
+  const rows: Array<{ kind: 'item'; item: BoardItem; depth: number }> = []
+  const groupId = items[0]?.groupId ?? null
+  const byId = new Set(items.map((item) => item.id))
+  const roots = items.filter((item) => !item.parentItemId || !byId.has(item.parentItemId)).sort((left, right) => left.order - right.order)
+  for (const root of roots) appendProjectRows(rows, list, root, 0, groupId)
+  return rows
+}
+
+function projectDescendantIds(list: BoardList, itemId: string): Set<string> {
+  const descendants = new Set<string>()
+  const queue = [itemId]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current) continue
+    for (const child of list.items.filter((item) => item.parentItemId === current)) {
+      if (descendants.has(child.id)) continue
+      descendants.add(child.id)
+      queue.push(child.id)
+    }
+  }
+  return descendants
+}
+
+function projectParentOptions(list: BoardList, currentItemId: string | null): Array<{ id: string; label: string }> {
+  const descendants = currentItemId ? projectDescendantIds(list, currentItemId) : new Set<string>()
+  const options: Array<{ id: string; label: string }> = []
+  const appendItems = (items: BoardItem[], depth: number): void => {
+    for (const item of items) {
+      if (item.id === currentItemId || descendants.has(item.id)) continue
+      if (projectParentEligible(item, list)) {
+        options.push({ id: item.id, label: `${'  '.repeat(depth)}${itemTitle(item, list)}` })
+      }
+      appendItems(projectChildItems(list, item.id, item.groupId), depth + 1)
+    }
+  }
+  const appendGroupBuckets = (parentGroupId: string | null, depth: number): void => {
+    for (const group of list.groups.filter((entry) => entry.parentGroupId === parentGroupId).sort((left, right) => left.order - right.order)) {
+      appendItems(projectRootItemsForBucket(list, group.id), depth)
+      appendGroupBuckets(group.id, depth + 1)
+    }
+  }
+  appendItems(projectRootItemsForBucket(list, null), 0)
+  appendGroupBuckets(null, 1)
+  return options
+}
+
+function renderProjectDependencyItemRows(
+  item: BoardItem,
+  list: BoardList,
+  depth: number,
+  currentItemId: string,
+  dependencies: string[],
+  setDependencies: Dispatch<SetStateAction<string[]>>
+): ReactElement {
+  const toggle = (itemId: string, checked: boolean): void => {
+    setDependencies((current) => (checked ? [...current, itemId] : current.filter((id) => id !== itemId)))
+  }
+  return (
+    <Fragment key={item.id}>
+      <div className="dependency-tree-row">
+        <label className="dependency-tree-item" style={{ paddingInlineStart: `${0.65 + depth * 1.05}rem` }}>
+          <input checked={dependencies.includes(item.id)} onChange={(event) => toggle(item.id, event.target.checked)} type="checkbox" />
+          <span>{itemTitle(item, list)}</span>
+          <small>{item.displayCode}</small>
+        </label>
+      </div>
+      {projectChildItems(list, item.id, item.groupId)
+        .filter((child) => child.id !== currentItemId)
+        .map((child) => renderProjectDependencyItemRows(child, list, depth + 1, currentItemId, dependencies, setDependencies))}
+    </Fragment>
+  )
+}
+
+function boardDisplayRows(list: BoardList): BoardDisplayRow[] {
   if (list.templateType === 'birthday_calendar') {
-    return birthdayFilteredItems(list).map((item) => ({ kind: 'item', item }))
+    return birthdayFilteredItems(list).map((item) => ({ kind: 'item', item, depth: 0 }))
   }
   const rows: Array<{ kind: 'group'; group: ItemGroup } | { kind: 'item'; item: BoardItem }> = []
-  list.items
-    .filter((item) => !item.groupId)
-    .forEach((item) => rows.push({ kind: 'item', item }))
+  projectRootItemsForBucket(list, null).forEach((item) => appendProjectRows(rows as BoardDisplayRow[], list, item, 0, null))
 
   const appendGroupRows = (parentGroupId: string | null): void => {
     list.groups
       .filter((group) => group.parentGroupId === parentGroupId)
       .forEach((group) => {
-        const groupItems = list.items.filter((item) => item.groupId === group.id)
+        const groupItems = projectRootItemsForBucket(list, group.id)
         const hasChildren = list.groups.some((candidate) => candidate.parentGroupId === group.id)
         if (groupItems.length === 0 && !hasChildren) return
         rows.push({ kind: 'group', group })
-        groupItems.forEach((item) => rows.push({ kind: 'item', item }))
+        groupItems.forEach((item) => appendProjectRows(rows as BoardDisplayRow[], list, item, 0, group.id))
         appendGroupRows(group.id)
       })
   }
   appendGroupRows(null)
-  return rows
+  return rows as BoardDisplayRow[]
+}
+
+function boardVisibleItemCount(list: BoardList): number {
+  if (list.templateType !== 'project') return list.items.length
+  return list.items.filter((item) => !isProjectBoundaryType(projectItemType(item, list))).length
 }
 
 function formatGroupCell(group: ItemGroup, column: ListColumn, list: BoardList, includeName: boolean): string | ReactElement {
@@ -8457,16 +9266,23 @@ function listInput(list: BoardList): Parameters<typeof window.lpl.updateList>[0]
 }
 
 function defaultListBehavior(templateType: ListTemplateType): ListBehavior {
-  if (templateType === 'todo') return 'tasks'
+  if (templateType === 'todo' || templateType === 'project') return 'tasks'
   if (templateType === 'shopping_list' || templateType === 'wishlist') return 'purchases'
   if (templateType === 'health' || templateType === 'trips_events' || templateType === 'birthday_calendar') return 'calendar'
   return 'other'
 }
 
-function listTemplateConfigForSave(templateType: ListTemplateType, behavior: ListBehavior, birthdayBoardView: BirthdayBoardView) {
+function listTemplateConfigForSave(
+  templateType: ListTemplateType,
+  behavior: ListBehavior,
+  birthdayBoardView: BirthdayBoardView,
+  wishlistProfile: WishlistRecommendationProfile,
+  showWishlistAdvisedBuyOrder: boolean
+) {
   return {
     behavior: templateType === 'custom' ? behavior : defaultListBehavior(templateType),
-    ...(templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {})
+    ...(templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {}),
+    ...(templateType === 'wishlist' ? { wishlist: { profile: wishlistProfile, showAdvisedBuyOrder: showWishlistAdvisedBuyOrder } } : {})
   }
 }
 
@@ -8534,7 +9350,7 @@ function wizardDefaultSortField(templateType: WizardTemplateType): string {
 function wizardSortOptions(templateType: WizardTemplateType): Array<{ value: string; label: string }> {
   if (templateType === 'todo') return ['Priority', 'Deadline', 'Effort', 'Task Name', 'manual'].map(wizardSortOption)
   if (templateType === 'shopping_list') return ['Needed By', 'Product', 'Store', 'Cost', 'manual'].map(wizardSortOption)
-  if (templateType === 'wishlist') return ['Wishmeter', 'Price', 'Product', 'manual'].map(wizardSortOption)
+  if (templateType === 'wishlist') return ['Wishmeter', 'Priority', 'Total Cost', 'Product', 'manual'].map(wizardSortOption)
   if (templateType === 'health') return ['Appointment Date', 'Entry', 'manual'].map(wizardSortOption)
   if (templateType === 'trips_events') return ['Start', 'End', 'Type', 'Title', 'manual'].map(wizardSortOption)
   return [{ value: 'Birthday', label: 'Birthday' }]
@@ -8548,14 +9364,21 @@ function wizardDefaultSortDirection(templateType: WizardTemplateType, field: str
   if (field === 'manual') return 'manual'
   if (templateType === 'todo' && field === 'Priority') return 'asc'
   if (templateType === 'wishlist' && field === 'Wishmeter') return 'asc'
+  if (templateType === 'wishlist' && field === 'Priority') return 'asc'
   if (['Deadline', 'Needed By', 'Appointment Date', 'Start', 'End', 'Birthday'].includes(field)) return 'asc'
-  if (['Effort', 'Cost', 'Price'].includes(field)) return 'desc'
+  if (['Effort', 'Cost', 'Price', 'Total Cost'].includes(field)) return 'desc'
   return 'asc'
 }
 
 function wizardSortDirectionOptions(templateType: WizardTemplateType, field: string): Array<{ value: Exclude<ListSortDirection, 'manual'>; label: string }> | Array<{ value: ListSortDirection; label: string }> {
   if (field === 'manual') return [{ value: 'manual', label: 'Manual' }]
   if (templateType === 'todo' && field === 'Priority') {
+    return [
+      { value: 'asc', label: 'Higher Priority on Top' },
+      { value: 'desc', label: 'Lower Priority on Top' }
+    ]
+  }
+  if (templateType === 'wishlist' && field === 'Priority') {
     return [
       { value: 'asc', label: 'Higher Priority on Top' },
       { value: 'desc', label: 'Lower Priority on Top' }
@@ -8573,7 +9396,7 @@ function wizardSortDirectionOptions(templateType: WizardTemplateType, field: str
       { value: 'desc', label: 'Farthest to Soonest' }
     ]
   }
-  if (['Effort', 'Cost', 'Price'].includes(field)) {
+  if (['Effort', 'Cost', 'Price', 'Total Cost'].includes(field)) {
     return [
       { value: 'desc', label: 'Highest to Lowest' },
       { value: 'asc', label: 'Lowest to Highest' }
@@ -8611,7 +9434,13 @@ function configureWizardList(
   grid: WizardGrid | null
 ): Parameters<typeof window.lpl.updateList>[0] {
   const sortColumn = draft.sortField === 'manual' ? null : list.columns.find((column) => normalizeColumnName(column.name) === normalizeColumnName(draft.sortField))
-  const templateConfig = listTemplateConfigForSave(list.templateType, defaultListBehavior(list.templateType), data.birthdayBoardView)
+  const templateConfig = listTemplateConfigForSave(
+    list.templateType,
+    defaultListBehavior(list.templateType),
+    data.birthdayBoardView,
+    'default',
+    false
+  )
   const birthdayCalendar = draft.templateType === 'birthday_calendar'
   return {
     ...listInput(list),
@@ -8841,6 +9670,7 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
   const todoListId = 'tutorial-list-todo'
   const workListId = 'tutorial-list-work'
   const shoppingListId = 'tutorial-list-shopping'
+  const wishlistListId = 'tutorial-list-wishlist'
   const travelListId = 'tutorial-list-travel'
   const birthdayListId = 'tutorial-list-birthdays'
   const todoGroupId = 'tutorial-group-week'
@@ -8914,6 +9744,55 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
     tutorialColumn(shoppingListId, 'shop-col-needed', 'Needed By', 'date', 6, {
       showOnBoard: true,
       role: 'deadline'
+    })
+  ]
+
+  const wishlistColumns: ListColumn[] = [
+    tutorialColumn(wishlistListId, 'wish-col-product', 'Product', 'text', 1, {
+      showOnBoard: true,
+      listSummaryEligible: true,
+      boardSummaryEligible: true
+    }),
+    tutorialColumn(wishlistListId, 'wish-col-pieces', 'Pieces', 'integer', 2, {
+      showOnBoard: false
+    }),
+    tutorialColumn(wishlistListId, 'wish-col-price', 'Price', 'currency', 3, {
+      showOnBoard: true,
+      currencyCode: 'EUR'
+    }),
+    tutorialColumn(wishlistListId, 'wish-col-total', 'Total Cost', 'currency', 4, {
+      showOnBoard: true,
+      currencyCode: 'EUR',
+      listSummaryEligible: true,
+      boardSummaryEligible: true
+    }),
+    tutorialColumn(wishlistListId, 'wish-col-wishmeter', 'Wishmeter', 'choice', 5, {
+      showOnBoard: true,
+      choiceConfig: {
+        selection: 'single',
+        ranked: true,
+        options: [
+          { id: 'wish-1', label: "It's so fluffy I'm gonna die!", rank: 1 },
+          { id: 'wish-2', label: 'My precious!', rank: 2 },
+          { id: 'wish-3', label: 'Shut up and take my money!', rank: 3 },
+          { id: 'wish-4', label: 'Gotta get me one of those!', rank: 4 },
+          { id: 'wish-5', label: 'Asking for a friend...', rank: 5 }
+        ]
+      }
+    }),
+    tutorialColumn(wishlistListId, 'wish-col-priority', 'Priority', 'choice', 6, {
+      showOnBoard: true,
+      choiceConfig: {
+        selection: 'single',
+        ranked: true,
+        options: [
+          { id: 'wish-prio-1', label: 'Highest', rank: 1 },
+          { id: 'wish-prio-2', label: 'High', rank: 2 },
+          { id: 'wish-prio-3', label: 'Medium', rank: 3 },
+          { id: 'wish-prio-4', label: 'Low', rank: 4 },
+          { id: 'wish-prio-5', label: 'Lowest', rank: 5 }
+        ]
+      }
     })
   ]
 
@@ -9194,6 +10073,74 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         ]
       },
       {
+        id: wishlistListId,
+        boardId,
+        name: 'Wishlist',
+        code: 'L03B',
+        templateType: 'wishlist',
+        templateConfig: { behavior: 'purchases', wishlist: { profile: 'default', showAdvisedBuyOrder: true } },
+        order: 3.5,
+        grid: { x: 0, y: 0, w: 0, h: 0 },
+        dueDateEnabled: false,
+        dueDateColumnId: null,
+        deadlineMandatory: false,
+        columnSortOrder: 'default',
+        sortColumnId: 'wish-col-wishmeter',
+        sortDirection: 'asc',
+        displayEnabled: false,
+        showItemIdOnBoard: false,
+        showDependenciesOnBoard: false,
+        showCreatedAtOnBoard: false,
+        showCreatedByOnBoard: false,
+        showStatusOnBoard: false,
+        columns: wishlistColumns,
+        groups: [],
+        items: [
+          {
+            ...tutorialItem(wishlistListId, 'wish-item-1', 'WL01', wishlistColumns, {
+              product: 'Home espresso machine',
+              pieces: 1,
+              price: 450,
+              totalcost: 450,
+              wishmeter: 'Gotta get me one of those!',
+              priority: 'Highest'
+            }, {
+              deadlineStatus: '',
+              deadlineTone: 'none'
+            }),
+            wishlistRecommendation: { buyScore: 0.91, advisedBuyOrder: 1, missingInputs: [] }
+          },
+          {
+            ...tutorialItem(wishlistListId, 'wish-item-2', 'WL02', wishlistColumns, {
+              product: 'QD-OLED monitor pair',
+              pieces: 2,
+              price: 1000,
+              totalcost: 2000,
+              wishmeter: "It's so fluffy I'm gonna die!",
+              priority: 'High'
+            }, {
+              deadlineStatus: '',
+              deadlineTone: 'none'
+            }),
+            wishlistRecommendation: { buyScore: 0.68, advisedBuyOrder: 2, missingInputs: [] }
+          },
+          {
+            ...tutorialItem(wishlistListId, 'wish-item-3', 'WL03', wishlistColumns, {
+              product: 'Sensor light sets',
+              pieces: 10,
+              price: 25,
+              totalcost: 250,
+              wishmeter: 'My precious!',
+              priority: 'Medium'
+            }, {
+              deadlineStatus: '',
+              deadlineTone: 'none'
+            }),
+            wishlistRecommendation: { buyScore: 0.73, advisedBuyOrder: 3, missingInputs: [] }
+          }
+        ]
+      },
+      {
         id: travelListId,
         boardId,
         name: 'Vacation & Events',
@@ -9302,7 +10249,7 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         order: 1,
         displayEnabled: true,
         grid: { x: 13, y: 1, w: 2, h: 2 },
-        config: { clock: { showSeconds: false } }
+        config: { clock: { showSeconds: false, style: 'segmented' } }
       },
       {
         id: 'tutorial-widget-weather',
@@ -9312,7 +10259,7 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         order: 2,
         displayEnabled: true,
         grid: { x: 15, y: 1, w: 2, h: 2 },
-        config: { weather: { temperatureUnit: 'celsius' } }
+        config: { weather: defaultWeatherConfig() }
       },
       {
         id: 'tutorial-widget-world',
@@ -9329,7 +10276,7 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
               { id: 'new-york', label: 'New York', timeZone: 'America/New_York' }
             ],
             showSeconds: false,
-            style: 'digital'
+            style: 'panel'
           }
         }
       },
@@ -9354,7 +10301,8 @@ function createTutorialSnapshot(mode: TutorialScene): BoardSnapshot {
         config: {
           countdown: {
             label: 'Vacation',
-            targetAt: '2026-08-15T09:00'
+            targetAt: '2026-08-15T09:00',
+            style: 'segmented'
           }
         }
       }
@@ -9447,6 +10395,7 @@ function tutorialItem(
     id,
     listId,
     groupId: options.groupId ?? null,
+    parentItemId: null,
     code,
     displayCode: code,
     order: Number(code.replace(/\D+/g, '')) || 1,
@@ -9460,6 +10409,7 @@ function tutorialItem(
     isOverdue: options.deadlineTone === 'overdue',
     deadlineStatus: options.deadlineStatus,
     deadlineTone: options.deadlineTone,
+    wishlistRecommendation: null,
     updatedAt: '2026-04-28T08:00:00.000Z'
   }
 }
@@ -9491,12 +10441,28 @@ function wizardWidgetConfig(draft: WizardWidgetDraft, existing: BoardWidgetConfi
           { id: 'new-york', label: 'New York', timeZone: 'America/New_York' }
         ],
         showSeconds: existing.worldClocks?.showSeconds ?? false,
-        style: draft.layout === 'Analogue' ? 'analogue' : 'digital'
+        style: 'panel'
       }
     }
   }
   if (draft.type === 'clock') {
-    return { ...existing, clock: { showSeconds: existing.clock?.showSeconds ?? draft.layout === 'Digital with color' } }
+    return {
+      ...existing,
+      clock: {
+        showSeconds: existing.clock?.showSeconds ?? true,
+        style: draft.layout === 'Split Date' ? 'split_date' : 'segmented'
+      }
+    }
+  }
+  if (draft.type === 'countdown') {
+    return {
+      ...existing,
+      countdown: {
+        label: existing.countdown?.label ?? 'Next milestone',
+        targetAt: existing.countdown?.targetAt ?? '',
+        style: 'segmented'
+      }
+    }
   }
   return existing
 }
@@ -9504,6 +10470,15 @@ function wizardWidgetConfig(draft: WizardWidgetDraft, existing: BoardWidgetConfi
 type BoardDisplayColumn =
   | { kind: 'real'; key: string; label: string; column: ListColumn }
   | { kind: 'birthday_turning'; key: string; label: string }
+  | { kind: 'wishlist_advised_buy_order'; key: string; label: string }
+  | { kind: 'project_gantt'; key: string; label: string }
+
+type BoardListSortDirection = 'asc' | 'desc'
+
+type BoardListSortState = {
+  key: string
+  direction: BoardListSortDirection
+}
 
 function birthdayCoreColumns(list: BoardList): ListColumn[] {
   return visibleColumns(list).filter((column) => {
@@ -9522,6 +10497,20 @@ function isBirthdayBirthYearColumn(column: ListColumn): boolean {
 }
 
 function birthdayBoardColumns(list: BoardList, columns: ListColumn[]): BoardDisplayColumn[] {
+  if (list.templateType === 'wishlist') {
+    const entries: BoardDisplayColumn[] = columns.map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column }))
+    if (!list.templateConfig.wishlist?.showAdvisedBuyOrder) return entries
+    const priorityIndex = entries.findIndex((entry) => entry.kind === 'real' && normalizeColumnName(entry.column.name) === 'priority')
+    const insertIndex = priorityIndex >= 0 ? priorityIndex + 1 : entries.length
+    entries.splice(insertIndex, 0, { kind: 'wishlist_advised_buy_order', key: 'wishlist-advised-buy-order', label: 'Advised Buy Order' })
+    return entries
+  }
+  if (list.templateType === 'project') {
+    return [
+      ...columns.map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column })),
+      { kind: 'project_gantt' as const, key: 'project-gantt', label: 'Gantt' }
+    ]
+  }
   if (list.templateType !== 'birthday_calendar') return columns.map((column) => ({ kind: 'real', key: column.id, label: column.name, column }))
   const core = birthdayCoreColumns(list)
   return [
@@ -9533,6 +10522,178 @@ function birthdayBoardColumns(list: BoardList, columns: ListColumn[]): BoardDisp
       .map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column })),
     { kind: 'birthday_turning', key: 'birthday-turning', label: 'Turning' }
   ]
+}
+
+function boardSortMetaForDisplayColumn(
+  list: BoardList,
+  column: BoardDisplayColumn
+): { key: string; defaultDirection: BoardListSortDirection } | null {
+  if (column.kind === 'birthday_turning') return { key: column.key, defaultDirection: 'asc' }
+  if (column.kind === 'wishlist_advised_buy_order') return { key: column.key, defaultDirection: 'asc' }
+  if (column.kind === 'project_gantt') return null
+  const candidate = column.column
+  if (candidate.role === 'deadline') return { key: column.key, defaultDirection: 'asc' }
+  if (list.templateType === 'birthday_calendar' && isBirthdayDateColumn(candidate)) return { key: column.key, defaultDirection: 'asc' }
+  if (candidate.type === 'date') return { key: column.key, defaultDirection: candidate.dateDisplayFormat === 'time' ? 'asc' : 'asc' }
+  if (candidate.type === 'choice' && candidate.choiceConfig?.ranked) return { key: column.key, defaultDirection: 'asc' }
+  if (candidate.type === 'integer' || candidate.type === 'decimal' || candidate.type === 'currency' || candidate.type === 'duration') {
+    return { key: column.key, defaultDirection: 'asc' }
+  }
+  if (candidate.type === 'boolean') return { key: column.key, defaultDirection: 'desc' }
+  return { key: column.key, defaultDirection: 'asc' }
+}
+
+function sortBoardDisplayRows(
+  list: BoardList,
+  rows: BoardDisplayRow[],
+  displayColumns: BoardDisplayColumn[],
+  sortState: BoardListSortState | null
+): BoardDisplayRow[] {
+  if (!sortState) return rows
+  if (list.templateType === 'birthday_calendar') {
+    return rows
+      .filter((row): row is { kind: 'item'; item: BoardItem; depth: number } => row.kind === 'item')
+      .sort((left, right) => compareBoardItems(left.item, right.item, list, displayColumns, sortState))
+  }
+
+  const nextRows: BoardDisplayRow[] = []
+  const pushItems = (items: BoardItem[]): void => {
+    if (list.templateType === 'project') {
+      const byId = new Set(items.map((item) => item.id))
+      const groupId = items[0]?.groupId ?? null
+      const roots = items
+        .filter((item) => !item.parentItemId || !byId.has(item.parentItemId))
+        .sort((left, right) => compareBoardItems(left, right, list, displayColumns, sortState))
+      for (const root of roots) appendProjectRows(nextRows, list, root, 0, groupId)
+      return
+    }
+    ;[...items].sort((left, right) => compareBoardItems(left, right, list, displayColumns, sortState)).forEach((item) => nextRows.push({ kind: 'item', item, depth: 0 }))
+  }
+
+  pushItems(projectRootItemsForBucket(list, null))
+
+  const appendGroupRows = (parentGroupId: string | null): void => {
+    list.groups
+      .filter((group) => group.parentGroupId === parentGroupId)
+      .forEach((group) => {
+        const groupItems = projectRootItemsForBucket(list, group.id)
+        const hasChildren = list.groups.some((candidate) => candidate.parentGroupId === group.id)
+        if (groupItems.length === 0 && !hasChildren) return
+        nextRows.push({ kind: 'group', group })
+        pushItems(groupItems)
+        appendGroupRows(group.id)
+      })
+  }
+
+  appendGroupRows(null)
+  return nextRows
+}
+
+function compareBoardItems(
+  left: BoardItem,
+  right: BoardItem,
+  list: BoardList,
+  displayColumns: BoardDisplayColumn[],
+  sortState: BoardListSortState
+): number {
+  const result = compareBoardSortValues(left, right, list, displayColumns, sortState.key)
+  if (result !== 0) return sortState.direction === 'asc' ? result : -result
+  return left.order - right.order || left.displayCode.localeCompare(right.displayCode, undefined, { numeric: true, sensitivity: 'base' })
+}
+
+function compareBoardSortValues(left: BoardItem, right: BoardItem, list: BoardList, displayColumns: BoardDisplayColumn[], key: string): number {
+  if (key === '__itemId') return compareTextValues(left.displayCode, right.displayCode)
+  if (key === '__createdAt') return compareNumberValues(Date.parse(left.createdAt), Date.parse(right.createdAt))
+  if (key === '__createdBy') return compareTextValues(left.createdBy, right.createdBy)
+
+  const column = displayColumns.find((candidate) => candidate.key === key)
+  if (!column) return 0
+  if (column.kind === 'birthday_turning') return compareNumberValues(birthdayTurningNumber(left, list), birthdayTurningNumber(right, list))
+  if (column.kind === 'wishlist_advised_buy_order') {
+    return compareNumberValues(left.wishlistRecommendation?.advisedBuyOrder ?? null, right.wishlistRecommendation?.advisedBuyOrder ?? null, Number.MAX_SAFE_INTEGER)
+  }
+  if (column.kind === 'project_gantt') return 0
+
+  return compareItemColumnValue(left.values[column.column.id], right.values[column.column.id], column.column, list)
+}
+
+function compareItemColumnValue(left: FieldValue | undefined, right: FieldValue | undefined, column: ListColumn, list: BoardList): number {
+  if (list.templateType === 'birthday_calendar' && isBirthdayDateColumn(column)) {
+    const leftDate = birthdayOccurrenceDate(left)
+    const rightDate = birthdayOccurrenceDate(right)
+    return compareOptionalDates(leftDate, rightDate, Number.MIN_SAFE_INTEGER)
+  }
+  if (column.role === 'deadline' || column.type === 'date') {
+    const leftDate = sortableDateValue(left, column)
+    const rightDate = sortableDateValue(right, column)
+    return compareOptionalDates(leftDate, rightDate, Number.MIN_SAFE_INTEGER)
+  }
+  if (column.type === 'choice') {
+    if (column.choiceConfig?.ranked) return compareNumberValues(choiceRankValue(left, column), choiceRankValue(right, column, 'below_lowest'))
+    return compareTextValues(sortableTextForColumn(left, column), sortableTextForColumn(right, column))
+  }
+  if (column.type === 'integer' || column.type === 'decimal' || column.type === 'currency' || column.type === 'duration') {
+    return compareNumberValues(typeof left === 'number' ? left : null, typeof right === 'number' ? right : null, 0)
+  }
+  if (column.type === 'boolean') return compareNumberValues(left ? 1 : 0, right ? 1 : 0, 0)
+  return compareTextValues(sortableTextForColumn(left, column), sortableTextForColumn(right, column))
+}
+
+function sortableDateValue(value: FieldValue | undefined, column: ListColumn): Date | null {
+  if (column.type === 'date' && column.dateDisplayFormat === 'time') {
+    const raw = dateStringFromField(value)
+    if (!raw) return null
+    const candidate = raw.includes('T') ? raw.slice(11, 16) : raw.slice(0, 5)
+    const [hour, minute] = candidate.split(':').map(Number)
+    return Number.isFinite(hour) && Number.isFinite(minute) ? new Date(1970, 0, 1, hour, minute, 0, 0) : null
+  }
+  const raw = dateStringFromField(value)
+  return raw ? parseColumnDateValue(raw, column) : null
+}
+
+function birthdayTurningNumber(item: BoardItem, list: BoardList): number | null {
+  const birthYearColumn = birthdayCoreColumns(list).find((column) => isBirthdayBirthYearColumn(column))
+  const birthdayColumn = birthdayCoreColumns(list).find((column) => isBirthdayDateColumn(column))
+  const year = birthYearColumn ? Number(item.values[birthYearColumn.id]) : NaN
+  const occurrence = birthdayColumn ? birthdayOccurrenceDate(item.values[birthdayColumn.id]) : null
+  if (!Number.isFinite(year) || !occurrence) return null
+  return occurrence.getFullYear() - year
+}
+
+function choiceRankValue(
+  value: FieldValue | undefined,
+  column: ListColumn,
+  missing: 'lowest' | 'below_lowest' = 'lowest'
+): number | null {
+  const maxRank = Math.max(0, ...(column.choiceConfig?.options.map((candidate) => candidate.rank) ?? [0]))
+  if (value === null || value === undefined || value === '') return missing === 'below_lowest' ? maxRank + 1 : maxRank
+  const first = Array.isArray(value) ? value[0] : value
+  const option = column.choiceConfig?.options.find((candidate) => candidate.id === first || candidate.label === first)
+  return option?.rank ?? (missing === 'below_lowest' ? maxRank + 1 : maxRank)
+}
+
+function sortableTextForColumn(value: FieldValue | undefined, column: ListColumn): string {
+  if (Array.isArray(value)) return value.map((entry) => choiceLabel(entry, column)).join(', ')
+  if (value === null || value === undefined) return ''
+  if (isDateFieldValue(value)) return value.value ?? ''
+  if (column.type === 'choice') return choiceLabel(String(value), column)
+  return String(value)
+}
+
+function compareOptionalDates(left: Date | null, right: Date | null, missingValue: number): number {
+  return compareNumberValues(left?.getTime() ?? null, right?.getTime() ?? null, missingValue)
+}
+
+function compareNumberValues(left: number | null, right: number | null, missingValue = 0): number {
+  const safeLeft = left === null || !Number.isFinite(left) ? missingValue : left
+  const safeRight = right === null || !Number.isFinite(right) ? missingValue : right
+  return safeLeft - safeRight
+}
+
+function compareTextValues(left: string, right: string): number {
+  const normalizedLeft = left.trim()
+  const normalizedRight = right.trim()
+  return normalizedLeft.localeCompare(normalizedRight, undefined, { numeric: true, sensitivity: 'base' })
 }
 
 function birthdayFilteredItems(list: BoardList, now = new Date()): BoardItem[] {
@@ -9593,6 +10754,153 @@ function formatBirthdayAwareCellValue(item: BoardItem, column: ListColumn, list:
     return occurrence ? formatBirthdayMonthDay(occurrence) : '-'
   }
   return formatCellValue(item.values[column.id], column)
+}
+
+function formatBoardDisplayValue(
+  item: BoardItem,
+  column: BoardDisplayColumn,
+  list: BoardList,
+  depth = 0,
+  firstVisibleColumn = false
+): string | ReactElement {
+  const raw =
+    column.kind === 'real'
+      ? formatBirthdayAwareCellValue(item, column.column, list)
+      : column.kind === 'birthday_turning'
+        ? birthdayTurningLabel(item, list)
+        : column.kind === 'wishlist_advised_buy_order'
+          ? item.wishlistRecommendation?.advisedBuyOrder
+            ? String(item.wishlistRecommendation.advisedBuyOrder)
+            : '-'
+          : renderProjectGanttCell(item, list)
+  if (list.templateType !== 'project' || !firstVisibleColumn) return raw
+  const type = projectItemType(item, list)
+  const dependencyItems =
+    isProjectMilestoneLikeType(type) && item.dependencyItemIds.length > 0
+      ? item.dependencyItemIds
+          .map((dependencyId) => list.items.find((candidate) => candidate.id === dependencyId))
+          .filter((dependency): dependency is BoardItem => dependency !== undefined)
+      : []
+  return (
+    <span className="project-board-cell" style={{ paddingInlineStart: `${depth * 1.1}rem` }}>
+      <span className="project-board-branch" aria-hidden="true">
+        {depth > 0 ? '↳' : ''}
+      </span>
+      <span>{raw}</span>
+      {dependencyItems.length > 0 ? (
+        <span className="project-milestone-dependencies" title={`Depends on: ${dependencyItems.map((dependency) => itemTitle(dependency, list)).join(', ')}`}>
+          {dependencyItems.map((dependency) => (
+            <span className="project-milestone-link" key={dependency.id}>
+              {itemTitle(dependency, list)}
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+function renderProjectGanttCell(item: BoardItem, list: BoardList): ReactElement {
+  const columns = projectDateColumns(list)
+  const range = projectTimelineRange(list)
+  const plannedStart = projectFieldDateValue(item.values, columns.plannedStart)
+  const plannedEnd = projectFieldDateValue(item.values, columns.plannedEnd) ?? plannedStart
+  const actualStart = projectFieldDateValue(item.values, columns.actualStart)
+  const actualEnd = projectFieldDateValue(item.values, columns.actualEnd) ?? actualStart
+  const type = projectItemType(item, list)
+  const milestoneLike = isProjectMilestoneLikeType(type)
+  const dependencyLinked = milestoneLike && item.dependencyItemIds.length > 0
+
+  return (
+    <div className="project-gantt-cell">
+      <div className="project-gantt-track">
+        {plannedStart && plannedEnd &&
+          (milestoneLike ? (
+            <span className={`project-gantt-marker planned${dependencyLinked ? ' dependent' : ''}`} style={{ left: `${projectTimelinePosition(plannedStart, range)}%` }} />
+          ) : (
+            <span
+              className="project-gantt-bar planned"
+              style={{
+                left: `${projectTimelinePosition(plannedStart, range)}%`,
+                width: `${Math.max(1.5, projectTimelineSpan(plannedStart, plannedEnd, range))}%`
+              }}
+            />
+          ))}
+        {actualStart && actualEnd &&
+          (milestoneLike ? (
+            <span className={`project-gantt-marker actual${dependencyLinked ? ' dependent' : ''}`} style={{ left: `${projectTimelinePosition(actualStart, range)}%` }} />
+          ) : (
+            <span
+              className="project-gantt-bar actual"
+              style={{
+                left: `${projectTimelinePosition(actualStart, range)}%`,
+                width: `${Math.max(1.5, projectTimelineSpan(actualStart, actualEnd, range))}%`
+              }}
+            />
+          ))}
+      </div>
+      <div className="project-gantt-meta">
+        <span>{projectTimelineLabel(range.start)}</span>
+        <span>{projectTimelineLabel(range.end)}</span>
+      </div>
+    </div>
+  )
+}
+
+function projectTimelineRange(list: BoardList): { start: Date; end: Date } {
+  const columns = projectDateColumns(list)
+  const boundaries = projectTimelineBoundaryItems(list)
+  const dates = list.items
+    .flatMap((item) => [
+      projectFieldDateValue(item.values, columns.plannedStart),
+      projectFieldDateValue(item.values, columns.plannedEnd),
+      projectFieldDateValue(item.values, columns.actualStart),
+      projectFieldDateValue(item.values, columns.actualEnd)
+    ])
+    .filter((entry): entry is Date => entry !== null)
+    .sort((left, right) => left.getTime() - right.getTime())
+  const boundaryStartCandidates = [
+    boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.plannedStart) : null,
+    boundaries.projectStart ? projectFieldDateValue(boundaries.projectStart.values, columns.actualStart) : null
+  ].filter((entry): entry is Date => entry !== null)
+  const boundaryEndCandidates = [
+    boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.plannedStart) : null,
+    boundaries.projectEnd ? projectFieldDateValue(boundaries.projectEnd.values, columns.actualStart) : null
+  ].filter((entry): entry is Date => entry !== null)
+  const boundaryStart = boundaryStartCandidates.sort((left, right) => left.getTime() - right.getTime())[0] ?? null
+  const boundaryEnd = boundaryEndCandidates.sort((left, right) => right.getTime() - left.getTime())[0] ?? null
+  if (dates.length === 0) {
+    const start = boundaryStart ? startOfToday(boundaryStart) : startOfToday(new Date())
+    const end = new Date(start)
+    if (boundaryEnd) {
+      end.setTime(boundaryEnd.getTime())
+    } else {
+      end.setDate(end.getDate() + 14)
+    }
+    return { start, end }
+  }
+  const earliestDate = boundaryStart && boundaryStart.getTime() < dates[0].getTime() ? boundaryStart : dates[0]
+  const latestDate = boundaryEnd && boundaryEnd.getTime() > dates[dates.length - 1].getTime() ? boundaryEnd : dates[dates.length - 1]
+  const start = new Date(earliestDate)
+  start.setDate(start.getDate() - 1)
+  const end = new Date(latestDate)
+  end.setDate(end.getDate() + 1)
+  if (end.getTime() <= start.getTime()) end.setDate(start.getDate() + 1)
+  return { start, end }
+}
+
+function projectTimelinePosition(date: Date, range: { start: Date; end: Date }): number {
+  const span = Math.max(1, range.end.getTime() - range.start.getTime())
+  return ((date.getTime() - range.start.getTime()) / span) * 100
+}
+
+function projectTimelineSpan(start: Date, end: Date, range: { start: Date; end: Date }): number {
+  const span = Math.max(1, range.end.getTime() - range.start.getTime())
+  return ((Math.max(end.getTime(), start.getTime()) - start.getTime()) / span) * 100
+}
+
+function projectTimelineLabel(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
 }
 
 function formatBirthdayMonthDay(date: Date): string {
@@ -9747,16 +11055,37 @@ function defaultWorldClockConfig(): NonNullable<BoardWidgetConfig['worldClocks']
       { id: 'tokyo', label: 'Tokyo', timeZone: 'Asia/Tokyo' }
     ],
     showSeconds: false,
-    style: 'digital'
+    style: 'panel'
+  }
+}
+
+function defaultWeatherConfig(): NonNullable<BoardWidgetConfig['weather']> {
+  return {
+    temperatureUnit: 'celsius',
+    locationMode: 'current',
+    customLocation: null
   }
 }
 
 function defaultConfigForWidgetType(type: WidgetType): BoardWidgetConfig {
-  if (type === 'weather') return { weather: { temperatureUnit: 'celsius' } }
+  if (type === 'weather') return { weather: defaultWeatherConfig() }
   if (type === 'word_of_day') return { wordOfDay: { accent: 'calm' } }
   if (type === 'world_clocks') return { worldClocks: defaultWorldClockConfig() }
-  if (type === 'countdown') return { countdown: { label: 'Next milestone', targetAt: '' } }
-  return { clock: { showSeconds: true } }
+  if (type === 'countdown') return { countdown: { label: 'Next milestone', targetAt: '', style: 'segmented' } }
+  return { clock: { showSeconds: true, style: 'segmented' } }
+}
+
+function clockTimeParts(date: Date): { hour: string; minute: string; dayPeriod: string } {
+  const parts = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).formatToParts(date)
+  return {
+    hour: parts.find((part) => part.type === 'hour')?.value ?? '00',
+    minute: parts.find((part) => part.type === 'minute')?.value ?? '00',
+    dayPeriod: (parts.find((part) => part.type === 'dayPeriod')?.value ?? 'AM').toUpperCase()
+  }
 }
 
 function formatWidgetDate(date: Date): string {
@@ -9807,6 +11136,24 @@ function timeZoneOffsetLabel(timeZone: string, date: Date): string {
     timeZoneName: 'shortOffset'
   }).formatToParts(date)
   return formatted.find((part) => part.type === 'timeZoneName')?.value ?? timeZone
+}
+
+function formatZonedWeekday(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    timeZone
+  }).format(date)
+}
+
+function formatZonedWidgetDate(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    day: 'numeric',
+    timeZone
+  }).formatToParts(date)
+  const month = parts.find((part) => part.type === 'month')?.value ?? ''
+  const day = Number(parts.find((part) => part.type === 'day')?.value ?? '1')
+  return `${month} ${ordinalDay(day)}`
 }
 
 function inputType(column: ListColumn): string {
@@ -10056,7 +11403,16 @@ async function requestWeatherPosition(): Promise<GeolocationPosition> {
   )
 }
 
-async function resolveWeatherLocation(): Promise<{ latitude: number; longitude: number; kicker: string }> {
+async function resolveWeatherLocation(
+  config: BoardWidgetConfig['weather'] | undefined
+): Promise<{ latitude: number; longitude: number; kicker: string }> {
+  if (config?.locationMode === 'custom' && config.customLocation) {
+    return {
+      latitude: config.customLocation.latitude,
+      longitude: config.customLocation.longitude,
+      kicker: config.customLocation.label
+    }
+  }
   try {
     const position = await requestWeatherPosition()
     return {
@@ -10075,6 +11431,16 @@ async function requestApproximateWeatherLocation(previousError: unknown): Promis
   } catch (error) {
     throw error ?? previousError
   }
+}
+
+function weatherLocationSearchError(error: unknown): string {
+  if (error instanceof Error && error.message.startsWith('weather-location-http-')) {
+    return 'The location service did not respond successfully. Please try again in a moment.'
+  }
+  if (error instanceof Error && error.message === 'weather-location-network') {
+    return 'The location search service could not be reached. Check connectivity and try again.'
+  }
+  return 'Location search is unavailable right now. Please try again in a moment.'
 }
 
 function weatherUnavailableDetail(error: unknown): string {

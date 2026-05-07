@@ -35,11 +35,21 @@ That means `v2.0.0` has two jobs:
 - Why it matters:
   It complements the board as a true planning dashboard and becomes even more valuable once multiple views and cloud sync exist.
 
+### Stocks Widget
+- Purpose:
+  Track a small watchlist of market symbols in the same glanceable board style as the other informational widgets.
+- Suggested MVP-for-v2 shape:
+  - manual watchlist of symbols
+  - price, daily change, and compact trend context
+  - at least one clean default display mode with room for later style variants
+- Why it matters:
+  It extends the dashboard idea into lightweight financial awareness without turning LPL into a trading tool.
+
 ### Additional Widget Faces / Display Modes
 - Clock:
   More digital and analogue variants.
 - Weather:
-  Compact, detailed, and more presentation-friendly modes.
+  Compact, detailed, and more presentation-friendly modes, plus a cleaner single-field searchable custom-location picker.
 - World Clock:
   More styles and denser layouts.
 - Word of the Day:
@@ -56,16 +66,22 @@ That means `v2.0.0` has two jobs:
   Represent structured multi-step work with sequencing, dates, dependencies, and progress in a way richer than a plain To Do list.
 - Core capabilities:
   - task rows with start, end, effort, owner, status, % done
+  - hierarchical items for task -> sub-task -> work-package structure
+  - milestone items with single planned/actual date behavior
+  - project start/project end boundary items driving the overall timeline
   - dependency support reused from current item dependency model
   - timeline/Gantt visualization
   - optional grouping by phase/milestone/workstream
   - board summary compatibility
+  - milestone deliverable rollups based on dependency outputs
+  - wizard support once the Project model is stable enough to configure quickly
 - Why it matters:
   This is the strongest bridge from personal planning into more advanced planning and future team use.
 
 ## 3.3 Smarter Task Progress And Effort
 
 - Visual indicators on `% Done`
+- Remaining Work calculated column for effort-based task lists
 - Remaining effort calculation
 - Deadline-aware effort status
 - Effort distribution recommendations using:
@@ -95,6 +111,7 @@ That means `v2.0.0` has two jobs:
   - monthly rollups
   - planned vs actual fields
   - linkage to Wishlist affordability/projection logic
+  - future budget-aware buy-order mode layered on top of the current budget-agnostic Wishlist recommendation engine
 - Why it matters:
   Financial planning is one of the natural adjacent domains already hinted at by Shopping and Wishlist.
 

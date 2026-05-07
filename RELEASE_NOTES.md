@@ -1,5 +1,15 @@
 # Life Plan Lite Release Notes
 
+## v1.4.0 - Help, Wishlist recommendations, and Project overview
+
+- Added a real Help surface with guided tour launch, topic search, and browsable help articles.
+- Added board-view column sorting directly from visible list headers.
+- Added Weather widget support for `Current location` and `Custom location`.
+- Added Wishlist recommendation logic with `Priority`, `Pieces`, `Total Cost`, `Buy Score`, and `Advised Buy Order`.
+- Added the first high-level Project list template with hierarchy, milestones, timeline boundaries, and a lightweight Gantt.
+- Improved widget design consistency across Clock, Countdown, and World Clock.
+- Reduced renderer monolith pressure enough to eliminate the Babel large-file warning on `App.tsx`.
+
 ## v0.3.2 - Admin workspace refinement and portable packaging
 
 - Restructured admin mode into a clearer two-column workspace with a stacked right-side editor and live layout area.

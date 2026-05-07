@@ -52,6 +52,8 @@ import type {
   UpdateItemInput,
   UpdateWidgetInput,
   WidgetType,
+  WishlistRecommendationInput,
+  WishlistRecommendationProfile,
   WorldClockLocation
 } from '../../shared/domain'
 import type { DbClient } from './client'
@@ -79,6 +81,13 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 
 const DEFAULT_PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
 const WISHMETER_OPTIONS = ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Gotta get me one of those!', 'Asking for a friend...']
+const PROJECT_ITEM_TYPE_OPTIONS = ['Task', 'Milestone', 'Project Start', 'Project End']
+const WISHLIST_PROFILE_WEIGHTS: Record<WishlistRecommendationProfile, { wish: number; priority: number; price: number }> = {
+  default: { wish: 0.5, priority: 0.3, price: 0.2 },
+  balanced: { wish: 0.35, priority: 0.35, price: 0.3 },
+  priority_first: { wish: 0.25, priority: 0.55, price: 0.2 },
+  value_first: { wish: 0.1, priority: 0.35, price: 0.55 }
+}
 const SUMMARY_COUNT_TEXT_COLUMNS = new Set(['item name', 'task', 'task name', 'product', 'entry', 'title', 'name'].map((name) => normalizeReservedColumnName(name)))
 const SUMMARY_DATE_COLUMNS = new Set(['deadline', 'needed by', 'appointment date', 'birthday', 'start'].map((name) => normalizeReservedColumnName(name)))
 const NON_SUMMARY_NUMERIC_COLUMNS = new Set(['year of birth', 'birth year', '% done'].map((name) => normalizeReservedColumnName(name)))
@@ -148,12 +157,16 @@ type ItemRow = {
   id: string
   list_id: string
   group_id: string | null
+  parent_item_id: string | null
   item_number: number
   item_order: number
   publication_status: PublicationStatus
   operational_state: OperationalState
   created_at: string
   created_by: string
+  wishlist_buy_score: number | null
+  wishlist_advised_buy_order: number | null
+  wishlist_missing_inputs_json: string | null
   updated_at: string
 }
 
@@ -240,6 +253,11 @@ function normalizeColumnSortOrder(order: ColumnSortOrder | undefined): ColumnSor
   return 'default'
 }
 
+function normalizeWishlistRecommendationProfile(profile: string | undefined): WishlistRecommendationProfile {
+  if (profile === 'balanced' || profile === 'priority_first' || profile === 'value_first') return profile
+  return 'default'
+}
+
 function normalizeDeadlineDisplayFormat(format: DateDisplayFormat | undefined): DateDisplayFormat {
   const normalized = normalizeDateDisplayFormat(format)
   return normalized === 'time' ? 'date' : normalized
@@ -291,6 +309,7 @@ function normalizeListTemplateType(type: string | undefined): ListTemplateType {
     type === 'todo' ||
     type === 'shopping_list' ||
     type === 'wishlist' ||
+    type === 'project' ||
     type === 'health' ||
     type === 'trips_events' ||
     type === 'birthday_calendar' ||
@@ -311,18 +330,20 @@ function defaultWorldClockLocations(): WorldClockLocation[] {
 }
 
 function defaultWidgetConfig(type: WidgetType): BoardWidgetConfig {
-  if (type === 'weather') return { weather: { temperatureUnit: 'celsius' } }
+  if (type === 'weather') return { weather: { temperatureUnit: 'celsius', locationMode: 'current', customLocation: null } }
   if (type === 'word_of_day') return { wordOfDay: { accent: 'calm' } }
-  if (type === 'world_clocks') return { worldClocks: { locations: defaultWorldClockLocations(), showSeconds: false, style: 'digital' } }
-  if (type === 'countdown') return { countdown: { targetAt: '', label: 'Next milestone' } }
-  return { clock: { showSeconds: true } }
+  if (type === 'world_clocks') return { worldClocks: { locations: defaultWorldClockLocations(), showSeconds: false, style: 'panel' } }
+  if (type === 'countdown') return { countdown: { targetAt: '', label: 'Next milestone', style: 'segmented' } }
+  return { clock: { showSeconds: true, style: 'segmented' } }
 }
 
 function defaultListTemplateConfig(type: ListTemplateType): ListTemplateConfig {
   if (type === 'custom') return { behavior: 'other' }
   if (type === 'birthday_calendar') return { behavior: 'calendar', birthday: { boardView: 'this_month' } }
   if (type === 'todo') return { behavior: 'tasks' }
-  if (type === 'shopping_list' || type === 'wishlist') return { behavior: 'purchases' }
+  if (type === 'project') return { behavior: 'tasks' }
+  if (type === 'wishlist') return { behavior: 'purchases', wishlist: { profile: 'default', showAdvisedBuyOrder: false } }
+  if (type === 'shopping_list') return { behavior: 'purchases' }
   if (type === 'health' || type === 'trips_events') return { behavior: 'calendar' }
   return {}
 }
@@ -353,12 +374,17 @@ function defaultColumnOrderIndex(listType: ListTemplateType, name: string): numb
     todo: ['task name', 'task', 'details', 'deadline', 'priority', 'people', 'location', 'effort', '% done', 'comments'],
     shopping_list: ['product', 'pieces', 'store', 'needed by', 'price / pc', 'cost', 'link'],
     wishlist: ['product', 'description', 'link', 'price', 'wishmeter'],
+    project: ['name', 'description', 'type', 'responsible', 'planned start', 'planned end', 'actual start', 'actual end', 'effort', 'output / deliverable'],
     health: ['entry', 'appointment date', 'recurrence', 'mentions', 'frequency', 'details'],
     trips_events: ['title', 'type', 'start', 'end', 'topic / theme', 'location'],
     birthday_calendar: ['name', 'birthday', 'year of birth', 'birth year', 'location']
   }
   const index = templateOrder[normalizeListTemplateType(listType)].indexOf(normalizeReservedColumnName(name))
   return index >= 0 ? index : Number.MAX_SAFE_INTEGER
+}
+
+function minListGridWidthForTemplateType(type: ListTemplateType): number {
+  return type === 'project' ? 10 : MIN_LIST_GRID_WIDTH
 }
 
 function formatDurationMinutes(minutes: number, displayFormat: DurationDisplayFormat = 'days_hours'): string {
@@ -607,13 +633,13 @@ export class LifePlanRepository {
   closeItem(input: CloseItemInput): BoardSnapshot {
     const item = this.client.database
       .prepare(
-        `SELECT i.id, i.item_number, i.publication_status, l.id AS list_id, l.name AS list_name, l.code AS list_code, b.id AS board_id
+        `SELECT i.id, i.item_number, i.publication_status, l.id AS list_id, l.name AS list_name, l.code AS list_code, l.list_type, b.id AS board_id
          FROM items i
          JOIN lists l ON l.id = i.list_id
          JOIN boards b ON b.id = l.board_id
          WHERE i.id = ?`
       )
-      .get<{ id: string; item_number: number; publication_status: PublicationStatus; list_id: string; list_name: string; list_code: string; board_id: string }>(
+      .get<{ id: string; item_number: number; publication_status: PublicationStatus; list_id: string; list_name: string; list_code: string; list_type: ListTemplateType; board_id: string }>(
         input.itemId
       )
 
@@ -647,6 +673,7 @@ export class LifePlanRepository {
         now,
         input.itemId
       )
+      this.refreshWishlistRecommendations(item.list_id)
     })
 
     return this.getBoardSnapshot(item.board_id, 'admin')
@@ -662,15 +689,17 @@ export class LifePlanRepository {
     const itemId = randomUUID()
     const now = new Date().toISOString()
     const groupId = this.validGroupId(input.listId, input.groupId ?? null)
+    const parentItemId = this.validParentItemId(input.listId, input.parentItemId ?? null, null)
     const values = this.validateItemValues(input.listId, input.values)
 
     this.transaction(() => {
       this.run(
-        `INSERT INTO items (id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
-         VALUES (?, ?, ?, ?, ?, 'published', 'active', ?, ?, ?, ?)`,
+        `INSERT INTO items (id, list_id, group_id, parent_item_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'published', 'active', ?, ?, ?, ?)`,
         itemId,
         input.listId,
         groupId,
+        parentItemId,
         nextNumber,
         nextOrder,
         'admin',
@@ -681,6 +710,7 @@ export class LifePlanRepository {
       this.upsertValues(itemId, values, 'draft')
       this.upsertValues(itemId, values, 'published')
       this.replaceDependencies(itemId, input.dependencyItemIds)
+      this.refreshWishlistRecommendations(input.listId)
     })
 
     const boardId = this.client.database.prepare('SELECT board_id FROM lists WHERE id = ?').get<{ board_id: string }>(input.listId)?.board_id
@@ -689,28 +719,32 @@ export class LifePlanRepository {
 
   updateItem(input: UpdateItemInput): BoardSnapshot {
     const item = this.client.database
-      .prepare('SELECT list_id, group_id, publication_status FROM items WHERE id = ?')
-      .get<{ list_id: string; group_id: string | null; publication_status: PublicationStatus }>(input.itemId)
+      .prepare('SELECT list_id, group_id, parent_item_id, publication_status FROM items WHERE id = ?')
+      .get<{ list_id: string; group_id: string | null; parent_item_id: string | null; publication_status: PublicationStatus }>(input.itemId)
     if (!item) throw new Error('Item not found.')
 
     const now = new Date().toISOString()
     const groupId = this.validGroupId(item.list_id, input.groupId === undefined ? item.group_id : input.groupId)
+    const parentItemId = this.validParentItemId(item.list_id, input.parentItemId === undefined ? item.parent_item_id : input.parentItemId, input.itemId)
     const values = this.validateItemValues(item.list_id, input.values, input.itemId)
 
     this.transaction(() => {
       this.run(
         `UPDATE items
          SET group_id = ?,
+             parent_item_id = ?,
              publication_status = 'published',
-              updated_at = ?
+               updated_at = ?
          WHERE id = ?`,
         groupId,
+        parentItemId,
         now,
         input.itemId
       )
       this.upsertValues(input.itemId, values, 'draft')
       this.upsertValues(input.itemId, values, 'published')
       this.replaceDependencies(input.itemId, input.dependencyItemIds)
+      this.refreshWishlistRecommendations(item.list_id)
     })
 
     const boardId = this.client.database
@@ -720,12 +754,25 @@ export class LifePlanRepository {
   }
 
   deleteItem(itemId: string): BoardSnapshot {
-    const boardId = this.client.database
+    const item = this.client.database
       .prepare('SELECT l.board_id FROM items i JOIN lists l ON l.id = i.list_id WHERE i.id = ?')
-      .get<{ board_id: string }>(itemId)?.board_id
+      .get<{ board_id: string }>(itemId)
+    const boardId = item?.board_id
+    const listId = this.client.database.prepare('SELECT list_id FROM items WHERE id = ?').get<{ list_id: string }>(itemId)?.list_id ?? null
+    const descendantIds = this.getItemDescendantIds(itemId)
+    const itemIdsToDelete = [itemId, ...descendantIds]
     this.transaction(() => {
-      this.run('DELETE FROM dependencies WHERE source_item_id = ? OR target_item_id = ?', itemId, itemId)
-      this.run('DELETE FROM items WHERE id = ?', itemId)
+      if (itemIdsToDelete.length > 0) {
+        this.run(
+          `DELETE FROM dependencies
+           WHERE source_item_id IN (${this.placeholders(itemIdsToDelete)})
+              OR target_item_id IN (${this.placeholders(itemIdsToDelete)})`,
+          ...itemIdsToDelete,
+          ...itemIdsToDelete
+        )
+        this.run(`DELETE FROM items WHERE id IN (${this.placeholders(itemIdsToDelete)})`, ...itemIdsToDelete)
+      }
+      if (listId) this.refreshWishlistRecommendations(listId)
     })
     return boardId ? this.getBoardSnapshot(boardId, 'admin') : this.getActiveBoardSnapshot('admin')
   }
@@ -943,7 +990,7 @@ export class LifePlanRepository {
 
         const items = this.client.database
           .prepare(
-            `SELECT id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, published_at
+            `SELECT id, list_id, group_id, parent_item_id, item_number, item_order, publication_status, operational_state, created_by, created_at, published_at
              FROM items
              WHERE list_id IN (${this.placeholders(listIds)})
              ORDER BY list_id, item_order`
@@ -960,15 +1007,16 @@ export class LifePlanRepository {
           const newListId = listMap.get(item.list_id)
           if (!newListId) continue
           this.run(
-            `INSERT INTO items
-               (id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            newItemId,
-            newListId,
-            item.group_id ? (groupMap.get(item.group_id) ?? null) : null,
-            item.item_number,
-            item.item_order,
-            item.publication_status,
+             `INSERT INTO items
+                (id, list_id, group_id, parent_item_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             newItemId,
+             newListId,
+             item.group_id ? (groupMap.get(item.group_id) ?? null) : null,
+             item.parent_item_id ? (itemMap.get(item.parent_item_id) ?? null) : null,
+             item.item_number,
+             item.item_order,
+             item.publication_status,
             item.operational_state,
             item.created_by,
             item.created_at,
@@ -1259,7 +1307,7 @@ export class LifePlanRepository {
       ? {
           x: this.clamp(input.grid.x, 1, 16),
           y: this.clamp(input.grid.y, 1, 8),
-          w: this.clamp(input.grid.w, MIN_LIST_GRID_WIDTH, 16),
+          w: this.clamp(input.grid.w, minListGridWidthForTemplateType(nextTemplateType), 16),
           h: this.clamp(input.grid.h, MIN_LIST_GRID_HEIGHT, 8)
         }
       : { x: 0, y: 0, w: 0, h: 0 }
@@ -1328,6 +1376,7 @@ export class LifePlanRepository {
       if (columnSortOrder !== 'manual') {
         this.applyColumnSortOrder(input.listId, columnSortOrder, nextTemplateType)
       }
+      this.refreshWishlistRecommendations(input.listId)
     })
 
     return this.getBoardSnapshot(list.board_id, 'admin')
@@ -1354,8 +1403,8 @@ export class LifePlanRepository {
 
     const listRows = input.map((entry) => {
       const row = this.client.database
-        .prepare('SELECT id, board_id FROM lists WHERE id = ?')
-        .get<{ id: string; board_id: string }>(entry.listId)
+        .prepare('SELECT id, board_id, list_type FROM lists WHERE id = ?')
+        .get<{ id: string; board_id: string; list_type: ListTemplateType }>(entry.listId)
       if (!row) throw new Error('List not found.')
       return row
     })
@@ -1370,7 +1419,13 @@ export class LifePlanRepository {
       grid: {
         x: this.clamp(entry.grid.x, 1, 16),
         y: this.clamp(entry.grid.y, 1, 8),
-        w: this.clamp(entry.grid.w, MIN_LIST_GRID_WIDTH, 16),
+        w: this.clamp(
+          entry.grid.w,
+          minListGridWidthForTemplateType(
+            normalizeListTemplateType(listRows.find((row) => row.id === entry.listId)?.list_type)
+          ),
+          16
+        ),
         h: this.clamp(entry.grid.h, MIN_LIST_GRID_HEIGHT, 8)
       }
     }))
@@ -1407,8 +1462,8 @@ export class LifePlanRepository {
 
     const listRows = input.lists.map((entry) => {
       const row = this.client.database
-        .prepare('SELECT id, board_id FROM lists WHERE id = ?')
-        .get<{ id: string; board_id: string }>(entry.listId)
+        .prepare('SELECT id, board_id, list_type FROM lists WHERE id = ?')
+        .get<{ id: string; board_id: string; list_type: ListTemplateType }>(entry.listId)
       if (!row) throw new Error('List not found.')
       return row
     })
@@ -1432,7 +1487,13 @@ export class LifePlanRepository {
       grid: {
         x: this.clamp(entry.grid.x, 1, 16),
         y: this.clamp(entry.grid.y, 1, 8),
-        w: this.clamp(entry.grid.w, MIN_LIST_GRID_WIDTH, 16),
+        w: this.clamp(
+          entry.grid.w,
+          minListGridWidthForTemplateType(
+            normalizeListTemplateType(listRows.find((row) => row.id === entry.listId)?.list_type)
+          ),
+          16
+        ),
         h: this.clamp(entry.grid.h, MIN_LIST_GRID_HEIGHT, 8)
       }
     }))
@@ -1721,7 +1782,7 @@ export class LifePlanRepository {
 
       const items = this.client.database
         .prepare(
-          `SELECT id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, published_at
+          `SELECT id, group_id, parent_item_id, item_number, item_order, publication_status, operational_state, created_by, created_at, published_at
            FROM items
            WHERE list_id = ?
            ORDER BY item_order`
@@ -1729,6 +1790,7 @@ export class LifePlanRepository {
         .all<{
           id: string
           group_id: string | null
+          parent_item_id: string | null
           item_number: number
           item_order: number
           publication_status: PublicationStatus
@@ -1742,11 +1804,12 @@ export class LifePlanRepository {
         itemMap.set(item.id, newItemId)
         this.run(
           `INSERT INTO items
-             (id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, list_id, group_id, parent_item_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newItemId,
           newListId,
           item.group_id ? (groupMap.get(item.group_id) ?? null) : null,
+          item.parent_item_id ? (itemMap.get(item.parent_item_id) ?? null) : null,
           item.item_number,
           item.item_order,
           item.publication_status,
@@ -1850,6 +1913,7 @@ export class LifePlanRepository {
       if (!input.addOnTop && columnSortOrder !== 'manual') {
         this.applyColumnSortOrder(input.listId, columnSortOrder, list.list_type)
       }
+      this.refreshWishlistRecommendations(input.listId)
     })
     return this.getBoardSnapshot(list.board_id, 'admin')
   }
@@ -1885,8 +1949,11 @@ export class LifePlanRepository {
     const recurrence = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrence ?? existingFormat.recurrence) : 'none'
     const recurrenceDays = type === 'date' && dateDisplayFormat === 'time' ? (input.recurrenceDays ?? existingFormat.recurrenceDays) : []
     const requestedCurrencyCode = type === 'currency' ? normalizeCurrencyCode(input.currencyCode ?? existingFormat.currencyCode) : 'USD'
-    const currencyCode =
-      this.isShoppingCostColumn(existing.list_type, existing.name) ? this.shoppingPriceCurrencyCode(existing.list_id) : requestedCurrencyCode
+    const currencyCode = this.isShoppingCostColumn(existing.list_type, existing.name)
+      ? this.shoppingPriceCurrencyCode(existing.list_id)
+      : this.isWishlistTotalCostColumn(existing.list_type, existing.name)
+        ? this.wishlistPriceCurrencyCode(existing.list_id)
+        : requestedCurrencyCode
     const durationDisplayFormat = type === 'duration' ? normalizeDurationDisplayFormat(input.durationDisplayFormat ?? existingFormat.durationDisplayFormat) : 'days_hours'
     const showOnBoard = input.showOnBoard ?? existingFormat.showOnBoard
     if (this.isProtectedBirthdayColumn(existing.list_type, existing.name)) {
@@ -1941,6 +2008,10 @@ export class LifePlanRepository {
       if (this.isShoppingPriceColumn(existing.list_type, existing.name)) {
         this.syncShoppingCostCurrency(existing.list_id, currencyCode)
       }
+      if (this.isWishlistPriceColumn(existing.list_type, existing.name)) {
+        this.syncWishlistTotalCostCurrency(existing.list_id, currencyCode)
+      }
+      this.refreshWishlistRecommendations(existing.list_id)
     })
     return this.getBoardSnapshot(existing.board_id, 'admin')
   }
@@ -1961,6 +2032,7 @@ export class LifePlanRepository {
       this.run('UPDATE lists SET due_date_column_id = NULL, due_date_enabled = 0 WHERE due_date_column_id = ?', columnId)
       this.run("UPDATE lists SET sort_column_id = NULL, sort_direction = 'manual' WHERE sort_column_id = ?", columnId)
       this.run('DELETE FROM list_columns WHERE id = ?', columnId)
+      if (existing) this.refreshWishlistRecommendations(existing.list_id)
     })
     return existing?.board_id ? this.getBoardSnapshot(existing.board_id, 'admin') : this.getActiveBoardSnapshot('admin')
   }
@@ -2157,6 +2229,13 @@ export class LifePlanRepository {
       )
       .all<ListRow>(boardId)
 
+    listRows
+      .filter((row) => normalizeListTemplateType(row.list_type) === 'wishlist')
+      .forEach((row) => {
+        this.ensureWishlistTemplateColumns(row.id)
+        this.ensureWishlistRecommendations(row.id)
+      })
+
     const allListIds = listRows.map((list) => list.id)
     const columnsByList = this.getColumnsByList(allListIds)
     const groupsByList = this.getGroupsByList(allListIds)
@@ -2329,7 +2408,8 @@ export class LifePlanRepository {
         : "AND i.publication_status IN ('draft', 'published', 'dirty')"
     const rows = this.client.database
       .prepare(
-        `SELECT i.id, i.list_id, i.group_id, i.item_number, i.item_order, i.publication_status, i.operational_state, i.created_at, i.created_by, i.updated_at
+        `SELECT i.id, i.list_id, i.group_id, i.parent_item_id, i.item_number, i.item_order, i.publication_status, i.operational_state, i.created_at, i.created_by,
+                i.wishlist_buy_score, i.wishlist_advised_buy_order, i.wishlist_missing_inputs_json, i.updated_at
          FROM items i
          WHERE i.list_id IN (${this.placeholders(listIds)})
          AND i.operational_state = 'active'
@@ -2354,12 +2434,13 @@ export class LifePlanRepository {
       const deadline = this.deadlineInfo(activeValues, listConfig[row.list_id])
 
       acc[row.list_id] ??= []
-      acc[row.list_id].push({
-        id: row.id,
-        listId: row.list_id,
-        groupId: row.group_id,
-        code: `T${String(row.item_number).padStart(2, '0')}`,
-        displayCode,
+        acc[row.list_id].push({
+          id: row.id,
+          listId: row.list_id,
+          groupId: row.group_id,
+          parentItemId: row.parent_item_id,
+          code: `T${String(row.item_number).padStart(2, '0')}`,
+          displayCode,
         order: row.item_order,
         publicationStatus: row.publication_status,
         operationalState: row.operational_state,
@@ -2371,6 +2452,14 @@ export class LifePlanRepository {
         isOverdue: this.isOverdue(row, activeValues, listConfig[row.list_id]),
         deadlineStatus: deadline.status,
         deadlineTone: deadline.tone,
+        wishlistRecommendation:
+          listConfig[row.list_id]?.templateType === 'wishlist'
+            ? {
+                buyScore: typeof row.wishlist_buy_score === 'number' ? row.wishlist_buy_score : null,
+                advisedBuyOrder: typeof row.wishlist_advised_buy_order === 'number' ? row.wishlist_advised_buy_order : null,
+                missingInputs: this.readWishlistMissingInputs(row.wishlist_missing_inputs_json)
+              }
+            : null,
         updatedAt: row.updated_at
       })
       return acc
@@ -2758,7 +2847,7 @@ export class LifePlanRepository {
   }
 
   private listBehavior(list: BoardList): ListBehavior {
-    if (list.templateType === 'todo') return 'tasks'
+    if (list.templateType === 'todo' || list.templateType === 'project') return 'tasks'
     if (list.templateType === 'shopping_list' || list.templateType === 'wishlist') return 'purchases'
     if (list.templateType === 'health' || list.templateType === 'trips_events' || list.templateType === 'birthday_calendar') return 'calendar'
     return this.normalizeListBehavior(list.templateConfig.behavior)
@@ -3262,7 +3351,21 @@ export class LifePlanRepository {
     if (normalizedType === 'weather') {
       return {
         weather: {
-          temperatureUnit: config?.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
+          temperatureUnit: config?.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius',
+          locationMode: config?.weather?.locationMode === 'custom' ? 'custom' : 'current',
+          customLocation:
+            config?.weather?.locationMode === 'custom' &&
+            config.weather.customLocation &&
+            typeof config.weather.customLocation.label === 'string' &&
+            config.weather.customLocation.label.trim() &&
+            Number.isFinite(config.weather.customLocation.latitude) &&
+            Number.isFinite(config.weather.customLocation.longitude)
+              ? {
+                  label: config.weather.customLocation.label.trim(),
+                  latitude: Number(config.weather.customLocation.latitude),
+                  longitude: Number(config.weather.customLocation.longitude)
+                }
+              : null
         }
       }
     }
@@ -3288,7 +3391,7 @@ export class LifePlanRepository {
         worldClocks: {
           locations,
           showSeconds: Boolean(config?.worldClocks?.showSeconds),
-          style: config?.worldClocks?.style === 'analogue' ? 'analogue' : 'digital'
+          style: 'panel'
         }
       }
     }
@@ -3296,13 +3399,15 @@ export class LifePlanRepository {
       return {
         countdown: {
           targetAt: typeof config?.countdown?.targetAt === 'string' ? config.countdown.targetAt : '',
-          label: typeof config?.countdown?.label === 'string' && config.countdown.label.trim() ? config.countdown.label.trim() : 'Next milestone'
+          label: typeof config?.countdown?.label === 'string' && config.countdown.label.trim() ? config.countdown.label.trim() : 'Next milestone',
+          style: 'segmented'
         }
       }
     }
     return {
       clock: {
-        showSeconds: config?.clock?.showSeconds !== false
+        showSeconds: config?.clock?.showSeconds !== false,
+        style: config?.clock?.style === 'split_date' ? 'split_date' : 'segmented'
       }
     }
   }
@@ -3312,7 +3417,11 @@ export class LifePlanRepository {
     const fallback = defaultListTemplateConfig(normalizedType)
     if (!json) return fallback
     try {
-      const parsed = JSON.parse(json) as { behavior?: string; birthday?: { boardView?: string } }
+      const parsed = JSON.parse(json) as {
+        behavior?: string
+        birthday?: { boardView?: string }
+        wishlist?: { profile?: string; showAdvisedBuyOrder?: boolean }
+      }
       const boardView = parsed.birthday?.boardView
       const behavior = normalizedType === 'custom' ? this.normalizeListBehavior(parsed.behavior) : fallback.behavior
       return {
@@ -3332,6 +3441,14 @@ export class LifePlanRepository {
                     : 'this_month'
               }
             }
+          : {}),
+        ...(normalizedType === 'wishlist'
+          ? {
+              wishlist: {
+                profile: normalizeWishlistRecommendationProfile(parsed.wishlist?.profile),
+                showAdvisedBuyOrder: parsed.wishlist?.showAdvisedBuyOrder === true
+              }
+            }
           : {})
       }
     } catch {
@@ -3349,6 +3466,7 @@ export class LifePlanRepository {
     if (normalizedType === 'todo') return this.createTodoTemplate(listId)
     if (normalizedType === 'shopping_list') return this.createShoppingListTemplate(listId)
     if (normalizedType === 'wishlist') return this.createWishlistTemplate(listId)
+    if (normalizedType === 'project') return this.createProjectTemplate(listId)
     if (normalizedType === 'health') return this.createHealthTemplate(listId)
     if (normalizedType === 'trips_events') return this.createTripsEventsTemplate(listId)
     if (normalizedType === 'birthday_calendar') return this.createBirthdayCalendarTemplate(listId)
@@ -3469,18 +3587,32 @@ export class LifePlanRepository {
     this.createSeedColumn(listId, 'Product', 'text', 0, true, 160, false, false, true)
     this.createSeedColumn(listId, 'Description', 'text', 1, false, 500, false, false, false)
     this.createSeedColumn(listId, 'Link', 'hyperlink', 2, false, null, false, false, true)
-    this.createSeedColumn(listId, 'Price', 'currency', 3, false, null, false, false, true)
+    this.createSeedColumn(listId, 'Pieces', 'integer', 3, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(listId, 'Price', 'currency', 4, false, null, false, false, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], 'USD', true))
+    this.createSeedColumn(listId, 'Total Cost', 'currency', 5, false, null, true, true, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], 'USD', true))
     this.createSeedColumn(
       listId,
       'Wishmeter',
       'choice',
-      4,
+      6,
       false,
       null,
       false,
       false,
       false,
       this.writeColumnDisplayFormat(null, choiceConfigFromLabels(WISHMETER_OPTIONS), 'date', 'none', [], undefined, true)
+    )
+    this.createSeedColumn(
+      listId,
+      'Priority',
+      'choice',
+      7,
+      false,
+      null,
+      false,
+      false,
+      false,
+      this.writeColumnDisplayFormat(null, choiceConfigFromLabels(DEFAULT_PRIORITY_OPTIONS), 'date', 'none', [], undefined, false)
     )
     this.run(
       `UPDATE lists
@@ -3491,6 +3623,58 @@ export class LifePlanRepository {
            updated_at = ?
        WHERE id = ?`,
       listId,
+      new Date().toISOString(),
+      listId
+    )
+  }
+
+  private createProjectTemplate(listId: string): void {
+    this.createSeedColumn(listId, 'Name', 'text', 0, true, 180, true, true, true)
+    this.createSeedColumn(listId, 'Description', 'text', 1, false, 500, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(
+      listId,
+      'Type',
+      'choice',
+      2,
+      true,
+      null,
+      false,
+      false,
+      false,
+      this.writeColumnDisplayFormat(
+        null,
+        {
+          selection: 'single',
+          ranked: false,
+          options: PROJECT_ITEM_TYPE_OPTIONS.map((label, index) => ({
+            id: normalizeReservedColumnName(label).replace(/\s+/g, '-'),
+            label,
+            rank: index + 1
+          }))
+        },
+        'date',
+        'none',
+        [],
+        undefined,
+        true
+      )
+    )
+    this.createSeedColumn(listId, 'Responsible', 'text', 3, false, 160, false, false, true)
+    const plannedStartId = this.createSeedColumn(listId, 'Planned Start', 'date', 4, false, null, false, false, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(listId, 'Planned End', 'date', 5, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(listId, 'Actual Start', 'date', 6, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(listId, 'Actual End', 'date', 7, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
+    this.createSeedColumn(listId, 'Effort', 'duration', 8, false, null, true, true, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, true, 'hours'))
+    this.createSeedColumn(listId, 'Output / Deliverable', 'text', 9, false, 500, false, false, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, true))
+    this.run(
+      `UPDATE lists
+       SET sort_column_id = ?,
+           sort_direction = 'asc',
+           show_item_id_on_board = 0,
+           show_dependencies_on_board = 0,
+           updated_at = ?
+       WHERE id = ?`,
+      plannedStartId,
       new Date().toISOString(),
       listId
     )
@@ -3770,6 +3954,14 @@ export class LifePlanRepository {
     return normalizeListTemplateType(listType) === 'shopping_list' && normalizeReservedColumnName(name) === 'cost'
   }
 
+  private isWishlistPriceColumn(listType: ListTemplateType, name: string): boolean {
+    return normalizeListTemplateType(listType) === 'wishlist' && normalizeReservedColumnName(name) === 'price'
+  }
+
+  private isWishlistTotalCostColumn(listType: ListTemplateType, name: string): boolean {
+    return normalizeListTemplateType(listType) === 'wishlist' && normalizeReservedColumnName(name) === 'total cost'
+  }
+
   private shoppingPriceCurrencyCode(listId: string): CurrencyCode {
     const priceColumn = this.client.database
       .prepare("SELECT display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'price / pc' ORDER BY sort_order LIMIT 1")
@@ -3780,6 +3972,36 @@ export class LifePlanRepository {
   private syncShoppingCostCurrency(listId: string, currencyCode: CurrencyCode): void {
     const costColumn = this.client.database
       .prepare("SELECT id, display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'cost' ORDER BY sort_order LIMIT 1")
+      .get<{ id: string; display_format: string | null }>(listId)
+    if (!costColumn) return
+    const existingFormat = this.readColumnDisplayFormat(costColumn.display_format)
+    this.run(
+      'UPDATE list_columns SET display_format = ?, updated_at = ? WHERE id = ?',
+      this.writeColumnDisplayFormat(
+        existingFormat.role,
+        existingFormat.choiceConfig,
+        existingFormat.dateDisplayFormat,
+        existingFormat.recurrence,
+        existingFormat.recurrenceDays,
+        currencyCode,
+        existingFormat.showOnBoard,
+        existingFormat.durationDisplayFormat
+      ),
+      new Date().toISOString(),
+      costColumn.id
+    )
+  }
+
+  private wishlistPriceCurrencyCode(listId: string): CurrencyCode {
+    const priceColumn = this.client.database
+      .prepare("SELECT display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'price' ORDER BY sort_order LIMIT 1")
+      .get<{ display_format: string | null }>(listId)
+    return this.readColumnDisplayFormat(priceColumn?.display_format ?? null).currencyCode
+  }
+
+  private syncWishlistTotalCostCurrency(listId: string, currencyCode: CurrencyCode): void {
+    const costColumn = this.client.database
+      .prepare("SELECT id, display_format FROM list_columns WHERE list_id = ? AND lower(name) = 'total cost' ORDER BY sort_order LIMIT 1")
       .get<{ id: string; display_format: string | null }>(listId)
     if (!costColumn) return
     const existingFormat = this.readColumnDisplayFormat(costColumn.display_format)
@@ -3837,7 +4059,7 @@ export class LifePlanRepository {
           : normalizedType === 'shopping_list'
             ? ['product', 'pieces', 'store', 'needed by', 'price / pc', 'cost', 'link']
             : normalizedType === 'wishlist'
-              ? ['product', 'description', 'link', 'price', 'wishmeter']
+              ? ['product', 'description', 'link', 'pieces', 'price', 'total cost', 'wishmeter', 'priority']
             : normalizedType === 'health'
                 ? ['entry', 'appointment date', 'recurrence', 'mentions', 'details']
                 : normalizedType === 'trips_events'
@@ -3853,19 +4075,297 @@ export class LifePlanRepository {
     values: Record<string, FieldValue>
   ): Record<string, FieldValue> {
     const normalizedType = normalizeListTemplateType(templateType)
-    if (normalizedType !== 'shopping_list') return values
+    if (normalizedType !== 'shopping_list' && normalizedType !== 'wishlist') return values
 
     const piecesColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'pieces')
-    const priceColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'price / pc')
-    const costColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'cost')
+    const priceColumn = columns.find((column) => {
+      const normalized = normalizeReservedColumnName(column.name)
+      return normalizedType === 'shopping_list' ? normalized === 'price / pc' : normalized === 'price'
+    })
+    const costColumn = columns.find((column) => {
+      const normalized = normalizeReservedColumnName(column.name)
+      return normalizedType === 'shopping_list' ? normalized === 'cost' : normalized === 'total cost'
+    })
     if (!piecesColumn || !priceColumn || !costColumn) return values
 
-    const pieces = Number(values[piecesColumn.id] ?? 0)
-    const price = Number(values[priceColumn.id] ?? 0)
+    const rawPieces = values[piecesColumn.id]
+    const rawPrice = values[priceColumn.id]
+    const pieces = typeof rawPieces === 'number' && Number.isFinite(rawPieces) ? rawPieces : normalizedType === 'wishlist' ? 1 : 0
+    const price = typeof rawPrice === 'number' && Number.isFinite(rawPrice) ? rawPrice : null
+
     return {
       ...values,
-      [costColumn.id]: Number.isFinite(pieces) && Number.isFinite(price) ? Number((pieces * price).toFixed(2)) : 0
+      [costColumn.id]:
+        price === null
+          ? normalizedType === 'shopping_list'
+            ? 0
+            : null
+          : Number((pieces * price).toFixed(2))
     }
+  }
+
+  private readWishlistMissingInputs(json: string | null): WishlistRecommendationInput[] {
+    if (!json) return []
+    try {
+      const parsed = JSON.parse(json)
+      if (!Array.isArray(parsed)) return []
+      return parsed.filter(
+        (candidate): candidate is WishlistRecommendationInput =>
+          candidate === 'wishmeter' || candidate === 'priority' || candidate === 'price'
+      )
+    } catch {
+      return []
+    }
+  }
+
+  private refreshWishlistRecommendations(listId: string): void {
+    const list = this.client.database
+      .prepare('SELECT list_type, list_config FROM lists WHERE id = ?')
+      .get<{ list_type: ListTemplateType; list_config: string | null }>(listId)
+    if (!list || normalizeListTemplateType(list.list_type) !== 'wishlist') return
+
+    const columns = this.getColumnsByList([listId])[listId] ?? []
+    const wishColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'wishmeter') ?? null
+    const priorityColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'priority') ?? null
+    const piecesColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'pieces') ?? null
+    const priceColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'price') ?? null
+    const totalCostColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'total cost') ?? null
+    const productColumn =
+      columns.find((column) => normalizeReservedColumnName(column.name) === 'product') ??
+      columns.find((column) => normalizeReservedColumnName(column.name) === 'item name') ??
+      columns.find((column) => normalizeReservedColumnName(column.name) === 'name') ??
+      null
+
+    const itemRows = this.client.database
+      .prepare(
+        `SELECT id, item_order
+         FROM items
+         WHERE list_id = ?
+           AND operational_state = 'active'
+         ORDER BY item_order`
+      )
+      .all<{ id: string; item_order: number }>(listId)
+
+    if (itemRows.length === 0) return
+
+    const itemIds = itemRows.map((row) => row.id)
+    const draftValues = this.getItemValues(itemIds, 'draft')
+    const publishedValues = this.getItemValues(itemIds, 'published')
+    const profile = this.readListTemplateConfig('wishlist', list.list_config).wishlist?.profile ?? 'default'
+    const weights = WISHLIST_PROFILE_WEIGHTS[profile]
+
+    const validPrices = itemRows
+      .map((row) => {
+        const values = this.applyTemplateComputedValues('wishlist', columns, draftValues[row.id] ?? publishedValues[row.id] ?? {})
+        const raw = totalCostColumn ? values[totalCostColumn.id] : null
+        const numeric = typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, raw) : null
+        return numeric
+      })
+      .filter((value): value is number => value !== null)
+    const priceLogs = validPrices.map((value) => Math.log1p(value))
+    const minPriceLog = priceLogs.length > 0 ? Math.min(...priceLogs) : null
+    const maxPriceLog = priceLogs.length > 0 ? Math.max(...priceLogs) : null
+    const hasPriceSpread = minPriceLog !== null && maxPriceLog !== null && maxPriceLog > minPriceLog
+
+    const rows = itemRows.map((row) => {
+      const values = this.applyTemplateComputedValues('wishlist', columns, draftValues[row.id] ?? publishedValues[row.id] ?? {})
+      const wish = this.normalizeWishlistRankValue(values, wishColumn)
+      const priority = this.normalizeWishlistRankValue(values, priorityColumn)
+      const price = this.normalizeWishlistPriceValue(values, priceColumn, piecesColumn, totalCostColumn, minPriceLog, maxPriceLog, hasPriceSpread)
+      const score =
+        wish.value * weights.wish +
+        priority.value * weights.priority +
+        price.value * weights.price
+      const missingInputs: WishlistRecommendationInput[] = []
+      if (wish.missing) missingInputs.push('wishmeter')
+      if (priority.missing) missingInputs.push('priority')
+      if (price.missing) missingInputs.push('price')
+
+      return {
+        id: row.id,
+        itemOrder: row.item_order,
+        score,
+        wishValue: wish.value,
+        priorityValue: priority.value,
+        priceValue: price.value,
+        missingInputs,
+        productName: productColumn ? String(values[productColumn.id] ?? '').trim() : '',
+        buyScoreStored: Number(score.toFixed(6))
+      }
+    })
+
+    rows.sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score
+      if (right.priorityValue !== left.priorityValue) return right.priorityValue - left.priorityValue
+      if (right.wishValue !== left.wishValue) return right.wishValue - left.wishValue
+      if (right.priceValue !== left.priceValue) return right.priceValue - left.priceValue
+      const nameComparison = left.productName.localeCompare(right.productName, undefined, { numeric: true, sensitivity: 'base' })
+      if (nameComparison !== 0) return nameComparison
+      return left.itemOrder - right.itemOrder
+    })
+
+    rows.forEach((row, index) => {
+      this.run(
+        `UPDATE items
+         SET wishlist_buy_score = ?,
+             wishlist_advised_buy_order = ?,
+             wishlist_missing_inputs_json = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        row.buyScoreStored,
+        index + 1,
+        row.missingInputs.length > 0 ? JSON.stringify(row.missingInputs) : null,
+        new Date().toISOString(),
+        row.id
+      )
+    })
+  }
+
+  private ensureWishlistRecommendations(listId: string): void {
+    const staleCount =
+      this.client.database
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM items i
+           JOIN lists l ON l.id = i.list_id
+           WHERE i.list_id = ?
+             AND i.operational_state = 'active'
+             AND l.list_type = 'wishlist'
+             AND (i.wishlist_buy_score IS NULL OR i.wishlist_advised_buy_order IS NULL)`
+        )
+        .get<{ count: number }>(listId)?.count ?? 0
+    if (staleCount > 0) this.refreshWishlistRecommendations(listId)
+  }
+
+  private ensureWishlistTemplateColumns(listId: string): void {
+    const existingColumns = this.client.database
+      .prepare('SELECT id, name, sort_order, display_format FROM list_columns WHERE list_id = ? ORDER BY sort_order')
+      .all<{ id: string; name: string; sort_order: number; display_format: string | null }>(listId)
+    const columnByName = new Map(existingColumns.map((column) => [normalizeReservedColumnName(column.name), column]))
+    const maxOrder = existingColumns.length > 0 ? Math.max(...existingColumns.map((column) => column.sort_order)) + 1 : 0
+
+    let piecesId = columnByName.get('pieces')?.id ?? null
+    let totalCostId = columnByName.get('total cost')?.id ?? null
+    let priorityId = columnByName.get('priority')?.id ?? null
+    const priceColumn = columnByName.get('price') ?? null
+
+    if (!piecesId) {
+      piecesId = this.createSeedColumn(
+        listId,
+        'Pieces',
+        'integer',
+        maxOrder,
+        false,
+        null,
+        false,
+        false,
+        false,
+        this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false)
+      )
+      const items = this.client.database
+        .prepare("SELECT id FROM items WHERE list_id = ? AND operational_state = 'active'")
+        .all<{ id: string }>(listId)
+      for (const item of items) {
+        this.upsertValues(item.id, { [piecesId]: 1 }, 'draft')
+        this.upsertValues(item.id, { [piecesId]: 1 }, 'published')
+      }
+    }
+
+    if (!totalCostId) {
+      totalCostId = this.createSeedColumn(
+        listId,
+        'Total Cost',
+        'currency',
+        maxOrder + (piecesId && !columnByName.get('pieces') ? 1 : 0),
+        false,
+        null,
+        true,
+        true,
+        false,
+        this.writeColumnDisplayFormat(null, null, 'date', 'none', [], priceColumn ? this.readColumnDisplayFormat(priceColumn.display_format).currencyCode : 'USD', true)
+      )
+    }
+
+    if (!priorityId) {
+      priorityId = this.createSeedColumn(
+        listId,
+        'Priority',
+        'choice',
+        maxOrder + (piecesId && !columnByName.get('pieces') ? 1 : 0) + (totalCostId && !columnByName.get('total cost') ? 1 : 0),
+        false,
+        null,
+        false,
+        false,
+        false,
+        this.writeColumnDisplayFormat(null, choiceConfigFromLabels(DEFAULT_PRIORITY_OPTIONS), 'date', 'none', [], undefined, false)
+      )
+    }
+
+    const orderedColumns = this.client.database
+      .prepare('SELECT id, name FROM list_columns WHERE list_id = ? ORDER BY sort_order')
+      .all<{ id: string; name: string }>(listId)
+    const desiredOrder = [
+      columnByName.get('product')?.id,
+      columnByName.get('description')?.id,
+      columnByName.get('link')?.id,
+      piecesId,
+      priceColumn?.id ?? null,
+      totalCostId,
+      columnByName.get('wishmeter')?.id ?? null,
+      priorityId,
+      ...orderedColumns
+        .map((column) => column.id)
+        .filter((id) => !new Set([columnByName.get('product')?.id, columnByName.get('description')?.id, columnByName.get('link')?.id, piecesId, priceColumn?.id ?? null, totalCostId, columnByName.get('wishmeter')?.id ?? null, priorityId]).has(id))
+    ].filter((id): id is string => Boolean(id))
+    this.writeColumnOrder(listId, desiredOrder)
+  }
+
+  private normalizeWishlistRankValue(
+    values: Record<string, FieldValue>,
+    column: ListColumn | null
+  ): { value: number; missing: boolean } {
+    if (!column || !column.choiceConfig || column.choiceConfig.options.length === 0) {
+      return { value: 0.5, missing: true }
+    }
+    const raw = values[column.id]
+    if (raw === null || raw === undefined || raw === '') {
+      return { value: 0.5, missing: true }
+    }
+    const selected = Array.isArray(raw) ? raw[0] : raw
+    const ordered = [...column.choiceConfig.options].sort((left, right) => left.rank - right.rank)
+    const position = ordered.findIndex((option) => option.id === selected || option.label === selected)
+    if (position < 0) return { value: 0.5, missing: true }
+    if (ordered.length === 1) return { value: 1, missing: false }
+    return { value: 1 - position / (ordered.length - 1), missing: false }
+  }
+
+  private normalizeWishlistPriceValue(
+    values: Record<string, FieldValue>,
+    priceColumn: ListColumn | null,
+    piecesColumn: ListColumn | null,
+    totalCostColumn: ListColumn | null,
+    minPriceLog: number | null,
+    maxPriceLog: number | null,
+    hasPriceSpread: boolean
+  ): { value: number; missing: boolean } {
+    if (!priceColumn || !totalCostColumn) return { value: 0.5, missing: true }
+    const rawPrice = values[priceColumn.id]
+    if (typeof rawPrice !== 'number' || !Number.isFinite(rawPrice)) {
+      return { value: 0.5, missing: true }
+    }
+    const rawPieces = piecesColumn ? values[piecesColumn.id] : null
+    const pieces = typeof rawPieces === 'number' && Number.isFinite(rawPieces) ? Math.max(0, rawPieces) : 1
+    const rawTotalCost = values[totalCostColumn.id]
+    const normalized =
+      typeof rawTotalCost === 'number' && Number.isFinite(rawTotalCost)
+        ? Math.max(0, rawTotalCost)
+        : Math.max(0, rawPrice) * pieces
+    if (minPriceLog === null || maxPriceLog === null || !hasPriceSpread) {
+      return { value: 0.5, missing: false }
+    }
+    const priceLog = Math.log1p(normalized)
+    const affordability = 1 - (priceLog - minPriceLog) / (maxPriceLog - minPriceLog)
+    return { value: Math.max(0, Math.min(1, affordability)), missing: false }
   }
 
   private validateItemValues(listId: string, incomingValues: Record<string, FieldValue>, itemId?: string): Record<string, FieldValue> {
@@ -3891,7 +4391,47 @@ export class LifePlanRepository {
       if (!this.isMissingFieldValue(value)) this.assertFieldValueFitsColumn(column, value)
     }
 
+    const listType = normalizeListTemplateType(
+      this.client.database.prepare('SELECT list_type FROM lists WHERE id = ?').get<{ list_type: ListTemplateType }>(listId)?.list_type
+    )
+    if (listType === 'project') this.validateProjectItemValues(columns, mergedValues)
+
     return incomingValues
+  }
+
+  private validateProjectItemValues(columns: ListColumn[], values: Record<string, FieldValue>): void {
+    const typeColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'type')
+    const plannedStartColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'planned start')
+    const plannedEndColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'planned end')
+    const actualStartColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'actual start')
+    const actualEndColumn = columns.find((column) => normalizeReservedColumnName(column.name) === 'actual end')
+    const normalizedType = normalizeReservedColumnName(String(typeColumn ? values[typeColumn.id] ?? 'task' : 'task')) || 'task'
+
+    if (plannedStartColumn && this.isMissingFieldValue(values[plannedStartColumn.id])) {
+      throw new Error(`"${plannedStartColumn.name}" is required for project items.`)
+    }
+    if (normalizedType === 'task' && plannedEndColumn && this.isMissingFieldValue(values[plannedEndColumn.id])) {
+      throw new Error(`"${plannedEndColumn.name}" is required for project tasks.`)
+    }
+
+    const plannedStart = plannedStartColumn ? this.parseProjectDate(values[plannedStartColumn.id]) : null
+    const plannedEnd = plannedEndColumn ? this.parseProjectDate(values[plannedEndColumn.id]) : null
+    const actualStart = actualStartColumn ? this.parseProjectDate(values[actualStartColumn.id]) : null
+    const actualEnd = actualEndColumn ? this.parseProjectDate(values[actualEndColumn.id]) : null
+
+    if (plannedStart && plannedEnd && plannedEnd.getTime() < plannedStart.getTime()) {
+      throw new Error('"Planned End" cannot be earlier than "Planned Start".')
+    }
+    if (actualStart && actualEnd && actualEnd.getTime() < actualStart.getTime()) {
+      throw new Error('"Actual End" cannot be earlier than "Actual Start".')
+    }
+  }
+
+  private parseProjectDate(value: FieldValue | undefined): Date | null {
+    const raw = isDateFieldValue(value) ? value.value : typeof value === 'string' ? value : ''
+    if (!raw) return null
+    const candidate = new Date(raw.includes('T') ? raw : `${raw}T00:00:00`)
+    return Number.isNaN(candidate.getTime()) ? null : candidate
   }
 
   private resolveColumnSummaryEligibility(
@@ -4221,8 +4761,8 @@ export class LifePlanRepository {
     const now = new Date().toISOString()
     this.run(
       `INSERT INTO items
-         (id, list_id, group_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
-       VALUES (?, ?, NULL, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+         (id, list_id, group_id, parent_item_id, item_number, item_order, publication_status, operational_state, created_by, created_at, updated_at, published_at)
+       VALUES (?, ?, NULL, NULL, ?, ?, ?, 'active', ?, ?, ?, ?)`,
       id,
       listId,
       itemNumber,
@@ -4302,6 +4842,50 @@ export class LifePlanRepository {
       .prepare('SELECT id FROM item_groups WHERE id = ? AND list_id = ?')
       .get<{ id: string }>(groupId, listId)
     return group?.id ?? null
+  }
+
+  private validParentItemId(listId: string, parentItemId: string | null, currentItemId: string | null): string | null {
+    if (!parentItemId || parentItemId === currentItemId) return null
+    const listType = normalizeListTemplateType(
+      this.client.database.prepare('SELECT list_type FROM lists WHERE id = ?').get<{ list_type: ListTemplateType }>(listId)?.list_type
+    )
+    if (listType !== 'project') return null
+
+    const parent = this.client.database
+      .prepare('SELECT id, list_id, parent_item_id FROM items WHERE id = ? AND list_id = ?')
+      .get<{ id: string; list_id: string; parent_item_id: string | null }>(parentItemId, listId)
+    if (!parent) return null
+
+    if (currentItemId) {
+      let cursor: string | null = parent.id
+      while (cursor) {
+        if (cursor === currentItemId) throw new Error('An item cannot be parented under itself or one of its descendants.')
+        cursor =
+          this.client.database.prepare('SELECT parent_item_id FROM items WHERE id = ?').get<{ parent_item_id: string | null }>(cursor)?.parent_item_id ??
+          null
+      }
+    }
+
+    return parent.id
+  }
+
+  private getItemDescendantIds(itemId: string): string[] {
+    const descendants: string[] = []
+    const queue = [itemId]
+    while (queue.length > 0) {
+      const current = queue.shift()
+      if (!current) continue
+      const childIds = this.client.database
+        .prepare('SELECT id FROM items WHERE parent_item_id = ?')
+        .all<{ id: string }>(current)
+        .map((row) => row.id)
+      for (const childId of childIds) {
+        if (descendants.includes(childId)) continue
+        descendants.push(childId)
+        queue.push(childId)
+      }
+    }
+    return descendants
   }
 
   private validParentGroupId(listId: string, parentGroupId: string | null, currentGroupId: string): string | null {
@@ -4421,6 +5005,7 @@ export class LifePlanRepository {
 
   private widgetAspectSpec(type: WidgetType, config: BoardWidgetConfig): { ratioW: number; ratioH: number; minScale: number } {
     if (type === 'word_of_day') return { ratioW: 3, ratioH: 2, minScale: 1 }
+    if (type === 'countdown') return { ratioW: 3, ratioH: 2, minScale: 1 }
     if (type === 'world_clocks') {
       const count = this.clamp(config.worldClocks?.locations?.length ?? 2, 2, 16)
       return { ratioW: count, ratioH: 2, minScale: 1 }

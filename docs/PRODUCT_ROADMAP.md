@@ -22,6 +22,24 @@ Purpose: map likely product evolution from the current stable desktop line towar
 
 This is a solid desktop base, but not yet cloud-ready.
 
+### Baseline Capability Carried Forward
+
+The original BRD baseline is considered part of the permanent product spine and remains in scope as the foundation for later releases:
+
+- Admin Mode and Display Mode separation
+- multiple boards with one active/displayed board at a time
+- selected-display targeting and show/hide board controls
+- 16:9 board model with 16 x 8 content grid plus top summary band
+- local-first persistence
+- lists, groups, fields, items, summaries, and widgets
+- deadline behavior, recurrence, and urgency highlighting
+- grouped hierarchical display in lists
+- type-aware list sorting
+- local-first admin editing with display publishing/visibility concepts
+- board/list/item management as first-class workflows
+
+Future releases should extend these capabilities, not quietly replace or bypass them.
+
 ## Proposed Release Path
 
 ## v1.3.x - Stabilization And Design Prep
@@ -32,6 +50,13 @@ Focus:
 - UX refinements
 - manifesting `v2.0.0`
 - no major platform rework unless it unblocks `v2.0.0`
+
+Active pre-v2 backlog within this line:
+- renderer modularization to keep `App.tsx` maintainable
+- help-library coverage expansion as features stabilize
+- weather custom-location UX simplification into a single searchable picker
+- Project list refinements while the high-level model settles
+- no routine release packaging unless a deliberate stable cut is needed
 
 Outcome:
 - stable desktop line
@@ -44,7 +69,12 @@ Focus:
 - users/login
 - multiple board views
 - Project list + Gantt mode
+- Project milestone deliverable rollups and wizard support
 - budget planning
+- stocks widget
+- calendar widget
+- richer widget display system
+- remaining-work calculation and effort recommendations
 - better effort intelligence
 - rendering improvements
 - architectural readiness for cloud
@@ -153,9 +183,12 @@ If we reverse that order, we risk building cloud plumbing around an immature loc
 ### Track A - User Value
 - Project/Gantt
 - calendar widget
+- stocks widget
 - budget list
+- remaining work calculated column
 - effort intelligence
 - better rendering
+- richer widget display modes
 
 ### Track B - Platform Readiness
 - users/login

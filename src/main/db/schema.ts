@@ -87,6 +87,7 @@ export function migrate(client: DbClient): void {
       id TEXT PRIMARY KEY,
       list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
       group_id TEXT REFERENCES item_groups(id) ON DELETE SET NULL,
+      parent_item_id TEXT,
       item_number INTEGER NOT NULL,
       item_order INTEGER NOT NULL,
       publication_status TEXT NOT NULL CHECK(publication_status IN ('draft', 'published', 'dirty')),
@@ -180,6 +181,7 @@ export function migrate(client: DbClient): void {
 
   addColumnIfMissing(client, 'boards', 'description', "TEXT NOT NULL DEFAULT ''")
   addColumnIfMissing(client, 'boards', 'owner', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing(client, 'items', 'parent_item_id', 'TEXT')
   rebuildListColumnsForRichTypesIfNeeded(client)
   client.database.exec(`
     UPDATE list_columns
@@ -235,6 +237,9 @@ export function migrate(client: DbClient): void {
   addColumnIfMissing(client, 'lists', 'show_created_at_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'lists', 'show_created_by_on_board', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'lists', 'show_status_on_board', 'INTEGER NOT NULL DEFAULT 1')
+  addColumnIfMissing(client, 'items', 'wishlist_buy_score', 'REAL')
+  addColumnIfMissing(client, 'items', 'wishlist_advised_buy_order', 'INTEGER')
+  addColumnIfMissing(client, 'items', 'wishlist_missing_inputs_json', 'TEXT')
   addColumnIfMissing(client, 'item_groups', 'display_config', 'TEXT')
   addColumnIfMissing(client, 'list_columns', 'is_list_summary_eligible', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(client, 'list_columns', 'is_board_summary_eligible', 'INTEGER NOT NULL DEFAULT 0')

@@ -69,6 +69,7 @@ const api: LplApi = {
   deleteWidget: (widgetId: string) => ipcRenderer.invoke('widgets:delete', widgetId),
   listArchive: (filters) => ipcRenderer.invoke('archive:list', filters),
   fetchWeatherApproximateLocation: () => ipcRenderer.invoke('weather:approximateLocation'),
+  searchWeatherLocations: (query: string) => ipcRenderer.invoke('weather:searchLocations', query),
   fetchWeatherForecast: (input) => ipcRenderer.invoke('weather:forecast', input),
   openExternalUrl: (url: string) => ipcRenderer.invoke('app:openExternalUrl', url),
   onDataChanged: (callback) => {

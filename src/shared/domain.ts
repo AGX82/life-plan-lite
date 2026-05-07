@@ -38,16 +38,23 @@ export type ListTemplateType =
   | 'todo'
   | 'shopping_list'
   | 'wishlist'
+  | 'project'
   | 'health'
   | 'trips_events'
   | 'birthday_calendar'
 export type ListBehavior = 'tasks' | 'purchases' | 'calendar' | 'other'
 export type BirthdayBoardView = 'this_week' | 'this_month' | 'next_10_days' | 'next_30_days' | 'next_2_months' | 'all'
+export type WishlistRecommendationProfile = 'default' | 'balanced' | 'priority_first' | 'value_first'
+export type WishlistRecommendationInput = 'wishmeter' | 'priority' | 'price'
 
 export type ListTemplateConfig = {
   behavior?: ListBehavior
   birthday?: {
     boardView: BirthdayBoardView
+  }
+  wishlist?: {
+    profile: WishlistRecommendationProfile
+    showAdvisedBuyOrder: boolean
   }
 }
 
@@ -60,9 +67,12 @@ export type WorldClockLocation = {
 export type BoardWidgetConfig = {
   clock?: {
     showSeconds: boolean
+    style: 'segmented' | 'split_date'
   }
   weather?: {
     temperatureUnit: 'celsius' | 'fahrenheit'
+    locationMode: 'current' | 'custom'
+    customLocation: WeatherCustomLocation | null
   }
   wordOfDay?: {
     accent: string
@@ -70,11 +80,12 @@ export type BoardWidgetConfig = {
   worldClocks?: {
     locations: WorldClockLocation[]
     showSeconds: boolean
-    style: 'digital' | 'analogue'
+    style: 'panel'
   }
   countdown?: {
     targetAt: string
     label: string
+    style: 'segmented'
   }
 }
 
@@ -197,6 +208,7 @@ export type BoardItem = {
   id: string
   listId: string
   groupId: string | null
+  parentItemId: string | null
   code: string
   displayCode: string
   order: number
@@ -210,6 +222,11 @@ export type BoardItem = {
   isOverdue: boolean
   deadlineStatus: string
   deadlineTone: 'none' | 'ok' | 'soon' | 'urgent' | 'critical' | 'overdue'
+  wishlistRecommendation: {
+    buyScore: number | null
+    advisedBuyOrder: number | null
+    missingInputs: WishlistRecommendationInput[]
+  } | null
   updatedAt: string
 }
 
@@ -255,6 +272,19 @@ export type WeatherApproximateLocation = {
   latitude: number
   longitude: number
   kicker: string
+}
+
+export type WeatherCustomLocation = {
+  label: string
+  latitude: number
+  longitude: number
+}
+
+export type WeatherLocationSearchResult = {
+  id: string
+  label: string
+  latitude: number
+  longitude: number
 }
 
 export type WeatherForecast = {
@@ -309,6 +339,7 @@ export type ArchiveRecord = {
 export type CreateItemInput = {
   listId: string
   groupId?: string | null
+  parentItemId?: string | null
   values: Record<string, FieldValue>
   dependencyItemIds: string[]
 }
@@ -316,6 +347,7 @@ export type CreateItemInput = {
 export type UpdateItemInput = {
   itemId: string
   groupId?: string | null
+  parentItemId?: string | null
   values: Record<string, FieldValue>
   dependencyItemIds: string[]
 }
@@ -522,6 +554,7 @@ export type LplApi = {
   deleteWidget: (widgetId: string) => Promise<BoardSnapshot>
   listArchive: (filters?: { listId?: string; closedAfter?: string; closedBefore?: string }) => Promise<ArchiveRecord[]>
   fetchWeatherApproximateLocation: () => Promise<WeatherApproximateLocation>
+  searchWeatherLocations: (query: string) => Promise<WeatherLocationSearchResult[]>
   fetchWeatherForecast: (input: { latitude: number; longitude: number; temperatureUnit: 'celsius' | 'fahrenheit' }) => Promise<WeatherForecast>
   openExternalUrl: (url: string) => Promise<void>
   onDataChanged: (callback: () => void) => () => void

@@ -26,7 +26,8 @@ import type {
   UpdateWidgetGridInput,
   UpdateWidgetInput,
   WeatherApproximateLocation,
-  WeatherForecast
+  WeatherForecast,
+  WeatherLocationSearchResult
 } from '../shared/domain'
 
 let adminWindow: BrowserWindow | null = null
@@ -373,6 +374,57 @@ async function getWeatherForecast(input: {
   }
 }
 
+async function searchWeatherLocations(query: string): Promise<WeatherLocationSearchResult[]> {
+  const trimmed = query.trim()
+  if (trimmed.length < 2) return []
+
+  const params = new URLSearchParams({
+    name: trimmed,
+    count: '8',
+    language: 'en',
+    format: 'json'
+  })
+
+  let response: Response
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+    try {
+      response = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': `Life Plan Lite/${app.getVersion()}`
+        }
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    throw new Error('weather-location-network')
+  }
+
+  if (!response.ok) throw new Error(`weather-location-http-${response.status}`)
+  const payload = (await response.json()) as {
+    results?: Array<{
+      id?: number
+      name?: string
+      admin1?: string
+      country?: string
+      latitude?: number
+      longitude?: number
+    }>
+  }
+
+  return (payload.results ?? [])
+    .filter((entry) => entry.name && Number.isFinite(entry.latitude) && Number.isFinite(entry.longitude))
+    .map((entry, index) => ({
+      id: String(entry.id ?? `${trimmed}-${index}`),
+      label: [entry.name, entry.admin1, entry.country].filter(Boolean).join(', '),
+      latitude: Number(entry.latitude),
+      longitude: Number(entry.longitude)
+    }))
+}
+
 function registerIpc(): void {
   ipcMain.handle('boards:list', () => repository.listBoards())
   ipcMain.handle('boards:activeSnapshot', (_event, mode: 'admin' | 'display' = 'admin') =>
@@ -444,6 +496,7 @@ function registerIpc(): void {
   ipcMain.handle('widgets:delete', (_event, widgetId: string) => handleMutation(repository.deleteWidget.bind(repository))(widgetId))
   ipcMain.handle('archive:list', (_event, filters) => repository.listArchive(filters))
   ipcMain.handle('weather:approximateLocation', () => getApproximateWeatherLocation())
+  ipcMain.handle('weather:searchLocations', (_event, query: string) => searchWeatherLocations(query))
   ipcMain.handle('weather:forecast', (_event, input: { latitude: number; longitude: number; temperatureUnit: 'celsius' | 'fahrenheit' }) =>
     getWeatherForecast(input)
   )

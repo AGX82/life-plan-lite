@@ -2,7 +2,7 @@
 
 This is the living project context for Life Plan Lite. Use it to record product decisions, behavior rules, requirement changes, rationale, and development choices that should guide future work.
 
-Last updated: 2026-04-28
+Last updated: 2026-05-07
 
 ## Product Intent
 
@@ -250,6 +250,9 @@ Date: 2026-04-28
 - Top-summary labels should stay white and slightly more readable; summary values carry the semantic accent color.
 - Board-level cost/purchase summaries should render in the alert color family, while counts and most other indicators stay in the positive color family unless explicitly reclassified later.
 - Total Purchases board summaries should display rounded whole-number totals without decimals, grouped by currency code.
+- Widget headers should match list-header height and typography so mixed list/widget boards feel visually aligned.
+- World Clock tiles should follow the same family language as the main clock widget: location label outside the tile in green, weekday inside the tile in muted text, GMT offset retained inside the tile, and the date shown below.
+- Clock, Countdown, and World Clock are moving onto a shared digital widget design system rather than being styled independently. Clock now supports two explicit display styles, while Countdown and World Clock each use one canonical style for now.
 
 ## Release Decisions
 
@@ -270,6 +273,8 @@ Date: 2026-04-27
 - After `v1.3.0`, ongoing development continues from `1.3.1-dev` until the next stable release is intentionally cut.
 - `v1.3.1` is a hotfix release for the `v1.3.x` line focused on packaged weather reliability and board summary readability.
 - After `v1.3.1`, ongoing development resumes from `1.3.2-dev`.
+- `v1.4.0` is the next stable minor release and promotes the Help surface, Wishlist recommendation engine, board-view sorting, custom-location weather, and the first high-level Project template to the stable line.
+- After `v1.4.0`, ongoing development should continue from `1.4.1-dev`.
 
 ## Forward Planning Decisions
 
@@ -328,10 +333,118 @@ Date: 2026-04-28
 - Product guidance should explicitly advise whether a new idea is best pursued now or deferred to a later release because of dependency grouping, implementation efficiency, architectural readiness, or the risk of building something that would likely be reworked once later roadmap items arrive.
 - Prefer focused repository-level fixes over UI-only workarounds when a behavior is part of the domain model.
 
+## Board Interaction Decisions
+
+Date: 2026-05-06
+
+- In board view, clicking a visible list column header should apply an ad-hoc sort for that specific list on the display surface without changing the list's saved structural sort configuration.
+- Board header sorting should be a strict two-state toggle: default/natural direction on the first click and inverted direction on the second click.
+- Ad-hoc board sorting should preserve group structure. Items should sort within their current group/root bucket rather than flattening the list across groups.
+- Empty values should be treated as low values during ad-hoc board sorting rather than always being forced to the bottom. For example, empty text sorts before `A`, empty numeric/currency/duration behaves like `0`, and empty ranked-choice values sort below the lowest defined rank.
+
+## Weather Widget Decisions
+
+Date: 2026-05-06
+
+- Weather widgets should support both `Current location` and `Custom location` modes so multiple weather widgets can coexist on the same board with different targets.
+- Custom weather location selection should be driven by live location search rather than a fixed internal dropdown list.
+- The current multi-step custom-location workflow is acceptable as an intermediate implementation, but the intended UX is a single searchable select/autocomplete field rather than separate search-input and result-selection controls.
+
+## Wishlist Recommendation Decisions
+
+Date: 2026-05-06
+
+- The `Wishlist` list type should distinguish between emotional desire and practical purchase urgency by keeping `Wishmeter` and `Priority` as separate ranked fields.
+- `Wishmeter` represents how much the user wants an item; `Priority` represents how justified it is to buy the item next.
+- `Recommended Buy Score` should be a calculated, budget-agnostic field in the first implementation phase.
+- The score should be calculated from `Wishmeter`, `Priority`, and `Price`, with each value normalized relative to the other items in the same wishlist rather than against absolute thresholds.
+- Price influence should be modeled as relative affordability within the current wishlist, so cheaper items in that list score better than more expensive ones.
+- The first implementation should use built-in weighting profiles rather than free-form user-defined sliders.
+- The default profile for Wishlist should prioritize desire first: `Wishmeter 50%`, `Priority 30%`, `Price 20%`.
+- The `Balanced` profile should use `Wishmeter 35%`, `Priority 35%`, `Price 30%`.
+- The `Priority First` profile should use `Wishmeter 25%`, `Priority 55%`, `Price 20%`.
+- The `Value First` profile should strongly favor affordability: `Wishmeter 10%`, `Priority 35%`, `Price 55%`.
+- In the `Value First` profile, `Wishmeter` should behave mainly as a tie-breaker or low-impact emotional adjustment rather than a primary driver.
+- A later `budget-aware` recommendation mode may be added once Budget capabilities exist, but it should be a separate model from the initial budget-agnostic recommendation score.
+- Missing `Wishmeter`, `Priority`, or `Price` data should not block score calculation in the first implementation. Missing inputs should be treated as neutral rather than best or worst values.
+- Wishlist items whose `Buy Score` is calculated with one or more missing inputs should be visually muted or otherwise distinguished, with a hover explanation clarifying which field is missing and that the missing field did not influence the score.
+- The user-facing calculated fields should be named `Buy Score` and `Advised Buy Order`.
+- `Buy Score` should be displayed in the item details header rather than as a standard board column by default.
+- `Buy Score` should be stored as data in the database/domain model even though it is not shown as a normal board column in the first implementation.
+- `Buy Score` should be displayed as a percentage in the item details header rather than as a raw decimal or `x/1` value.
+- `Advised Buy Order` should be a non-editable calculated field derived from `Buy Score`.
+- `Advised Buy Order` should be available as a displayable field in the board view, but it should not be forced on by default.
+- The board should stay lean: users primarily need the resulting order on the board, while the synthetic score is informational and belongs in the item details surface.
+- Tie-breaking for equal wishlist recommendation scores should resolve in this order: higher `Priority`, higher `Wishmeter`, lower `Price`, then item name A-Z.
+- The tutorial should include a dedicated explanation of how the Wishlist template works, including the distinction between `Wishmeter`, `Priority`, `Buy Score`, and `Advised Buy Order`.
+- The onboarding tutorial should explain Wishlist as part of the list-template walkthrough using synthetic example data, including the distinction between desire (`Wishmeter`), practical urgency (`Priority`), total purchase burden (`Pieces` + `Total Cost`), and the resulting `Buy Score` / `Advised Buy Order`.
+- The left-rail `Tutorial` entry should evolve into `Help`, which opens a help surface rather than immediately launching the guided walkthrough.
+- Help should become the home for detailed, searchable reference content, while the guided tutorial should stay brief and focused on the main mental map of the workspace.
+- The Help surface should include three core capabilities: start the Guided Tour, search help topics, and browse structured help articles by topic.
+- Help content should be organized as discrete topic pages for key elements of the app rather than one long undifferentiated manual.
+- Help should include dedicated pages for the app menu, wizard, application settings, admin workspace structure, groups, live layout, list tabs, list structure, deadline logic, system fields / reserved names, item actions, summaries, widgets, board view, and each predefined list template.
+- After a functionality is considered stable enough to count as finished, its Help page should be added as part of completing that work rather than deferred indefinitely.
+- High-value behavioral topics for Help at the current product stage include widget-specific pages, board summary logic, birthday behavior, shopping-list logic, custom-list behavior, and Wishlist recommendation profiles.
+- Ranked-field normalization for Wishlist recommendation should be based on the relative position of the selected option within the current ranked scale, not on hardcoded assumptions about there being exactly five levels.
+- Price normalization for Wishlist recommendation should use a relative affordability model within the current wishlist, with log-normalization to soften extreme price gaps.
+- A Wishlist row should represent one purchase decision, not necessarily one physical unit.
+- Wishlist should therefore support `Pieces` plus calculated `Total Cost`, and affordability in `Buy Score` should be based on total purchase cost rather than unit price.
+- Missing `Pieces` in Wishlist should be treated as an implicit quantity of `1` so older lists and simple one-off purchases remain natural.
+- Missing `Price`, `Priority`, or `Wishmeter` values should be treated as neutral (`0.5`) rather than blocking calculation or being interpreted as best/worst values.
+- The first implemented Wishlist recommendation profiles are:
+  - `Default`: Wish `50%`, Priority `30%`, Price `20%`
+  - `Balanced`: Wish `35%`, Priority `35%`, Price `30%`
+  - `Priority First`: Wish `25%`, Priority `55%`, Price `20%`
+  - `Value First`: Wish `10%`, Priority `35%`, Price `55%`
+- The `Project` list should stay intentionally high-level and should not drift into a full project-management tool.
+- Project structure now needs real item hierarchy (`parentItemId`) instead of only groups. Groups remain bucket/phase containers, while nested items represent task -> sub-task -> work-package structure.
+- The Project template should have a minimum board width of 10 grid units.
+- First-pass Project fields are `Type`, `Responsible`, `Planned Start`, `Planned End`, `Actual Start`, `Actual End`, `Effort`, and `Output / Deliverable`.
+- First-pass Project item types are `Task`, `Milestone`, `Project Start`, and `Project End`.
+- Parent/child date consistency matters for Project items. If a child date falls outside the chosen parent range, the user should be prompted to either extend the parent range or confine the child inside it.
+- The first Project board rendering pass should live inside the normal list shell with a synthetic `Gantt` display column rather than as a separate standalone board surface. This keeps the project overview aligned with the existing board interaction model while we refine proportions.
+- Milestone-style Project items (`Milestone`, `Project Start`, `Project End`) should use `Planned Date` and `Actual Date` in the editing UI instead of separate start/end inputs.
+- Project board ordering should place milestone-like items immediately after the last dependency block inside the same sibling bucket whenever dependencies are defined.
+- `Project Start` and `Project End` are one-off boundary items for the overall project timeline and should not be treated as ordinary task dates.
+- Task dates that fall outside the current Project Start / Project End boundaries should trigger a confirmation prompt so the user can either extend the project boundary items or confine the task dates.
+- If the user enables planned/actual start/end columns on the Project board, they should remain visible alongside the Gantt rather than being hidden by it.
+- `Project Start` and `Project End` should influence the Gantt timeline range, but they should not be rendered as visible task rows on the board.
+- Milestones should never keep a planned date earlier than the latest planned completion date of the tasks or task subtrees they depend on; if needed, the milestone planned date should be auto-updated and the user informed.
+- Milestone-style items should never visually read as subordinate children of one task. They are shared checkpoints and should render as sibling/root-level checkpoints even when they depend on nested task blocks.
+- Milestone dependency context should be shown explicitly using dependency-name chips rather than a vague `linked` badge.
+- Milestone-style items hide the `Parent Task` selector and should persist with `parentItemId = null`.
+- Project Gantt should keep the full relevant timeline in view and resize bars to fit; timeline boundary items should never collapse the visible range to only the final dates.
+- `Project Start` / `Project End` remain hidden boundary entities for timeline control. A later refinement may surface them in the project header or Gantt chrome, but not as ordinary rows.
+- Milestone deliverable rollup from dependency outputs is still planned and not yet implemented.
+- Project wizard integration remains planned and should happen only after the Project template behavior is stable enough to encode clean defaults.
+
+## Help And Documentation Decisions
+
+Date: 2026-05-07
+
+- The left-rail `Help` entry is the primary knowledge surface for the product.
+- Help should combine three capabilities: start the Guided Tour, search help topics, and browse topic articles.
+- The Guided Tour should stay brief and focused on the main mental model of the workspace; detailed feature behavior belongs in Help articles.
+- Help articles should exist for each key element of the app, including app menu actions, application settings, admin workspace structure, groups, live layout, widgets, summaries, deadlines, system fields, item actions, and predefined templates.
+- Once a new feature is considered stable enough to be "done," a Help page for that feature should be added as part of finishing the work.
+- Help content should continue expanding over time; widget-specific behavior, board summary logic, template logic, and other feature-specific semantics are part of the expected documentation surface rather than optional extras.
+
+## Engineering Health Decisions
+
+Date: 2026-05-07
+
+- The Babel deoptimization warning on `src/renderer/src/App.tsx` is an engineering-health signal, not an immediate runtime bug, but it should be treated as a prompt to modularize renderer code before feature growth makes the main file fragile.
+- Help article data, Help UI, and tutorial step data are now valid extraction targets from `App.tsx` and should continue to move into focused renderer modules.
+- Follow-on extraction targets include Project-specific renderer/helpers, board rendering helpers, and item modal/editor logic.
+
 ## Open Next Areas
 
-- Run one final clean-package smoke test before declaring `v1.0.0`.
 - Add automated tests around repository behavior and layout placement.
 - Continue refining admin density, readability, and workflow efficiency.
 - Improve layout interactions with swapping/repacking where it adds real usability.
 - Revisit user management when the app needs real users beyond the current `admin` placeholder.
+- Add the Stocks widget.
+- Add the Budget list template and, later, budget-aware Wishlist recommendation mode.
+- Add the Remaining Work calculated column for effort-based task lists, followed by richer workload recommendations later.
+- Continue Project-list refinement, especially milestone deliverable rollups and eventual wizard support.
+- Continue Help-library coverage growth as stable features accumulate.
