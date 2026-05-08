@@ -106,7 +106,7 @@ This layer currently handles:
 
 ## What Still Lives In `App.tsx`
 
-`App.tsx` is still the main coordination file and currently still owns several large subsystems.
+`App.tsx` is still the main coordination file, but several major workflows now run through extracted modules even if some legacy copies/helpers remain inline.
 
 ### 1. App orchestration
 
@@ -117,70 +117,56 @@ This layer currently handles:
 
 ### 2. Wizard
 
-Still in:
-- [App.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/App.tsx>)
+Active module:
+- [src/renderer/src/wizard/index.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/wizard/index.tsx>)
 
-Main anchor:
-- `ConfigurationWizard`
+`App.tsx` still contains:
+- legacy inline wizard code pending cleanup
 
 ### 3. List editor
 
-Still in:
-- [App.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/App.tsx>)
-
-Main anchors:
-- `ListEditorPanel`
-- `SystemColumnRow`
-- `ColumnRow`
-- `ColumnSummaryRow`
-- column draft helpers
+Active modules:
+- [src/renderer/src/list-editor/index.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/list-editor/index.tsx>)
+- [src/renderer/src/list-editor](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/list-editor>)
 
 ### 4. Board display
 
-Still in:
-- [App.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/App.tsx>)
+Active module:
+- [src/renderer/src/board-display/index.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/board-display/index.tsx>)
 
-Main anchors:
-- `DisplayBoard`
-- `BoardListView`
-- board row building
+`App.tsx` still contains:
 - board display column assembly
-- board sorting
+- some board sorting/presentation helpers
+- legacy inline display code pending cleanup
 
 ### 5. Layout engine
 
-Still in:
-- [App.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/App.tsx>)
+Active module:
+- [src/renderer/src/layout-engine/index.ts](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/layout-engine/index.ts>)
 
-Main responsibility:
-- display placement/reflow/swap/move/resize logic for lists and widgets
+`App.tsx` still contains:
+- older inline copies of some layout helpers pending cleanup
 
 ### 6. Project rules/helpers
 
-Still in:
-- [App.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/App.tsx>)
+Active module:
+- [src/renderer/src/project/index.tsx](</c:/LPL%20-%20Life%20Plan%20Lite/src/renderer/src/project/index.tsx>)
 
-Main responsibility:
-- project hierarchy logic
-- project parent/child range reconciliation
-- milestone dependency alignment
-- gantt-related helpers
+`App.tsx` still contains:
+- remaining project/gantt helpers used by board presentation
+- older inline copies pending cleanup
 
 ## Current Hotspots In `App.tsx`
 
 The biggest remaining seams are:
 
 ```text
-ConfigurationWizard       -> wizard module
-ListEditorPanel           -> list-editor module
-DisplayBoard              -> board-display module
-BoardListView             -> board-display module
-placeListForDisplay*      -> layout-engine module
-normalizeWidgetDisplay*   -> layout-engine module
-submitProjectAwareItemMutation
-projectEditableFieldColumns
-project* helpers          -> project module
 buildBoardDisplayColumns
+orderedBoardRenderFields
+formatBoardDisplayValue
+birthday/project display helpers
+legacy inline wizard/layout/project copies
+tutorial overlay + admin orchestration
 orderedStructureFieldEntries
 sortBoardDisplayRows      -> board-display/list-presentation modules
 ```
@@ -262,13 +248,13 @@ Own:
 
 ## Immediate Refactor Plan
 
-Recommended next extraction order:
+Recommended next cleanup order:
 
-1. `list-editor`
-2. `board-display`
-3. `layout-engine`
-4. `project`
-5. `wizard`
+1. remove legacy inline copies now superseded by extracted modules
+2. move residual board-display sorting/presentation helpers beside `board-display/`
+3. move remaining gantt/project presentation helpers beside `project/`
+4. isolate tutorial/admin orchestration helpers
+5. add tests around layout and project-aware mutations
 
 That order gives a good balance of:
 - line-count reduction
@@ -277,6 +263,6 @@ That order gives a good balance of:
 
 ## Current Status Snapshot
 
-- `App.tsx` is no longer the only home for help, tutorial, widgets, item editing, group editing, and shared list helpers.
-- `App.tsx` is still the main orchestrator and still contains several large feature workflows.
-- The codebase is meaningfully cleaner than before, but not yet at the final modular target.
+- Active renderer modules now exist for `list-editor`, `widget-editor`, `board-display`, `layout-engine`, `project`, and `wizard`.
+- `App.tsx` is still the main orchestrator and still contains some duplicated legacy logic that should be deleted once the extracted seams are fully consolidated.
+- `App.tsx` is materially smaller than the earlier monolithic state, but the cleanup pass is still important before calling the modularization complete.

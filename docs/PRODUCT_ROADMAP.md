@@ -12,8 +12,8 @@ Purpose: map likely product evolution from the current stable desktop line towar
 
 ## Current Position
 
-- As of 2026-05-08, `v1.4.0` is the latest shipped stable release.
-- The repository package version is currently `1.4.1-dev`.
+- As of 2026-05-08, `v1.4.1` is the latest shipped stable release.
+- The repository package version is currently `1.4.1`.
 - The product now has:
   - stable board/list/widget foundations
   - a strong setup wizard
@@ -58,7 +58,8 @@ Focus:
 - no major platform rework unless it unblocks `v2.0.0`
 
 Active pre-v2 backlog within this line:
-- renderer modularization to keep `App.tsx` maintainable
+- renderer modularization cleanup so extracted modules fully replace the remaining legacy inline copies in `App.tsx`
+- tests around layout placement and project-aware mutation behavior
 - help-library coverage expansion as features stabilize
 - weather custom-location UX simplification into a single searchable picker
 - Project list refinements while the high-level model settles

@@ -300,18 +300,30 @@ Last updated: 2026-05-08
   - shared editor chrome
   - shared list/value helpers
   - template registry and template modules
+  - list editor module and support files
+  - shared modals and navigation context menus
+  - widget editor module
+  - board display module
+  - layout engine module
+  - project helper module
+  - configuration wizard module
+  - shared renderer app types
 - Current rule:
   - split by coherent workflow ownership
   - avoid duplicate live wiring
   - keep business rules portable for future web/mobile work
+- Current practical status:
+  - extracted modules are now the active execution path for list editing, widget editing, board display, layout math, project-aware item editing, and the wizard
+  - `App.tsx` is still the top-level orchestrator and still contains some legacy inline copies/helpers that should be cleaned up in follow-up passes
+  - `App.tsx` is down to roughly `6.3k` lines and is materially smaller than the earlier `9k+` state
 
 ## Roadmap-Relevant Open Areas
 
-- Continue decomposing `App.tsx`, especially:
-  - list editor
-  - board display
-  - layout engine
-  - project helpers/rules
+- Continue decomposing and cleaning `App.tsx`, especially:
+  - remove legacy inline copies now superseded by extracted modules
+  - move residual board-display presentation/sorting helpers beside `board-display/`
+  - move remaining project/gantt helpers fully beside `project/`
+  - keep reducing orchestration-only code toward a thinner shell
 - Add automated tests around repository behavior and layout placement.
 - Add Stocks widget.
 - Add Budget list template.

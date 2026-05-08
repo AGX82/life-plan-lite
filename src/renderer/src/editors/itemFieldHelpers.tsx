@@ -56,10 +56,14 @@ export function coerceInputValue(column: ListColumn, value: FieldValue): FieldVa
   if (isDateFieldValue(value)) return value.value ? value : null
   if (column.type === 'boolean') return Boolean(value)
   if (column.type === 'choice') return value === '' ? null : value
+  if (column.type === 'duration') {
+    if (value === null || value === '') return null
+    if (typeof value === 'number') return Number.isFinite(value) ? Math.max(0, Math.round(value)) : Number.NaN
+    return parseDurationInput(String(value))
+  }
   if (value === '') return null
   if (column.type === 'integer') return Number.parseInt(String(value), 10)
   if (column.type === 'decimal' || column.type === 'currency') return Number.parseFloat(String(value))
-  if (column.type === 'duration') return parseDurationInput(String(value))
   return String(value)
 }
 

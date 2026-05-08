@@ -308,6 +308,8 @@ Date: 2026-05-07
 - After `v1.3.1`, ongoing development resumes from `1.3.2-dev`.
 - `v1.4.0` is the next stable minor release and promotes the Help surface, Wishlist recommendation engine, board-view sorting, custom-location weather, and the first high-level Project template to the stable line.
 - After `v1.4.0`, ongoing development should continue from `1.4.1-dev`.
+- `v1.4.1` is a patch release focused on renderer modularization, documentation alignment, and duration-input stability.
+- After `v1.4.1`, ongoing development should resume from `1.4.2-dev`.
 
 ## Forward Planning Decisions
 

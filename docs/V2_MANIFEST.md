@@ -1,7 +1,7 @@
 # Life Plan Lite v2.0.0 Manifest
 
 Status: planning draft  
-Planning basis as of 2026-05-08: latest shipped stable release `v1.4.0`; repository package version `1.4.1-dev`.  
+Planning basis as of 2026-05-08: latest shipped stable release `v1.4.1`; repository package version `1.4.1`.  
 Target role of this release: final local-first desktop generation before cloud transition work becomes the main product track.
 
 ## 1. Release Intent
