@@ -214,7 +214,7 @@ export function migrate(client: DbClient): void {
         is_summary_eligible = 1,
         is_list_summary_eligible = 1,
         is_board_summary_eligible = 1,
-        display_format = '{"durationDisplayFormat":"days_hours"}'
+        display_format = '{"durationDisplayFormat":"hours"}'
     WHERE id IN (
       SELECT c.id
       FROM list_columns c

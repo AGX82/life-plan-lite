@@ -2347,7 +2347,7 @@ input[type="checkbox"] {
 }
 
 .column-list-header {
-  grid-template-columns: minmax(150px, 1fr) 120px 92px 72px 72px 118px;
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 0.9fr) 120px 92px 72px 72px 118px;
 }
 
 .summary-list-header {
@@ -2401,14 +2401,14 @@ input[type="checkbox"] {
 
 .column-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) 120px 92px 72px 72px 118px;
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 0.9fr) 120px 92px 72px 72px 118px;
   gap: 0.28rem;
   align-items: center;
   padding: 0;
 }
 
 .column-row-with-config {
-  grid-template-columns: minmax(150px, 1fr) 120px 92px 72px 72px 118px;
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 0.9fr) 120px 92px 72px 72px 118px;
 }
 
 .column-row label {
@@ -2565,6 +2565,54 @@ input[type="checkbox"] {
   color: var(--color-muted);
   font-size: 0.75rem;
   font-weight: 460;
+}
+
+.duration-editor {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.duration-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.duration-editor-grid > label,
+.duration-day-value {
+  margin: 0;
+}
+
+.duration-editor-grid > label > span,
+.duration-day-value legend {
+  display: block;
+  margin-bottom: 0.28rem;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 360;
+}
+
+.duration-day-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0;
+  border: 0;
+}
+
+.duration-day-value legend {
+  margin: 0 0.32rem 0 0;
+}
+
+.duration-day-value label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  margin: 0;
+}
+
+.duration-day-value input[type='radio'] {
+  margin: 0;
 }
 
 .choice-options-field textarea {
@@ -3611,6 +3659,68 @@ input[type="checkbox"] {
 .table-wrap {
   min-height: 0;
   overflow: auto;
+}
+
+.health-board-view {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.health-board-section {
+  display: grid;
+}
+
+.health-board-section-header,
+.health-board-row {
+  display: grid;
+  gap: 0.28rem;
+  align-items: center;
+  padding: 0.22rem 0.42rem;
+}
+
+.health-board-section-header {
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025) 58%, rgba(0, 0, 0, 0.05)),
+    rgba(215, 223, 232, 0.12);
+}
+
+.health-board-section-header strong,
+.health-board-section-header span {
+  color: rgba(241, 245, 249, 0.94);
+  font-size: 0.68rem;
+  font-weight: 560;
+  text-transform: uppercase;
+}
+
+.health-board-row {
+  min-height: 2rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.health-board-row > span:not(.row-actions-cell) {
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.health-board-row .row-actions-cell {
+  min-width: 4.3rem;
+  justify-self: end;
+  align-self: center;
+  flex-wrap: nowrap;
+}
+
+.health-board-row .row-action-button {
+  flex: 0 0 auto;
+}
+
+.health-board-row.clickable-row {
+  cursor: pointer;
+}
+
+.health-board-row.clickable-row:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .project-board-cell {

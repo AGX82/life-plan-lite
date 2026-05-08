@@ -49,12 +49,21 @@ export type WishlistRecommendationInput = 'wishmeter' | 'priority' | 'price'
 
 export type ListTemplateConfig = {
   behavior?: ListBehavior
+  boardFieldOrder?: string[]
+  systemDisplayNames?: {
+    itemId?: string | null
+    dependencies?: string | null
+    createdAt?: string | null
+    createdBy?: string | null
+    status?: string | null
+  }
   birthday?: {
     boardView: BirthdayBoardView
   }
   wishlist?: {
     profile: WishlistRecommendationProfile
     showAdvisedBuyOrder: boolean
+    advisedBuyOrderDisplayName?: string | null
   }
 }
 
@@ -121,6 +130,7 @@ export type ListColumn = {
   id: string
   listId: string
   name: string
+  displayName: string | null
   type: ColumnType
   order: number
   required: boolean
@@ -436,6 +446,7 @@ export type UpdateListGridInput = {
 export type CreateColumnInput = {
   listId: string
   name: string
+  displayName?: string | null
   type: ColumnType
   choiceConfig?: ChoiceConfig | null
   dateDisplayFormat?: DateDisplayFormat
@@ -486,6 +497,7 @@ export type UpdateBoardLayoutsInput = {
 export type UpdateColumnInput = {
   columnId: string
   name: string
+  displayName?: string | null
   type: ColumnType
   required: boolean
   maxLength: number | null

@@ -40,6 +40,7 @@ Intent:
 CSS class: `theme-midnight-clear`
 
 Status: saved active theme as of `v0.3.0`.
+Current status: remains the default built-in theme in the current `v1.4.0` stable / `1.4.1-dev` repository line as of 2026-05-08.
 
 Intent:
 

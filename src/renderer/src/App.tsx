@@ -29,6 +29,34 @@ import { Fragment, FormEvent, PointerEvent, useEffect, useRef, useState } from '
 import type { CSSProperties, Dispatch, ReactElement, SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import lplLogo from './assets/lpl_logo.png'
+import { CollapsibleEditorSectionHeader, EditorHeading } from './editors/chrome'
+import { GroupEditorPanel } from './editors/groupEditor'
+import {
+  choiceLabel,
+  dateFieldValue,
+  formatCellValue,
+  formatValue,
+  formatSystemDate,
+  isDateFieldValue,
+  normalizeRecurrenceInterval,
+  weekdayLabels
+} from './editors/itemFieldHelpers'
+import { CloseItemModal, ItemEditorPanel } from './editors/itemEditor'
+import {
+  blankValues,
+  choiceId,
+  choiceConfigToText,
+  dateStringFromField,
+  defaultChoiceConfig,
+  editableItemColumns,
+  itemTitle,
+  localDateTimeInputValue,
+  normalizeColumnName,
+  parseChoiceOptions,
+  parseColumnDateValue,
+  valuesForItem,
+  visibleColumns
+} from './lists/helpers'
 import type {
   AggregationMethod,
   AppSettings,
@@ -69,7 +97,24 @@ import type {
   WorldClockLocation
 } from '@shared/domain'
 import HelpModal from './help/HelpModal'
+import { getListTemplateModule } from './templates/registry'
+import type { BoardDisplayColumn } from './templates/types'
 import { tutorialSteps } from './tutorial/tutorialContent'
+import {
+  clamp,
+  compactWidgetSummary,
+  defaultConfigForWidgetType,
+  defaultWeatherConfig,
+  defaultWorldClockConfig,
+  WidgetRenderer,
+  weatherLocationSearchError,
+  widgetAspectSpec,
+  widgetGridForScale,
+  widgetScaleBounds,
+  WidgetTypeIcon,
+  widgetTypeLabel,
+  widgetTypes
+} from './widgets'
 
 type Route = 'admin' | 'display'
 type TutorialScene = 'admin' | 'display'
@@ -81,6 +126,7 @@ type RunAction = (action: () => Promise<AppActionResult>) => Promise<AppActionRe
 
 type ColumnDraft = {
   name: string
+  displayName: string
   type: ColumnType
   required: boolean
   choiceConfig: ChoiceConfig
@@ -111,6 +157,22 @@ type BoardRailMenuState = {
 } | null
 
 type EditableSummarySlot = Omit<SummarySlot, 'value'>
+
+const sharedItemEditorHelpers = {
+  blankValues,
+  editableItemColumns,
+  groupOptions,
+  isProjectMilestoneLikeType,
+  itemTitle,
+  projectEditableFieldColumns,
+  projectParentOptions,
+  projectRootItemsForBucket,
+  projectTypeFromValues,
+  renderProjectDependencyItemRows,
+  submitProjectAwareItemMutation,
+  valuesForItem,
+  wishlistScoreTooltip
+}
 
 type ConfirmDialogState = {
   title: string
@@ -232,22 +294,6 @@ const defaultAppSettings: AppSettings = {
   wizardCompleted: false,
   tutorialCompleted: false
 }
-const weekdayLabels = [
-  { short: 'S', long: 'Sun' },
-  { short: 'M', long: 'Mon' },
-  { short: 'T', long: 'Tue' },
-  { short: 'W', long: 'Wed' },
-  { short: 'T', long: 'Thu' },
-  { short: 'F', long: 'Fri' },
-  { short: 'S', long: 'Sat' }
-]
-const widgetTypes: Array<{ value: WidgetType; label: string; icon: typeof Clock3 }> = [
-  { value: 'clock', label: 'Clock', icon: Clock3 },
-  { value: 'weather', label: 'Weather', icon: CloudSun },
-  { value: 'word_of_day', label: 'Word of the Day', icon: BookOpenText },
-  { value: 'world_clocks', label: 'World Clocks', icon: Globe2 },
-  { value: 'countdown', label: 'Countdown', icon: AlarmClock }
-]
 const listTemplateOptions: Array<{ value: ListTemplateType; label: string; description: string }> = [
   { value: 'todo', label: 'To Do', description: 'Tasks with deadlines, priority, people, effort, progress and comments.' },
   { value: 'shopping_list', label: 'Shopping List', description: 'Products, pieces, store, needed-by date, price, calculated cost and link.' },
@@ -694,6 +740,7 @@ export function App(): ReactElement {
       <DisplayBoard
         appSettings={appSettings}
         appThemeClass={currentThemeClass}
+        boards={effectiveBoards}
         busy={effectiveBusy}
         runAction={tutorialOpen ? tutorialRunAction : runAction}
         selectedListId={effectiveSelectedNode.kind === 'list' ? effectiveSelectedNode.id : undefined}
@@ -826,8 +873,6 @@ function AdminApp({
   const [boardDeleteDialog, setBoardDeleteDialog] = useState<BoardSummary | null>(null)
   const [newListDialogOpen, setNewListDialogOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
-  const allItems = snapshot.lists.flatMap((list) => list.items)
-
   function closeMenu(): void {
     setContextMenu(null)
     setBoardMenu(null)
@@ -932,7 +977,6 @@ function AdminApp({
                 </div>
               </header>
               <PropertyEditor
-                allItems={allItems}
                 appSettings={appSettings}
                 boards={boards}
                 busy={busy}
@@ -2481,7 +2525,6 @@ function TreeContextMenu({
 }
 
 function PropertyEditor({
-  allItems,
   appSettings,
   boards,
   busy,
@@ -2490,7 +2533,6 @@ function PropertyEditor({
   setSelectedNode,
   snapshot
 }: {
-  allItems: BoardItem[]
   appSettings: AppSettings
   boards: BoardSummary[]
   busy: boolean
@@ -2534,7 +2576,6 @@ function PropertyEditor({
         )}
         {selectedNode.kind === 'list' && selectedList && (
           <ListEditorPanel
-            allItems={allItems}
             appSettings={appSettings}
             busy={busy}
             boards={boards}
@@ -2547,20 +2588,22 @@ function PropertyEditor({
         )}
         {selectedNode.kind === 'group' && selectedGroup && selectedList && (
           <GroupEditorPanel
-            allItems={allItems}
+            appSettings={appSettings}
             busy={busy}
             group={selectedGroup}
+            itemEditorHelpers={sharedItemEditorHelpers}
             key={selectedGroup.id}
             list={selectedList}
             runAction={runAction}
-            setSelectedNode={setSelectedNode}
             snapshot={snapshot}
+            visibleColumns={visibleColumns}
           />
         )}
         {selectedNode.kind === 'item' && selectedItem && selectedList && appSettings && (
           <ItemEditorPanel
             appSettings={appSettings}
             busy={busy}
+            helpers={sharedItemEditorHelpers}
             item={selectedItem}
             key={selectedItem.id}
             list={selectedList}
@@ -2839,20 +2882,22 @@ function isSummarySlotDefined(slot: SummarySlot): boolean {
 }
 
 function ListEditorPanel({
-  allItems,
   appSettings,
   boards,
   busy,
   list,
+  onClose,
+  presentation = 'panel',
   runAction,
   setSelectedNode,
   snapshot
 }: {
-  allItems: BoardItem[]
   appSettings: AppSettings
   boards: BoardSummary[]
   busy: boolean
   list: BoardList
+  onClose?: () => void
+  presentation?: 'panel' | 'modal'
   runAction: RunAction
   setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
   snapshot: BoardSnapshot
@@ -2872,9 +2917,17 @@ function ListEditorPanel({
   const [showCreatedAtOnBoard, setShowCreatedAtOnBoard] = useState(list.showCreatedAtOnBoard)
   const [showCreatedByOnBoard, setShowCreatedByOnBoard] = useState(list.showCreatedByOnBoard)
   const [showStatusOnBoard, setShowStatusOnBoard] = useState(list.showStatusOnBoard)
+  const [systemDisplayNames, setSystemDisplayNames] = useState(() => ({
+    itemId: list.templateConfig.systemDisplayNames?.itemId ?? '',
+    dependencies: list.templateConfig.systemDisplayNames?.dependencies ?? '',
+    createdAt: list.templateConfig.systemDisplayNames?.createdAt ?? '',
+    createdBy: list.templateConfig.systemDisplayNames?.createdBy ?? '',
+    status: list.templateConfig.systemDisplayNames?.status ?? ''
+  }))
   const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>(list.templateConfig.birthday?.boardView ?? 'this_month')
   const [wishlistProfile, setWishlistProfile] = useState<WishlistRecommendationProfile>(list.templateConfig.wishlist?.profile ?? 'default')
   const [showWishlistAdvisedBuyOrder, setShowWishlistAdvisedBuyOrder] = useState(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
+  const [wishlistAdvisedBuyOrderDisplayName, setWishlistAdvisedBuyOrderDisplayName] = useState(list.templateConfig.wishlist?.advisedBuyOrderDisplayName ?? '')
   const [newColumnName, setNewColumnName] = useState('')
   const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
   const [addColumnOnTop, setAddColumnOnTop] = useState(appSettings.addColumnOnTopByBoard[list.boardId] ?? false)
@@ -2895,7 +2948,6 @@ function ListEditorPanel({
     setName(list.name)
     setListBehavior(list.templateConfig.behavior ?? 'other')
     setTemplateType(list.templateType)
-    setListBehavior(list.templateConfig.behavior ?? 'other')
     setGrid(list.grid)
     setDisplayEnabled(list.displayEnabled)
     setDueDateEnabled(list.dueDateEnabled)
@@ -2908,9 +2960,17 @@ function ListEditorPanel({
     setShowCreatedAtOnBoard(list.showCreatedAtOnBoard)
     setShowCreatedByOnBoard(list.showCreatedByOnBoard)
     setShowStatusOnBoard(list.showStatusOnBoard)
+    setSystemDisplayNames({
+      itemId: list.templateConfig.systemDisplayNames?.itemId ?? '',
+      dependencies: list.templateConfig.systemDisplayNames?.dependencies ?? '',
+      createdAt: list.templateConfig.systemDisplayNames?.createdAt ?? '',
+      createdBy: list.templateConfig.systemDisplayNames?.createdBy ?? '',
+      status: list.templateConfig.systemDisplayNames?.status ?? ''
+    })
     setBirthdayBoardView(list.templateConfig.birthday?.boardView ?? 'this_month')
     setWishlistProfile(list.templateConfig.wishlist?.profile ?? 'default')
     setShowWishlistAdvisedBuyOrder(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
+    setWishlistAdvisedBuyOrderDisplayName(list.templateConfig.wishlist?.advisedBuyOrderDisplayName ?? '')
     setMoveTargetBoardId('')
     setCopyTargetBoardId('')
     setActiveTab('properties')
@@ -2937,6 +2997,21 @@ function ListEditorPanel({
   }, [list.displayEnabled, list.grid.h, list.grid.w, list.grid.x, list.grid.y])
 
   const hasTemplateSettings = templateType === 'birthday_calendar' || templateType === 'wishlist'
+  const structureRows = orderedStructureFieldEntries(
+    list,
+    systemDisplayNames,
+    {
+      itemId: showItemIdOnBoard,
+      dependencies: showDependenciesOnBoard,
+      createdAt: showCreatedAtOnBoard,
+      createdBy: showCreatedByOnBoard,
+      status: showStatusOnBoard
+    },
+    {
+      showAdvisedBuyOrder: showWishlistAdvisedBuyOrder,
+      advisedBuyOrderDisplayName: wishlistAdvisedBuyOrderDisplayName
+    }
+  )
 
   function submit(event: FormEvent): void {
     event.preventDefault()
@@ -2946,6 +3021,7 @@ function ListEditorPanel({
   function saveList(
     nextDisplayEnabled = displayEnabled,
     candidateGrid = grid,
+    boardFieldOrderOverride: string[] | null = null,
     systemVisibility: {
       showItemIdOnBoard?: boolean
       showDependenciesOnBoard?: boolean
@@ -2999,7 +3075,16 @@ function ListEditorPanel({
         listId: list.id,
         name,
         templateType,
-        templateConfig: listTemplateConfigForSave(templateType, listBehavior, birthdayBoardView, wishlistProfile, showWishlistAdvisedBuyOrder),
+        templateConfig: listTemplateConfigForSave(
+          templateType,
+          listBehavior,
+          systemDisplayNames,
+          birthdayBoardView,
+          wishlistProfile,
+          showWishlistAdvisedBuyOrder,
+          wishlistAdvisedBuyOrderDisplayName,
+          boardFieldOrderOverride ?? structureRows.map((row) => row.key)
+        ),
         grid: nextGrid,
         dueDateEnabled,
         dueDateColumnId: list.dueDateColumnId,
@@ -3013,6 +3098,47 @@ function ListEditorPanel({
         showCreatedAtOnBoard: nextShowCreatedAtOnBoard,
         showCreatedByOnBoard: nextShowCreatedByOnBoard,
         showStatusOnBoard: nextShowStatusOnBoard
+      })
+    })
+  }
+
+  function persistBoardFieldOrder(nextOrder: string[], column?: ListColumn): void {
+    runAction(async () => {
+      if (column) {
+        const draft = columnDrafts[column.id] ?? columnDraftFromColumn(column)
+        const nextColumnOrder = nextOrder.filter((key) => visibleColumns(list).some((candidate) => candidate.id === key))
+        const nextColumnIndex = nextColumnOrder.indexOf(column.id)
+        if (nextColumnIndex >= 0) {
+          await window.lpl.updateColumn({ ...columnDraftToInput(column, draft), order: nextColumnIndex + 1 })
+        }
+      }
+      return window.lpl.updateList({
+        listId: list.id,
+        name,
+        templateType,
+        templateConfig: listTemplateConfigForSave(
+          templateType,
+          listBehavior,
+          systemDisplayNames,
+          birthdayBoardView,
+          wishlistProfile,
+          showWishlistAdvisedBuyOrder,
+          wishlistAdvisedBuyOrderDisplayName,
+          nextOrder
+        ),
+        grid,
+        dueDateEnabled,
+        dueDateColumnId: list.dueDateColumnId,
+        deadlineMandatory,
+        columnSortOrder,
+        sortColumnId: effectiveSortColumnId,
+        sortDirection: effectiveSortColumnId ? effectiveSortDirection : 'manual',
+        displayEnabled,
+        showItemIdOnBoard,
+        showDependenciesOnBoard,
+        showCreatedAtOnBoard,
+        showCreatedByOnBoard,
+        showStatusOnBoard
       })
     })
   }
@@ -3046,8 +3172,27 @@ function ListEditorPanel({
   }
 
   function updateColumnOrder(column: ListColumn, order: number): void {
-    const draft = columnDrafts[column.id] ?? columnDraftFromColumn(column)
-    runAction(() => window.lpl.updateColumn({ ...columnDraftToInput(column, draft), order }))
+    const keys = structureRows.map((row) => row.key)
+    const currentIndex = keys.indexOf(column.id)
+    if (currentIndex < 0) return
+    const next = [...keys]
+    const [moved] = next.splice(currentIndex, 1)
+    next.splice(Math.max(0, Math.min(order - 1, next.length)), 0, moved)
+    persistBoardFieldOrder(next, column)
+  }
+
+  function updateSystemFieldOrder(rowKey: string, order: number): void {
+    const keys = structureRows.map((row) => row.key)
+    const currentIndex = keys.indexOf(rowKey)
+    if (currentIndex < 0) return
+    const next = [...keys]
+    const [moved] = next.splice(currentIndex, 1)
+    next.splice(Math.max(0, Math.min(order - 1, next.length)), 0, moved)
+    persistBoardFieldOrder(next)
+  }
+
+  function saveStructureBoardSettings(): void {
+    saveList(displayEnabled, grid, structureRows.map((row) => row.key))
   }
 
   function requestDeleteList(): void {
@@ -3058,6 +3203,10 @@ function ListEditorPanel({
       destructive: true,
       onConfirm: async () => {
         await runAction(() => window.lpl.deleteList(list.id))
+        if (presentation === 'modal') {
+          onClose?.()
+          return
+        }
         setSelectedNode({ kind: 'board', id: snapshot.id })
       }
     })
@@ -3107,7 +3256,7 @@ function ListEditorPanel({
     })
   }
 
-  return (
+  const content = (
     <div className="editor-tabbed editor-tabbed-list" data-tutorial-id="list-editor-shell">
       <div className="editor-tabbar">
         <div className="editor-tab-buttons">
@@ -3444,6 +3593,7 @@ function ListEditorPanel({
               </form>
               <div className="column-list-header">
                 <span>Column Name</span>
+                <span>Board Label</span>
                 <span>Field Type</span>
                 <span>Required</span>
                 <span>Show</span>
@@ -3452,61 +3602,56 @@ function ListEditorPanel({
               </div>
               <div className="column-list-scroll">
                 <div className="column-list">
-                  <SystemColumnRow
-                    name="Item ID"
-                    onToggle={setShowItemIdOnBoard}
-                    showOnBoard={showItemIdOnBoard}
-                    typeLabel="system"
-                  />
-                  <SystemColumnRow
-                    name="Dependencies"
-                    onToggle={setShowDependenciesOnBoard}
-                    showOnBoard={showDependenciesOnBoard}
-                    typeLabel="system"
-                  />
-                  <SystemColumnRow
-                    name="Created At"
-                    onToggle={setShowCreatedAtOnBoard}
-                    showOnBoard={showCreatedAtOnBoard}
-                    typeLabel="system"
-                  />
-                  <SystemColumnRow
-                    name="Created By"
-                    onToggle={setShowCreatedByOnBoard}
-                    showOnBoard={showCreatedByOnBoard}
-                    typeLabel="system"
-                  />
-                  <SystemColumnRow
-                    name="Status"
-                    onToggle={setShowStatusOnBoard}
-                    showOnBoard={showStatusOnBoard}
-                    typeLabel="system"
-                  />
-                  {templateType === 'wishlist' && (
-                    <SystemColumnRow
-                      name="Advised Buy Order"
-                      onToggle={setShowWishlistAdvisedBuyOrder}
-                      showOnBoard={showWishlistAdvisedBuyOrder}
-                      statusLabel="Calculated"
-                      typeLabel="calculated"
-                    />
+                  {structureRows.map((row, index) =>
+                    row.kind === 'column' ? (
+                      <ColumnRow
+                        column={row.column}
+                        draft={columnDrafts[row.column.id] ?? columnDraftFromColumn(row.column)}
+                        key={row.key}
+                        list={list}
+                        locked={false}
+                        manualOrderEnabled={columnSortOrder === 'manual'}
+                        order={index + 1}
+                        orderCount={structureRows.length}
+                        onDraftChange={(patch) => updateColumnDraft(row.column, patch)}
+                        onOrderChange={(order) => updateColumnOrder(row.column, order)}
+                        onSave={() => saveColumnDraft(row.column)}
+                        runAction={runAction}
+                      />
+                    ) : (
+                      <SystemColumnRow
+                        displayName={row.displayName}
+                        key={row.key}
+                        manualOrderEnabled={columnSortOrder === 'manual'}
+                        name={row.name}
+                        onDisplayNameChange={(value) => {
+                          if (row.kind === 'system') {
+                            setSystemDisplayNames((current) => ({ ...current, [row.field]: value }))
+                          } else {
+                            setWishlistAdvisedBuyOrderDisplayName(value)
+                          }
+                        }}
+                        onOrderChange={(order) => updateSystemFieldOrder(row.key, order)}
+                        onSave={saveStructureBoardSettings}
+                        onToggle={(checked) => {
+                          if (row.kind === 'system') {
+                            if (row.field === 'itemId') setShowItemIdOnBoard(checked)
+                            if (row.field === 'dependencies') setShowDependenciesOnBoard(checked)
+                            if (row.field === 'createdAt') setShowCreatedAtOnBoard(checked)
+                            if (row.field === 'createdBy') setShowCreatedByOnBoard(checked)
+                            if (row.field === 'status') setShowStatusOnBoard(checked)
+                          } else {
+                            setShowWishlistAdvisedBuyOrder(checked)
+                          }
+                        }}
+                        order={index + 1}
+                        orderCount={structureRows.length}
+                        showOnBoard={row.showOnBoard}
+                        statusLabel={row.statusLabel}
+                        typeLabel={row.typeLabel}
+                      />
+                    )
                   )}
-                  {visibleColumns(list).map((column) => (
-                    <ColumnRow
-                      column={column}
-                      draft={columnDrafts[column.id] ?? columnDraftFromColumn(column)}
-                      key={column.id}
-                      list={list}
-                      locked={false}
-                      manualOrderEnabled={columnSortOrder === 'manual'}
-                      order={visibleColumns(list).findIndex((candidate) => candidate.id === column.id) + 1}
-                      orderCount={visibleColumns(list).length}
-                      onDraftChange={(patch) => updateColumnDraft(column, patch)}
-                      onOrderChange={(order) => updateColumnOrder(column, order)}
-                      onSave={() => saveColumnDraft(column)}
-                      runAction={runAction}
-                    />
-                  ))}
                 </div>
               </div>
             </div>
@@ -3576,17 +3721,19 @@ function ListEditorPanel({
           </section>
         )}
       </div>
-      {showCreateItemModal && (
-        <BoardItemModal
-          allItems={allItems}
-          busy={busy}
-          item={null}
-          list={list}
-          mode="create"
-          onClose={() => setShowCreateItemModal(false)}
-          runAction={runAction}
-          snapshot={snapshot}
-        />
+        {showCreateItemModal && (
+          <ItemEditorPanel
+            appSettings={appSettings}
+            busy={busy}
+            helpers={sharedItemEditorHelpers}
+            item={null}
+            mode="create"
+            onClose={() => setShowCreateItemModal(false)}
+            presentation="modal"
+            list={list}
+            runAction={runAction}
+            snapshot={snapshot}
+          />
       )}
       {confirmDialog && (
         <ConfirmActionModal
@@ -3604,17 +3751,49 @@ function ListEditorPanel({
       )}
     </div>
   )
+
+  if (presentation === 'modal' && onClose) {
+    return createPortal(
+      <div className="modal-backdrop" onClick={onClose} role="presentation">
+        <div
+          aria-modal="true"
+          className="modal-card modal-card-large modal-list-editor"
+          onClick={(event) => event.stopPropagation()}
+          role="dialog"
+        >
+          {content}
+        </div>
+      </div>,
+      document.body
+    )
+  }
+
+  return content
 }
 
 function SystemColumnRow({
+  displayName,
+  manualOrderEnabled = false,
   name,
+  onDisplayNameChange,
+  onOrderChange = () => undefined,
+  onSave = () => undefined,
   onToggle,
+  order = 1,
+  orderCount = 1,
   showOnBoard,
   typeLabel,
   statusLabel = 'System'
 }: {
+  displayName: string
+  manualOrderEnabled?: boolean
   name: string
+  onDisplayNameChange?: (value: string) => void
+  onOrderChange?: (order: number) => void
+  onSave?: () => void
   onToggle: (checked: boolean) => void
+  order?: number
+  orderCount?: number
   showOnBoard: boolean
   typeLabel: string
   statusLabel?: string
@@ -3622,15 +3801,26 @@ function SystemColumnRow({
   return (
     <div className="column-row system-column-row">
       <input disabled value={name} />
+      <input
+        onChange={(event) => onDisplayNameChange?.(event.target.value)}
+        placeholder="Use field name"
+        value={displayName}
+      />
       <input disabled value={typeLabel} />
       <span className="readonly-field">{statusLabel}</span>
       <label>
         <input checked={showOnBoard} onChange={(event) => onToggle(event.target.checked)} type="checkbox" />
         Show
       </label>
-      <span className="readonly-field column-order-placeholder">-</span>
+      <select aria-label={`${name} sort order`} disabled={!manualOrderEnabled} onChange={(event) => onOrderChange(Number(event.target.value))} value={order}>
+        {Array.from({ length: orderCount }, (_, index) => index + 1).map((position) => (
+          <option key={position} value={position}>
+            {position}
+          </option>
+        ))}
+      </select>
       <div className="column-actions">
-        <button className="mini-button" disabled type="button">
+        <button className="mini-button" onClick={onSave} type="button">
           Save
         </button>
         <button className="mini-button danger-mini" disabled type="button">
@@ -3645,6 +3835,7 @@ function columnDraftFromColumn(column: ListColumn): ColumnDraft {
   const choiceConfig = column.choiceConfig ?? defaultChoiceConfig(column.name)
   return {
     name: column.name,
+    displayName: column.displayName ?? '',
     type: column.type,
     required: column.required,
     choiceConfig,
@@ -3670,6 +3861,7 @@ function columnDraftToInput(column: ListColumn, draft: ColumnDraft): UpdateColum
   return {
     columnId: column.id,
     name: draft.name,
+    displayName: draft.displayName.trim() || null,
     type: draft.type,
     required: draft.required,
     maxLength: column.maxLength,
@@ -3677,7 +3869,7 @@ function columnDraftToInput(column: ListColumn, draft: ColumnDraft): UpdateColum
     boardSummaryEligible: column.boardSummaryEligible,
     choiceConfig: columnDraftChoiceConfig(draft),
     dateDisplayFormat: draft.type === 'date' ? draft.dateDisplayFormat : 'date',
-    durationDisplayFormat: draft.type === 'duration' ? draft.durationDisplayFormat : 'days_hours',
+    durationDisplayFormat: draft.type === 'duration' ? draft.durationDisplayFormat : 'hours',
     recurrence: 'none',
     recurrenceDays: [],
     currencyCode: draft.type === 'currency' ? draft.currencyCode : 'USD',
@@ -3691,6 +3883,7 @@ function columnDraftMatchesColumn(draft: ColumnDraft, column: ListColumn): boole
   const draftChoice = columnDraftChoiceConfig(draft)
   return (
     draft.name === original.name &&
+    draft.displayName.trim() === original.displayName.trim() &&
     draft.type === original.type &&
     draft.required === original.required &&
     draft.dateDisplayFormat === original.dateDisplayFormat &&
@@ -3751,6 +3944,7 @@ function ColumnRow({
   return (
     <div className={draft.type === 'choice' || draft.type === 'date' || draft.type === 'currency' || draft.type === 'duration' ? 'column-row column-row-with-config' : 'column-row'}>
       <input disabled={column.role === 'deadline' || locked} onChange={(event) => onDraftChange({ name: event.target.value })} value={draft.name} />
+      <input onChange={(event) => onDraftChange({ displayName: event.target.value })} placeholder="Use field name" value={draft.displayName} />
       <select
         disabled={column.role === 'deadline' || locked}
         onChange={(event) => {
@@ -3832,17 +4026,6 @@ function ColumnRow({
                   {currency.label}
                 </option>
               ))}
-            </select>
-          </label>
-        </div>
-      )}
-      {draft.type === 'duration' && (
-        <div className="date-config-row">
-          <label>
-            <span>Summary Display</span>
-            <select disabled={locked} onChange={(event) => onDraftChange({ durationDisplayFormat: event.target.value as DurationDisplayFormat })} value={draft.durationDisplayFormat}>
-              <option value="days_hours">Days + hours</option>
-              <option value="hours">Total hours</option>
             </select>
           </label>
         </div>
@@ -3962,285 +4145,6 @@ function ColumnSummaryRow({
         />
       </label>
     </div>
-  )
-}
-
-function GroupEditorPanel({
-  allItems,
-  busy,
-  group,
-  list,
-  runAction,
-  setSelectedNode,
-  snapshot
-}: {
-  allItems: BoardItem[]
-  busy: boolean
-  group: ItemGroup
-  list: BoardList
-  runAction: RunAction
-  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>
-  snapshot: BoardSnapshot
-}): ReactElement {
-  const [name, setName] = useState(group.name)
-  const [showIdOnBoard, setShowIdOnBoard] = useState(group.showIdOnBoard)
-  const [summaries, setSummaries] = useState<GroupSummaryConfig[]>(group.summaries)
-  const [showCreateItemModal, setShowCreateItemModal] = useState(false)
-
-  useEffect(() => {
-    setName(group.name)
-    setShowIdOnBoard(group.showIdOnBoard)
-    setSummaries(group.summaries)
-  }, [group.id])
-
-  function submit(event: FormEvent): void {
-    event.preventDefault()
-    runAction(() => window.lpl.updateGroup({ groupId: group.id, parentGroupId: group.parentGroupId, name, showIdOnBoard, summaries }))
-  }
-
-  function setSummary(columnId: string, method: GroupSummaryMethod | ''): void {
-    setSummaries((current) => {
-      const next = current.filter((summary) => summary.columnId !== columnId)
-      return method ? [...next, { columnId, method }] : next
-    })
-  }
-
-  function summaryMethod(columnId: string): GroupSummaryMethod | '' {
-    return summaries.find((summary) => summary.columnId === columnId)?.method ?? ''
-  }
-
-  return (
-    <form className="editor-card" onSubmit={submit}>
-      <EditorHeading eyebrow="Group" title={group.name} />
-      <div className="field-grid two">
-        <label>
-          <span>Group name</span>
-          <input onChange={(event) => setName(event.target.value)} required value={name} />
-        </label>
-        <label className="toggle-field">
-          <input checked={showIdOnBoard} onChange={(event) => setShowIdOnBoard(event.target.checked)} type="checkbox" />
-          <span>Show group ID</span>
-        </label>
-      </div>
-      <section className="inline-config-panel">
-        <EditorHeading eyebrow="Display" title="Group Row Summaries" />
-        <div className="summary-config-list">
-          {visibleColumns(list).map((column) => (
-            <label className="summary-config-row" key={column.id}>
-              <span>{column.name}</span>
-              <select onChange={(event) => setSummary(column.id, event.target.value as GroupSummaryMethod | '')} value={summaryMethod(column.id)}>
-                <option value="">Hide</option>
-                <option value="sum">Sum</option>
-                <option value="max">Max</option>
-                <option value="avg">Avg</option>
-                <option value="count"># of items</option>
-              </select>
-            </label>
-          ))}
-        </div>
-      </section>
-      <div className="form-actions">
-        <button
-          className="icon-button"
-          onClick={() => setShowCreateItemModal(true)}
-          type="button"
-        >
-          <Plus size={16} />
-          Add Item
-        </button>
-        <button className="danger-button" onClick={() => runAction(() => window.lpl.deleteGroup(group.id))} type="button">
-          <Trash2 size={16} />
-          Delete Group
-        </button>
-        <button className="primary-button" type="submit">
-          <Save size={16} />
-          Save Group
-        </button>
-      </div>
-      {showCreateItemModal && (
-        <BoardItemModal
-          allItems={allItems}
-          busy={busy}
-          item={null}
-          list={list}
-          mode="create"
-          onClose={() => setShowCreateItemModal(false)}
-          runAction={runAction}
-          snapshot={snapshot}
-        />
-      )}
-    </form>
-  )
-}
-
-function ItemEditorPanel({
-  appSettings,
-  busy,
-  item,
-  list,
-  runAction,
-  snapshot
-}: {
-  appSettings: AppSettings
-  busy: boolean
-  item: BoardItem
-  list: BoardList
-  runAction: RunAction
-  snapshot: BoardSnapshot
-}): ReactElement {
-  const editableColumns = editableItemColumns(list)
-  const [values, setValues] = useState<FormValues>(() => valuesForItem(item, editableColumns))
-  const [dependencies, setDependencies] = useState<string[]>(item.dependencyItemIds)
-  const [groupId, setGroupId] = useState<string | null>(item.groupId)
-  const [parentItemId, setParentItemId] = useState<string | null>(item.parentItemId)
-  const [activeTab, setActiveTab] = useState<'details' | 'dependencies'>('details')
-  const [closeDialog, setCloseDialog] = useState<{ action: 'completed' | 'cancelled' } | null>(null)
-  const [closeComment, setCloseComment] = useState('')
-  const [closing, setClosing] = useState(false)
-  const confirmationMode = appSettings.closeConfirmationMode
-  const fieldColumns = projectEditableFieldColumns(list, editableColumns, values)
-  const currentProjectType = list.templateType === 'project' ? projectTypeFromValues(list, values) : null
-
-  useEffect(() => {
-    setValues(valuesForItem(item, editableColumns))
-    setDependencies(item.dependencyItemIds)
-    setGroupId(item.groupId)
-    setParentItemId(item.parentItemId)
-    setActiveTab('details')
-  }, [item.id])
-
-  useEffect(() => {
-    if (currentProjectType && isProjectMilestoneLikeType(currentProjectType) && parentItemId) {
-      setParentItemId(null)
-    }
-  }, [currentProjectType, parentItemId])
-
-  function setValue(column: ListColumn, value: FieldValue): void {
-    setValues((current) => ({ ...current, [column.id]: coerceInputValue(column, value) }))
-  }
-
-  function submit(event: FormEvent): void {
-    event.preventDefault()
-    runAction(() =>
-      submitProjectAwareItemMutation({
-        mode: 'edit',
-        item,
-        list,
-        groupId,
-        parentItemId,
-        values,
-        dependencyItemIds: dependencies
-      })
-    )
-  }
-
-  function requestClose(action: 'completed' | 'cancelled'): void {
-    if (confirmationMode === 'none') {
-      void confirmClose(action, null)
-      return
-    }
-    setCloseComment('')
-    setCloseDialog({ action })
-  }
-
-  async function confirmClose(action: 'completed' | 'cancelled', comment: string | null): Promise<void> {
-    setClosing(true)
-    try {
-      await runAction(() => window.lpl.closeItem({ itemId: item.id, action, comment, archiveScope: 'draft' }))
-      setCloseDialog(null)
-      setCloseComment('')
-    } finally {
-      setClosing(false)
-    }
-  }
-
-  return (
-    <>
-      <form className="editor-tabbed" onSubmit={submit}>
-        <div className="editor-tabbar">
-          <button className={activeTab === 'details' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('details')} type="button">
-            Item Details
-          </button>
-          <button className={activeTab === 'dependencies' ? 'editor-tab active' : 'editor-tab'} onClick={() => setActiveTab('dependencies')} type="button">
-            Dependencies
-          </button>
-        </div>
-        <div className="editor-tab-content">
-          {activeTab === 'details' && (
-            <section className="list-tab-panel item-tab-panel">
-              <div className="field-grid two">
-                <label>
-                  <span>Group</span>
-                  <select onChange={(event) => setGroupId(event.target.value || null)} value={groupId ?? ''}>
-                    <option value="">List root</option>
-                    {groupOptions(list).map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {list.templateType === 'project' && !isProjectMilestoneLikeType(currentProjectType ?? 'task') && (
-                  <label>
-                    <span>Parent Task</span>
-                    <select onChange={(event) => setParentItemId(event.target.value || null)} value={parentItemId ?? ''}>
-                      <option value="">Project root</option>
-                      {projectParentOptions(list, item.id).map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </div>
-              <ItemFields columns={fieldColumns} setValue={setValue} values={values} />
-            </section>
-          )}
-          {activeTab === 'dependencies' && (
-            <section className="list-tab-panel item-tab-panel dependency-tab-panel">
-              <DependencyTreePicker
-                currentItemId={item.id}
-                dependencies={dependencies}
-                setDependencies={setDependencies}
-                snapshot={snapshot}
-              />
-            </section>
-          )}
-        </div>
-        <div className="form-actions">
-          {item.publicationStatus !== 'draft' && (
-            <button className="icon-button" disabled={busy || closing} onClick={() => requestClose('completed')} type="button">
-              <Check size={16} />
-              Mark Done
-            </button>
-          )}
-          <button className="danger-button" disabled={busy || closing} onClick={() => runAction(() => window.lpl.deleteItem(item.id))} type="button">
-            <Trash2 size={16} />
-            Delete
-          </button>
-          <button className="primary-button" type="submit">
-            <Save size={16} />
-            Save Item
-          </button>
-        </div>
-      </form>
-      {closeDialog && (
-        <CloseItemModal
-          action={closeDialog.action}
-          busy={busy || closing}
-          comments={closeComment}
-          itemTitle={itemTitle(item, list)}
-          mode={confirmationMode}
-          onCancel={() => {
-            setCloseDialog(null)
-            setCloseComment('')
-          }}
-          onCommentsChange={setCloseComment}
-          onConfirm={() => confirmClose(closeDialog.action, confirmationMode === 'with_comments' ? closeComment : null)}
-        />
-      )}
-    </>
   )
 }
 
@@ -4778,6 +4682,7 @@ function BoardPreviewWidget({
 function DisplayBoard({
   appSettings,
   appThemeClass,
+  boards = [],
   busy = false,
   compact = false,
   editable = false,
@@ -4793,6 +4698,7 @@ function DisplayBoard({
 }: {
   appSettings?: AppSettings
   appThemeClass?: string
+  boards?: BoardSummary[]
   busy?: boolean
   compact?: boolean
   editable?: boolean
@@ -4806,7 +4712,6 @@ function DisplayBoard({
   selectedWidgetId?: string
   snapshot: BoardSnapshot
 }): ReactElement {
-  const allItems = snapshot.lists.flatMap((list) => list.items)
   const [closeDialog, setCloseDialog] = useState<{ item: BoardItem; action: 'completed' | 'cancelled' } | null>(null)
   const [closeComment, setCloseComment] = useState('')
   const [closingItemId, setClosingItemId] = useState<string | null>(null)
@@ -4833,6 +4738,7 @@ function DisplayBoard({
     itemDialog?.mode === 'edit' && dialogList ? dialogList.items.find((item) => item.id === itemDialog.itemId) ?? null : null
   const listSettingsList = listSettingsListId ? snapshot.lists.find((list) => list.id === listSettingsListId) ?? null : null
   const showItemDialog = Boolean(itemDialog && dialogList && (itemDialog.mode === 'create' || dialogItem))
+  const noopSelectedNodeSetter: Dispatch<SetStateAction<SelectedNode | null>> = () => undefined
 
   async function submitClose(item: BoardItem, action: 'completed' | 'cancelled', comment: string | null): Promise<void> {
     setClosingItemId(item.id)
@@ -4953,22 +4859,29 @@ function DisplayBoard({
         />
       )}
       {enableBoardInteraction && showItemDialog && dialogList && itemDialog && runAction && (
-        <BoardItemModal
-          allItems={allItems}
+        <ItemEditorPanel
+          appSettings={appSettings!}
           busy={busy}
+          helpers={sharedItemEditorHelpers}
           item={itemDialog.mode === 'edit' ? dialogItem : null}
-          list={dialogList}
           mode={itemDialog.mode}
           onClose={() => setItemDialog(null)}
+          presentation="modal"
+          list={dialogList}
           runAction={runAction}
           snapshot={snapshot}
         />
       )}
       {enableBoardInteraction && listSettingsList && runAction && (
-        <BoardListSettingsModal
+        <ListEditorPanel
+          appSettings={appSettings!}
+          boards={boards}
+          busy={busy}
           list={listSettingsList}
           onClose={() => setListSettingsListId(null)}
+          presentation="modal"
           runAction={runAction}
+          setSelectedNode={noopSelectedNodeSetter}
           snapshot={snapshot}
         />
       )}
@@ -5031,6 +4944,58 @@ function ConfirmActionModal({
     </div>
   )
 }
+
+function boardColumnLabel(column: ListColumn): string {
+  return column.displayName?.trim() || column.name
+}
+
+function systemBoardLabel(
+  list: BoardList,
+  key: 'itemId' | 'dependencies' | 'createdAt' | 'createdBy' | 'status',
+  fallback: string
+): string {
+  return list.templateConfig.systemDisplayNames?.[key]?.trim() || fallback
+}
+
+type SystemBoardFieldKey = 'itemId' | 'dependencies' | 'createdAt' | 'createdBy' | 'status'
+type SpecialBoardFieldKey = 'wishlistAdvisedBuyOrder'
+type BoardFieldOrderKey = `system:${SystemBoardFieldKey}` | `special:${SpecialBoardFieldKey}` | string
+
+type BoardRenderFieldEntry =
+  | { kind: 'system'; key: `system:${SystemBoardFieldKey}`; field: SystemBoardFieldKey; label: string }
+  | { kind: 'display'; key: string; column: BoardDisplayColumn; label: string }
+
+type StructureFieldEntry =
+  | {
+      kind: 'system'
+      key: `system:${SystemBoardFieldKey}`
+      field: SystemBoardFieldKey
+      name: string
+      displayName: string
+      typeLabel: string
+      statusLabel: string
+      showOnBoard: boolean
+    }
+  | {
+      kind: 'special'
+      key: `special:${SpecialBoardFieldKey}`
+      field: SpecialBoardFieldKey
+      name: string
+      displayName: string
+      typeLabel: string
+      statusLabel: string
+      showOnBoard: boolean
+    }
+  | {
+      kind: 'column'
+      key: string
+      column: ListColumn
+      name: string
+      displayName: string
+      typeLabel: string
+      statusLabel: string
+      showOnBoard: boolean
+    }
 
 function MessageModal({
   title,
@@ -5205,50 +5170,6 @@ function themeClassName(theme: AppTheme): string {
   return themeOptions.find((entry) => entry.value === theme)?.className ?? 'theme-midnight-clear'
 }
 
-function widgetTypeLabel(type: WidgetType): string {
-  return widgetTypes.find((entry) => entry.value === type)?.label ?? 'Widget'
-}
-
-type WidgetAspectSpec = {
-  ratioW: number
-  ratioH: number
-  minScale: number
-}
-
-function widgetAspectSpec(type: WidgetType, config: BoardWidgetConfig): WidgetAspectSpec {
-  if (type === 'countdown') return { ratioW: 3, ratioH: 2, minScale: 1 }
-  if (type === 'world_clocks') {
-    const count = clamp(config.worldClocks?.locations?.length ?? 2, 2, 16)
-    return { ratioW: count, ratioH: 2, minScale: 1 }
-  }
-  return { ratioW: 1, ratioH: 1, minScale: 2 }
-}
-
-function widgetScaleBounds(spec: WidgetAspectSpec): { min: number; max: number } {
-  return {
-    min: spec.minScale,
-    max: Math.max(spec.minScale, Math.min(Math.floor(16 / spec.ratioW), Math.floor(8 / spec.ratioH)))
-  }
-}
-
-function widgetGridForScale(spec: WidgetAspectSpec, scale: number): Pick<BoardWidget['grid'], 'w' | 'h'> {
-  return {
-    w: spec.ratioW * scale,
-    h: spec.ratioH * scale
-  }
-}
-
-function compactWidgetSummary(widget: BoardWidget): string {
-  if (widget.type === 'weather') return 'Current location'
-  if (widget.type === 'word_of_day') return 'Daily prompt'
-  if (widget.type === 'world_clocks') {
-    const count = widget.config.worldClocks?.locations?.length ?? 0
-    return count > 0 ? `${count} zone${count === 1 ? '' : 's'}` : 'World time'
-  }
-  if (widget.type === 'countdown') return widget.config.countdown?.label?.trim() || 'Target date'
-  return 'Time & date'
-}
-
 function editorWorkspaceTitle(selectedNode: SelectedNode, snapshot: BoardSnapshot): string {
   if (selectedNode.kind === 'board') return 'Board Properties'
   if (selectedNode.kind === 'list') {
@@ -5324,9 +5245,13 @@ function BoardListView({
   selected?: boolean
   tutorialAnchor?: boolean
 }): ReactElement {
-  const columns = boardVisibleColumns(list)
-  const displayColumns = birthdayBoardColumns(list, columns)
+  const templateModule = getListTemplateModule(list.templateType)
+  const boardFields = orderedBoardRenderFields(list)
   const [sortState, setSortState] = useState<BoardListSortState | null>(null)
+  const displayColumns = boardFields
+    .filter((field): field is Extract<BoardRenderFieldEntry, { kind: 'display' }> => field.kind === 'display')
+    .map((field) => field.column)
+  const firstDisplayFieldKey = boardFields.find((field) => field.kind === 'display')?.key ?? null
   const rows = sortBoardDisplayRows(list, boardDisplayRows(list), displayColumns, sortState)
   const listSummaries = listSummaryValues(list)
   const itemCount = boardVisibleItemCount(list)
@@ -5476,18 +5401,40 @@ function BoardListView({
         </div>
       ) : (
           <div className="table-wrap" data-tutorial-id={tutorialAnchor ? 'display-list-table' : undefined}>
-          <table>
+          {templateModule.renderBoardContent ? (
+            templateModule.renderBoardContent({
+              list,
+              onCloseItem,
+              onOpenItem,
+              rowActionBusy,
+              helpers: {
+                boardVisibleColumns,
+                visibleColumns,
+                boardColumnLabel,
+                formatBoardDisplayValue,
+                deadlineRowClass,
+                normalizeColumnName
+              }
+            })
+          ) : (
+            <table>
             <thead>
               <tr>
-                {list.showItemIdOnBoard && <th>{renderSortableHeader('ID', '__itemId', 'asc')}</th>}
-                {list.showDependenciesOnBoard && <th>Dep</th>}
-                {list.showCreatedAtOnBoard && <th>{renderSortableHeader('Created At', '__createdAt', 'desc')}</th>}
-                {list.showCreatedByOnBoard && <th>{renderSortableHeader('Created By', '__createdBy', 'asc')}</th>}
-                {displayColumns.map((column) => {
-                  const meta = boardSortMetaForDisplayColumn(list, column)
-                  return <th key={column.key}>{meta ? renderSortableHeader(column.label, meta.key, meta.defaultDirection) : column.label}</th>
+                {boardFields.map((field) => {
+                  if (field.kind === 'system') {
+                    const meta =
+                      field.field === 'itemId'
+                        ? { key: '__itemId', defaultDirection: 'asc' as const }
+                        : field.field === 'createdAt'
+                          ? { key: '__createdAt', defaultDirection: 'desc' as const }
+                          : field.field === 'createdBy'
+                            ? { key: '__createdBy', defaultDirection: 'asc' as const }
+                            : null
+                    return <th key={field.key}>{meta ? renderSortableHeader(field.label, meta.key, meta.defaultDirection) : field.label}</th>
+                  }
+                  const meta = boardSortMetaForDisplayColumn(list, field.column)
+                  return <th key={field.key}>{meta ? renderSortableHeader(field.label, meta.key, meta.defaultDirection) : field.label}</th>
                 })}
-                {list.dueDateEnabled && list.showStatusOnBoard && <th>Status</th>}
                 {(onCloseItem || onGiftItem) && <th className="row-actions-heading" />}
               </tr>
             </thead>
@@ -5495,16 +5442,24 @@ function BoardListView({
               {rows.map((row) =>
                 row.kind === 'group' ? (
                   <tr className="group-heading-row" key={`group-${row.group.id}`}>
-                    {list.showItemIdOnBoard && <td className="code-cell">{row.group.showIdOnBoard ? row.group.code : ''}</td>}
-                    {list.showDependenciesOnBoard && <td />}
-                    {list.showCreatedAtOnBoard && <td />}
-                    {list.showCreatedByOnBoard && <td />}
-                    {displayColumns.map((column, index) => (
-                      <td key={column.key}>
-                        {column.kind === 'real' ? formatGroupCell(row.group, column.column, list, index === 0) : ''}
+                    {boardFields.map((field) => (
+                      <td key={field.key}>
+                        {field.kind === 'system'
+                          ? field.field === 'itemId'
+                            ? row.group.showIdOnBoard
+                              ? row.group.code
+                              : ''
+                            : ''
+                          : field.column.kind === 'real'
+                            ? formatGroupCell(
+                                row.group,
+                                field.column.column,
+                                list,
+                                field.key === firstDisplayFieldKey
+                              )
+                            : ''}
                       </td>
                     ))}
-                    {list.dueDateEnabled && list.showStatusOnBoard && <td />}
                     {(onCloseItem || onGiftItem) && <td />}
                   </tr>
                 ) : (
@@ -5513,16 +5468,21 @@ function BoardListView({
                     key={row.item.id}
                     onClick={() => onOpenItem?.(list.id, row.item.id)}
                   >
-                    {list.showItemIdOnBoard && <td className="code-cell">{row.item.displayCode}</td>}
-                    {list.showDependenciesOnBoard && <td>{row.item.dependencyCodes.join(', ') || '-'}</td>}
-                    {list.showCreatedAtOnBoard && <td>{formatSystemDate(row.item.createdAt)}</td>}
-                    {list.showCreatedByOnBoard && <td>{row.item.createdBy}</td>}
-                    {displayColumns.map((column, index) => (
-                      <td key={column.key}>
-                        {formatBoardDisplayValue(row.item, column, list, row.depth, index === 0)}
+                    {boardFields.map((field, index) => (
+                      <td className={field.kind === 'system' && field.field === 'itemId' ? 'code-cell' : undefined} key={field.key}>
+                        {field.kind === 'system'
+                          ? field.field === 'itemId'
+                            ? row.item.displayCode
+                            : field.field === 'dependencies'
+                              ? row.item.dependencyCodes.join(', ') || '-'
+                              : field.field === 'createdAt'
+                                ? formatSystemDate(row.item.createdAt)
+                                : field.field === 'createdBy'
+                                  ? row.item.createdBy
+                                  : row.item.deadlineStatus
+                          : formatBoardDisplayValue(row.item, field.column, list, row.depth, field.key === firstDisplayFieldKey)}
                       </td>
                     ))}
-                    {list.dueDateEnabled && list.showStatusOnBoard && <td>{row.item.deadlineStatus}</td>}
                     {(onCloseItem || onGiftItem) && (
                       <td className="row-actions-cell">
                         {onGiftItem && list.templateType === 'birthday_calendar' && (
@@ -5573,6 +5533,7 @@ function BoardListView({
               )}
             </tbody>
           </table>
+          )}
         </div>
       )}
       {editable &&
@@ -5687,852 +5648,6 @@ function BoardWidgetView({
           />
         ))}
     </article>
-  )
-}
-
-function WidgetTypeIcon({ type }: { type: WidgetType }): ReactElement {
-  const entry = widgetTypes.find((candidate) => candidate.value === type)
-  const Icon = entry?.icon ?? Clock3
-  return <Icon size={16} />
-}
-
-function WidgetRenderer({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  if (compact) return <CompactWidgetPreview widget={widget} />
-  if (widget.type === 'weather') return <WeatherWidget compact={compact} widget={widget} />
-  if (widget.type === 'word_of_day') return <WordOfDayWidget compact={compact} widget={widget} />
-  if (widget.type === 'world_clocks') return <WorldClocksWidget compact={compact} widget={widget} />
-  if (widget.type === 'countdown') return <CountdownWidget compact={compact} widget={widget} />
-  return <ClockWidget compact={compact} widget={widget} />
-}
-
-function CompactWidgetPreview({ widget }: { widget: BoardWidget }): ReactElement {
-  return (
-    <div className="compact-widget-preview">
-      <div className="compact-widget-name">{widget.name}</div>
-    </div>
-  )
-}
-
-function ClockWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  const now = useNow(widget.config.clock?.showSeconds ? 1000 : 60000)
-  const parts = clockTimeParts(now)
-  const seconds = now.toLocaleTimeString(undefined, { second: '2-digit' })
-  const style = widget.config.clock?.style === 'split_date' ? 'split_date' : 'segmented'
-
-  if (style === 'split_date') {
-    return (
-      <div className={`widget-content widget-digital-shell clock-style-split ${compact ? 'compact-widget' : ''}`}>
-        <div className="clock-split-layout" role="presentation">
-          <div className="clock-split-primary">
-            <div className="segment-box segment-box-wide">
-              <span className="segment-box-time-inline">
-                {parts.hour}:{parts.minute}
-                {widget.config.clock?.showSeconds && <small className="segment-box-seconds-inline">:{seconds}</small>}
-              </span>
-            </div>
-          </div>
-          <div className="clock-split-side">
-            <span className="clock-split-weekday">{now.toLocaleDateString(undefined, { weekday: 'long' })}</span>
-            <strong className="clock-split-day">{now.getDate()}</strong>
-            <span className="clock-split-month">{now.toLocaleDateString(undefined, { month: 'long' })}</span>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className={`widget-content widget-digital-shell clock-style-segmented ${compact ? 'compact-widget' : ''}`}>
-      <span className="widget-date-line">{formatWidgetDate(now)}</span>
-      <div className="segment-box-row three" role="presentation">
-        <div className="segment-box">
-          <span className="segment-box-value">{parts.hour}</span>
-        </div>
-        <div className="segment-box">
-          <span className="segment-box-value">{parts.minute}</span>
-        </div>
-        <div className="segment-box segment-box-meridiem">
-          <span className="segment-box-value">{parts.dayPeriod}</span>
-        </div>
-      </div>
-      {widget.config.clock?.showSeconds && <span className="widget-detail-line">Seconds {seconds}</span>}
-    </div>
-  )
-}
-
-function WeatherWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  const [state, setState] = useState<{ loading: boolean; kicker: string; text: string; detail: string }>({
-    loading: true,
-    kicker: 'Current location',
-    text: 'Loading weather',
-    detail: 'Requesting current location...'
-  })
-
-  useEffect(() => {
-    let cancelled = false
-    async function loadWeather(): Promise<void> {
-      try {
-        const location = await resolveWeatherLocation(widget.config.weather)
-        const unit = widget.config.weather?.temperatureUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius'
-        const payload = await window.lpl.fetchWeatherForecast({
-          latitude: location.latitude,
-          longitude: location.longitude,
-          temperatureUnit: unit
-        })
-        if (cancelled) return
-        const unitSymbol = unit === 'fahrenheit' ? 'F' : 'C'
-        setState({
-          loading: false,
-          kicker: location.kicker,
-          text: `${Math.round(payload.temperature)}°${unitSymbol}`,
-          detail: `${weatherCodeLabel(payload.weatherCode, payload.isDay)} · Feels like ${Math.round(payload.apparentTemperature)}°${unitSymbol}`
-        })
-      } catch (error) {
-        if (cancelled) return
-        setState({
-          loading: false,
-          kicker: 'Weather',
-          text: 'Weather unavailable',
-          detail: weatherUnavailableDetail(error)
-        })
-      }
-    }
-    void loadWeather()
-    const timer = window.setInterval(() => void loadWeather(), 15 * 60 * 1000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [
-    widget.config.weather?.customLocation?.label,
-    widget.config.weather?.customLocation?.latitude,
-    widget.config.weather?.customLocation?.longitude,
-    widget.config.weather?.locationMode,
-    widget.config.weather?.temperatureUnit,
-    widget.id
-  ])
-
-  return (
-    <div className={`widget-content weather-widget ${compact ? 'compact-widget' : ''}`}>
-      <span className="widget-kicker">{state.kicker}</span>
-      <strong>{state.text}</strong>
-      <p>{state.loading ? 'Updating…' : state.detail}</p>
-    </div>
-  )
-}
-
-function WordOfDayWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  const today = new Date()
-  const index = Math.floor(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) / 86400000) % wordBank.length
-  const word = wordBank[index]
-  return (
-    <div className={`widget-content word-widget ${compact ? 'compact-widget' : ''}`}>
-      <span className="widget-kicker">Word of the day</span>
-      <strong>{word.word}</strong>
-      <p>{word.meaning}</p>
-    </div>
-  )
-}
-
-function WorldClocksWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  const now = useNow(widget.config.worldClocks?.showSeconds ? 1000 : 60000)
-  const locations = widget.config.worldClocks?.locations ?? []
-  return (
-    <div className={`widget-content widget-digital-shell world-clocks-widget ${compact ? 'compact-widget' : ''}`}>
-      {locations.map((location) => (
-        <div className="world-clock-entry" key={location.id}>
-          <span className="widget-date-line world-clock-location">{location.label}</span>
-          <div className="segment-box world-clock-tile">
-            <small className="world-clock-date-inline">{formatZonedWidgetDate(now, location.timeZone)}</small>
-            <strong className="segment-box-value world-clock-time">
-              {new Intl.DateTimeFormat(undefined, {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false,
-                timeZone: location.timeZone
-              }).format(now)}
-            </strong>
-          </div>
-          <span className="widget-detail-line world-clock-weekday">{formatZonedWeekday(now, location.timeZone)}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function CountdownWidget({ compact, widget }: { compact: boolean; widget: BoardWidget }): ReactElement {
-  const now = useNow(1000)
-  const targetText = widget.config.countdown?.targetAt ?? ''
-  const label = widget.config.countdown?.label?.trim() || 'Next milestone'
-  const target = targetText ? new Date(targetText) : null
-  const validTarget = target && !Number.isNaN(target.getTime()) ? target : null
-
-  if (!validTarget) {
-    return (
-      <div className={`widget-content countdown-widget ${compact ? 'compact-widget' : ''}`}>
-        <span className="widget-kicker">{label}</span>
-        <strong>No target set</strong>
-        <p>Add a date and time in widget settings.</p>
-      </div>
-    )
-  }
-
-  const diff = validTarget.getTime() - now.getTime()
-  const absolute = Math.abs(diff)
-  const totalMinutes = Math.floor(absolute / 60000)
-  const days = Math.floor(totalMinutes / (60 * 24))
-  const hours = Math.floor((totalMinutes % (60 * 24)) / 60)
-  const minutes = totalMinutes % 60
-  const seconds = Math.floor((absolute % 60000) / 1000)
-
-  return (
-    <div className={`widget-content widget-digital-shell countdown-widget ${compact ? 'compact-widget' : ''}`}>
-      <span className="widget-kicker">{label}</span>
-      <div className="segment-box-row four">
-        <div className="segment-box">
-          <span className="segment-box-value">{String(days).padStart(2, '0')}</span>
-        </div>
-        <div className="segment-box">
-          <span className="segment-box-value">{String(hours).padStart(2, '0')}</span>
-        </div>
-        <div className="segment-box">
-          <span className="segment-box-value">{String(minutes).padStart(2, '0')}</span>
-        </div>
-        <div className="segment-box">
-          <span className="segment-box-value">{String(seconds).padStart(2, '0')}</span>
-        </div>
-      </div>
-      <div className="segment-box-label-row four">
-        <span>Days</span>
-        <span>Hours</span>
-        <span>Minutes</span>
-        <span>Seconds</span>
-      </div>
-    </div>
-  )
-}
-
-function AnalogueClockFace({
-  now,
-  showSeconds,
-  timeZone
-}: {
-  now: Date
-  showSeconds: boolean
-  timeZone: string
-}): ReactElement {
-  const parts = zonedTimeParts(now, timeZone)
-  const hourAngle = ((parts.hour % 12) + parts.minute / 60) * 30
-  const minuteAngle = (parts.minute + parts.second / 60) * 6
-  const secondAngle = parts.second * 6
-
-  return (
-    <div className="analogue-clock-face" role="img">
-      <div className="analogue-hand hour-hand" style={{ transform: `translateX(-50%) rotate(${hourAngle}deg)` }} />
-      <div className="analogue-hand minute-hand" style={{ transform: `translateX(-50%) rotate(${minuteAngle}deg)` }} />
-      {showSeconds && <div className="analogue-hand second-hand" style={{ transform: `translateX(-50%) rotate(${secondAngle}deg)` }} />}
-      <div className="analogue-center-dot" />
-    </div>
-  )
-}
-
-function BoardItemModal({
-  allItems,
-  busy,
-  initialGroupId,
-  item,
-  list,
-  mode,
-  onClose,
-  runAction,
-  snapshot
-}: {
-  allItems: BoardItem[]
-  busy: boolean
-  initialGroupId?: string | null
-  item: BoardItem | null
-  list: BoardList
-  mode: 'create' | 'edit'
-  onClose: () => void
-  runAction: RunAction
-  snapshot: BoardSnapshot
-}): ReactElement {
-  const editableColumns = editableItemColumns(list)
-  const [values, setValues] = useState<FormValues>(() => (item ? valuesForItem(item, editableColumns) : blankValues(editableColumns, list)))
-  const [dependencies, setDependencies] = useState<string[]>(item?.dependencyItemIds ?? [])
-  const [groupId, setGroupId] = useState<string | null>(item?.groupId ?? initialGroupId ?? null)
-  const [parentItemId, setParentItemId] = useState<string | null>(item?.parentItemId ?? null)
-  const fieldColumns = projectEditableFieldColumns(list, editableColumns, values)
-  const currentProjectType = list.templateType === 'project' ? projectTypeFromValues(list, values) : null
-
-  useEffect(() => {
-    setValues(item ? valuesForItem(item, editableColumns) : blankValues(editableColumns, list))
-    setDependencies(item?.dependencyItemIds ?? [])
-    setGroupId(item?.groupId ?? initialGroupId ?? null)
-    setParentItemId(item?.parentItemId ?? null)
-  }, [initialGroupId, item?.id, list.id])
-
-  useEffect(() => {
-    if (currentProjectType && isProjectMilestoneLikeType(currentProjectType) && parentItemId) {
-      setParentItemId(null)
-    }
-  }, [currentProjectType, parentItemId])
-
-  function setValue(column: ListColumn, value: FieldValue): void {
-    setValues((current) => ({ ...current, [column.id]: coerceInputValue(column, value) }))
-  }
-
-  const wishlistScore =
-    mode === 'edit' && item && list.templateType === 'wishlist' && item.wishlistRecommendation
-      ? {
-          label: `Buy Score: ${(((item.wishlistRecommendation.buyScore ?? 0) * 100)).toFixed(1)}%`,
-          title: wishlistScoreTooltip(item)
-        }
-      : null
-
-  async function submit(event: FormEvent): Promise<void> {
-    event.preventDefault()
-    const result = await runAction(async () => {
-      return submitProjectAwareItemMutation({
-        mode,
-        item,
-        list,
-        groupId,
-        parentItemId,
-        values,
-        dependencyItemIds: dependencies
-      })
-    })
-    if (result && 'lists' in result) onClose()
-  }
-
-  return createPortal(
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div
-        aria-modal="true"
-        className="modal-card modal-card-large"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-      >
-        <form onSubmit={(event) => void submit(event)}>
-          <div className="modal-header">
-            <div>
-              <p className="eyebrow">{mode === 'edit' ? 'Edit Item' : 'Quick Add Item'}</p>
-              <h3>{mode === 'edit' && item ? itemTitle(item, list) : list.name}</h3>
-            </div>
-            {wishlistScore && (
-              <div
-                className={`modal-meta-chip ${item?.wishlistRecommendation?.missingInputs.length ? 'partial' : ''}`}
-                title={wishlistScore.title}
-              >
-                {wishlistScore.label}
-              </div>
-            )}
-          </div>
-          <div className="modal-body modal-body-form">
-            <div className="field-grid two">
-              <label>
-                <span>Group</span>
-                <select onChange={(event) => setGroupId(event.target.value || null)} value={groupId ?? ''}>
-                  <option value="">List root</option>
-                  {groupOptions(list).map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {list.templateType === 'project' && !isProjectMilestoneLikeType(currentProjectType ?? 'task') && (
-                <label>
-                  <span>Parent Task</span>
-                  <select onChange={(event) => setParentItemId(event.target.value || null)} value={parentItemId ?? ''}>
-                    <option value="">Project root</option>
-                    {projectParentOptions(list, item?.id ?? null).map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
-            <ItemFields columns={fieldColumns} setValue={setValue} values={values} />
-            <DependencyTreePicker
-              currentItemId={item?.id ?? ''}
-              dependencies={dependencies}
-              setDependencies={setDependencies}
-              snapshot={snapshot}
-            />
-          </div>
-          <div className="modal-actions">
-            <button className="icon-button" disabled={busy} onClick={onClose} type="button">
-              Cancel
-            </button>
-            <button className="primary-button" disabled={busy} type="submit">
-              <Save size={16} />
-              {mode === 'edit' ? 'Save Item' : 'Add Item'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>,
-    document.body
-  )
-}
-
-function BoardListSettingsModal({
-  list,
-  onClose,
-  runAction,
-  snapshot
-}: {
-  list: BoardList
-  onClose: () => void
-  runAction: RunAction
-  snapshot: BoardSnapshot
-}): ReactElement {
-  const [name, setName] = useState(list.name)
-  const [listBehavior, setListBehavior] = useState<ListBehavior>(list.templateConfig.behavior ?? 'other')
-  const [displayEnabled, setDisplayEnabled] = useState(list.displayEnabled)
-  const [dueDateEnabled, setDueDateEnabled] = useState(list.dueDateEnabled)
-  const [deadlineMandatory, setDeadlineMandatory] = useState(list.deadlineMandatory)
-  const [sortColumnId, setSortColumnId] = useState<string | null>(list.sortColumnId)
-  const [sortDirection, setSortDirection] = useState<ListSortDirection>(list.sortDirection)
-  const [showItemIdOnBoard, setShowItemIdOnBoard] = useState(list.showItemIdOnBoard)
-  const [showDependenciesOnBoard, setShowDependenciesOnBoard] = useState(list.showDependenciesOnBoard)
-  const [showCreatedAtOnBoard, setShowCreatedAtOnBoard] = useState(list.showCreatedAtOnBoard)
-  const [showCreatedByOnBoard, setShowCreatedByOnBoard] = useState(list.showCreatedByOnBoard)
-  const [showStatusOnBoard, setShowStatusOnBoard] = useState(list.showStatusOnBoard)
-  const [birthdayBoardView, setBirthdayBoardView] = useState<BirthdayBoardView>(list.templateConfig.birthday?.boardView ?? 'this_month')
-  const [wishlistProfile, setWishlistProfile] = useState<WishlistRecommendationProfile>(list.templateConfig.wishlist?.profile ?? 'default')
-  const [showWishlistAdvisedBuyOrder, setShowWishlistAdvisedBuyOrder] = useState(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
-  const [newColumnName, setNewColumnName] = useState('')
-  const [newColumnType, setNewColumnType] = useState<ColumnType>('text')
-  const [messageDialog, setMessageDialog] = useState<{ title: string; message: string } | null>(null)
-  const [columnDrafts, setColumnDrafts] = useState<Record<string, ColumnDraft>>(() => columnDraftsForList(list))
-  const birthdaySortColumn = list.templateType === 'birthday_calendar' ? birthdayCoreColumns(list).find((column) => isBirthdayDateColumn(column)) ?? null : null
-  const effectiveSortColumnId = list.templateType === 'birthday_calendar' ? birthdaySortColumn?.id ?? sortColumnId : sortColumnId
-  const effectiveSortDirection: ListSortDirection = list.templateType === 'birthday_calendar' ? 'asc' : sortDirection
-  const sortColumn = effectiveSortColumnId ? visibleColumns(list).find((column) => column.id === effectiveSortColumnId) : null
-
-  useEffect(() => {
-    setName(list.name)
-    setDisplayEnabled(list.displayEnabled)
-    setDueDateEnabled(list.dueDateEnabled)
-    setDeadlineMandatory(list.deadlineMandatory)
-    setSortColumnId(list.sortColumnId)
-    setSortDirection(list.sortDirection)
-    setShowItemIdOnBoard(list.showItemIdOnBoard)
-    setShowDependenciesOnBoard(list.showDependenciesOnBoard)
-    setShowCreatedAtOnBoard(list.showCreatedAtOnBoard)
-    setShowCreatedByOnBoard(list.showCreatedByOnBoard)
-    setShowStatusOnBoard(list.showStatusOnBoard)
-    setBirthdayBoardView(list.templateConfig.birthday?.boardView ?? 'this_month')
-    setWishlistProfile(list.templateConfig.wishlist?.profile ?? 'default')
-    setShowWishlistAdvisedBuyOrder(list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false)
-    setColumnDrafts(columnDraftsForList(list))
-  }, [
-    list.deadlineMandatory,
-    list.displayEnabled,
-    list.dueDateEnabled,
-    list.id,
-    list.name,
-    list.showCreatedAtOnBoard,
-    list.showCreatedByOnBoard,
-    list.showStatusOnBoard,
-    list.showDependenciesOnBoard,
-    list.showItemIdOnBoard,
-    list.sortColumnId,
-    list.sortDirection
-  ])
-
-  useEffect(() => {
-    setColumnDrafts((current) => {
-      const next: Record<string, ColumnDraft> = {}
-      for (const column of visibleColumns(list)) {
-        next[column.id] = current[column.id] ?? columnDraftFromColumn(column)
-      }
-      return next
-    })
-  }, [list.columns, list.dueDateEnabled])
-
-  async function submit(event: FormEvent): Promise<void> {
-    event.preventDefault()
-    const placement = displayEnabled
-      ? placeListForDisplay(
-          snapshot.lists,
-          snapshot.widgets,
-          list.id,
-          validDisplayGrid(list.grid) ? list.grid : { x: 1, y: 1, w: MIN_LIST_GRID_WIDTH, h: MIN_LIST_GRID_HEIGHT }
-        )
-      : { grid: { x: 0, y: 0, w: 0, h: 0 }, moved: [] }
-
-    if (displayEnabled && !placement) {
-      setMessageDialog({
-        title: 'No Space Available',
-        message: 'This list cannot be shown because the board has no available 4 x 2 slot. Hide another list or resize the layout first.'
-      })
-      return
-    }
-
-    const nextGrid = placement?.grid ?? { x: 0, y: 0, w: 0, h: 0 }
-    const result = await runAction(async () => {
-      if ((placement?.moved.length ?? 0) > 0) {
-        await window.lpl.updateListLayouts([
-          { listId: list.id, grid: nextGrid },
-          ...(placement?.moved ?? []).map((moved) => ({ listId: moved.list.id, grid: moved.grid }))
-        ])
-      }
-      for (const column of visibleColumns(list)) {
-        const draft = columnDrafts[column.id]
-        if (draft && !columnDraftMatchesColumn(draft, column)) {
-          await window.lpl.updateColumn(columnDraftToInput(column, draft))
-        }
-      }
-      return window.lpl.updateList({
-        listId: list.id,
-        name,
-        templateType: list.templateType,
-        templateConfig: listTemplateConfigForSave(list.templateType, listBehavior, birthdayBoardView, wishlistProfile, showWishlistAdvisedBuyOrder),
-        grid: nextGrid,
-        dueDateEnabled,
-        dueDateColumnId: list.dueDateColumnId,
-        deadlineMandatory,
-        columnSortOrder: list.columnSortOrder,
-        sortColumnId: effectiveSortColumnId,
-        sortDirection: effectiveSortColumnId ? effectiveSortDirection : 'manual',
-        displayEnabled,
-        showItemIdOnBoard,
-        showDependenciesOnBoard,
-        showCreatedAtOnBoard,
-        showCreatedByOnBoard,
-        showStatusOnBoard
-      })
-    })
-    if (result && 'lists' in result) onClose()
-  }
-
-  function addColumn(): void {
-    if (!newColumnName.trim()) return
-    runAction(() => window.lpl.createColumn({ listId: list.id, name: newColumnName, type: newColumnType }))
-    setNewColumnName('')
-    setNewColumnType('text')
-  }
-
-  function updateColumnDraft(column: ListColumn, patch: Partial<ColumnDraft>): void {
-    setColumnDrafts((current) => ({
-      ...current,
-      [column.id]: {
-        ...(current[column.id] ?? columnDraftFromColumn(column)),
-        ...patch
-      }
-    }))
-    if (column.role === 'deadline' && patch.required !== undefined) {
-      setDeadlineMandatory(patch.required)
-    }
-  }
-
-  function saveColumnDraft(column: ListColumn): void {
-    const draft = columnDrafts[column.id] ?? columnDraftFromColumn(column)
-    runAction(async () => {
-      await window.lpl.updateColumn(columnDraftToInput(column, draft))
-      if (column.role === 'deadline' && draft.required !== list.deadlineMandatory) {
-        return window.lpl.updateList({
-          ...listInput(list),
-          deadlineMandatory: draft.required,
-          dueDateEnabled: true
-        })
-      }
-      return window.lpl.getBoardSnapshot(list.boardId, 'admin')
-    })
-  }
-
-  function updateColumnOrder(column: ListColumn, order: number): void {
-    const draft = columnDrafts[column.id] ?? columnDraftFromColumn(column)
-    runAction(() => window.lpl.updateColumn({ ...columnDraftToInput(column, draft), order }))
-  }
-
-  return (
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div
-        aria-modal="true"
-        className="modal-card modal-card-wide"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-      >
-        <form onSubmit={(event) => void submit(event)}>
-          <div className="modal-header">
-            <div>
-              <p className="eyebrow">List Settings</p>
-              <h3>{list.name}</h3>
-            </div>
-          </div>
-          <div className="modal-body modal-body-form">
-            <section className="modal-section">
-              <div className="field-grid two">
-                <label>
-                  <span>List name</span>
-                  <input onChange={(event) => setName(event.target.value)} required value={name} />
-                </label>
-                {list.templateType === 'custom' && (
-                  <label>
-                    <span>List Behaviour</span>
-                    <select onChange={(event) => setListBehavior(event.target.value as ListBehavior)} value={listBehavior}>
-                      {listBehaviorOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <label className="toggle-field">
-                  <input checked={displayEnabled} onChange={(event) => setDisplayEnabled(event.target.checked)} type="checkbox" />
-                  <span>Show list on board</span>
-                </label>
-                <label className="toggle-field">
-                  <input
-                    checked={dueDateEnabled}
-                    onChange={(event) => {
-                      setDueDateEnabled(event.target.checked)
-                      if (!event.target.checked) setDeadlineMandatory(false)
-                    }}
-                    type="checkbox"
-                  />
-                  <span>List has deadline</span>
-                </label>
-                <label className="toggle-field">
-                  <input
-                    checked={deadlineMandatory}
-                    disabled={!dueDateEnabled}
-                    onChange={(event) => setDeadlineMandatory(event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>Deadline mandatory</span>
-                </label>
-                <label>
-                  <span>Sort by</span>
-                  <select
-                    disabled={list.templateType === 'birthday_calendar'}
-                    onChange={(event) => {
-                      const nextColumnId = event.target.value || null
-                      setSortColumnId(nextColumnId)
-                      const nextColumn = visibleColumns(list).find((column) => column.id === nextColumnId)
-                      setSortDirection(nextColumn ? defaultSortDirection(nextColumn) : 'manual')
-                    }}
-                    value={effectiveSortColumnId ?? ''}
-                  >
-                    <option value="">Manual order</option>
-                    {visibleColumns(list).map((column) => (
-                      <option key={column.id} value={column.id}>
-                        {column.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Sort order</span>
-                  <select
-                    disabled={!sortColumn || list.templateType === 'birthday_calendar'}
-                    onChange={(event) => setSortDirection(event.target.value as ListSortDirection)}
-                    value={sortColumn ? effectiveSortDirection : 'manual'}
-                  >
-                    <option value="manual">Manual</option>
-                    {sortColumn &&
-                      sortDirectionOptions(sortColumn).map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                {list.templateType === 'birthday_calendar' && (
-                  <label>
-                    <span>Board birthday view</span>
-                    <select onChange={(event) => setBirthdayBoardView(event.target.value as BirthdayBoardView)} value={birthdayBoardView}>
-                      {birthdayBoardViewOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {list.templateType === 'wishlist' && (
-                  <label>
-                    <span>Recommendation profile</span>
-                    <select onChange={(event) => setWishlistProfile(event.target.value as WishlistRecommendationProfile)} value={wishlistProfile}>
-                      {wishlistRecommendationProfileOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    <small className="field-help-text">
-                      {wishlistRecommendationProfileOptions.find((option) => option.value === wishlistProfile)?.description}
-                    </small>
-                  </label>
-                )}
-              </div>
-            </section>
-            <section className="modal-section">
-              <EditorHeading eyebrow="Display" title="Board Columns" />
-              {list.templateType === 'birthday_calendar' && <p className="locked-template-note">Birthday Calendar keeps its core fields protected, but you can still add extra fields around them.</p>}
-              <div className="column-list">
-                <SystemColumnRow
-                  name="Item ID"
-                  onToggle={setShowItemIdOnBoard}
-                  showOnBoard={showItemIdOnBoard}
-                  typeLabel="system"
-                />
-                <SystemColumnRow
-                  name="Dependencies"
-                  onToggle={setShowDependenciesOnBoard}
-                  showOnBoard={showDependenciesOnBoard}
-                  typeLabel="system"
-                />
-                <SystemColumnRow
-                  name="Created At"
-                  onToggle={setShowCreatedAtOnBoard}
-                  showOnBoard={showCreatedAtOnBoard}
-                  typeLabel="system"
-                />
-                <SystemColumnRow
-                  name="Created By"
-                  onToggle={setShowCreatedByOnBoard}
-                  showOnBoard={showCreatedByOnBoard}
-                  typeLabel="system"
-                />
-                <SystemColumnRow
-                  name="Status"
-                  onToggle={setShowStatusOnBoard}
-                  showOnBoard={showStatusOnBoard}
-                  typeLabel="system"
-                />
-                {list.templateType === 'wishlist' && (
-                  <SystemColumnRow
-                    name="Advised Buy Order"
-                    onToggle={setShowWishlistAdvisedBuyOrder}
-                    showOnBoard={showWishlistAdvisedBuyOrder}
-                    statusLabel="Calculated"
-                    typeLabel="calculated"
-                  />
-                )}
-                {visibleColumns(list).map((column) => (
-                  <ColumnRow
-                    column={column}
-                    draft={columnDrafts[column.id] ?? columnDraftFromColumn(column)}
-                    key={column.id}
-                    list={list}
-                    locked={false}
-                    manualOrderEnabled={list.columnSortOrder === 'manual'}
-                    order={visibleColumns(list).findIndex((candidate) => candidate.id === column.id) + 1}
-                    orderCount={visibleColumns(list).length}
-                    onDraftChange={(patch) => updateColumnDraft(column, patch)}
-                    onOrderChange={(order) => updateColumnOrder(column, order)}
-                    onSave={() => saveColumnDraft(column)}
-                    runAction={runAction}
-                  />
-                ))}
-              </div>
-              <div className="add-column-row">
-                <input onChange={(event) => setNewColumnName(event.target.value)} placeholder="New column" value={newColumnName} />
-                <select onChange={(event) => setNewColumnType(event.target.value as ColumnType)} value={newColumnType}>
-                  {columnTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-                <button className="icon-button" onClick={addColumn} type="button">
-                  <Plus size={16} />
-                  Add Field
-                </button>
-              </div>
-            </section>
-          </div>
-          <div className="modal-actions">
-            <button className="icon-button" onClick={onClose} type="button">
-              Cancel
-            </button>
-            <button className="primary-button" type="submit">
-              <Save size={16} />
-              Save List
-            </button>
-          </div>
-        </form>
-        {messageDialog && <MessageModal title={messageDialog.title} message={messageDialog.message} onClose={() => setMessageDialog(null)} />}
-      </div>
-    </div>
-  )
-}
-
-function CloseItemModal({
-  action,
-  busy,
-  comments,
-  itemTitle,
-  mode,
-  onCancel,
-  onCommentsChange,
-  onConfirm
-}: {
-  action: 'completed' | 'cancelled'
-  busy: boolean
-  comments: string
-  itemTitle: string
-  mode: CloseConfirmationMode
-  onCancel: () => void
-  onCommentsChange: (value: string) => void
-  onConfirm: () => void | Promise<void>
-}): ReactElement {
-  const message =
-    mode === 'without_comments'
-      ? action === 'completed'
-        ? 'You are about to mark this item as completed. Please confirm.'
-        : 'You are about to cancel this task before completion. Please confirm.'
-      : action === 'completed'
-        ? 'You are about to mark this item as completed. Do you want to log any comments?'
-        : 'You are about to cancel this task before completion. Do you want to log any comments?'
-
-  return (
-    <div className="modal-backdrop" onClick={onCancel} role="presentation">
-      <div
-        aria-modal="true"
-        className="modal-card"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-      >
-        <div className="modal-header">
-          <div>
-            <p className="eyebrow">Close Item</p>
-            <h3>{itemTitle}</h3>
-          </div>
-        </div>
-        <div className="modal-body">
-          <p>{message}</p>
-          {mode === 'with_comments' && (
-            <label className="modal-field">
-              <span>Comments</span>
-              <textarea
-                onChange={(event) => onCommentsChange(event.target.value)}
-                placeholder="Add an optional note for the closure log"
-                rows={4}
-                value={comments}
-              />
-            </label>
-          )}
-        </div>
-        <div className="modal-actions">
-          <button className="icon-button" disabled={busy} onClick={onCancel} type="button">
-            Cancel
-          </button>
-          <button className="primary-button" disabled={busy} onClick={() => void onConfirm()} type="button">
-            {action === 'completed' ? 'Mark Completed' : 'Cancel Task'}
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -6669,298 +5784,6 @@ function DaySummaryModal({
         </div>
       </div>
     </div>
-  )
-}
-
-function ItemFields({
-  columns,
-  setValue,
-  values
-}: {
-  columns: ListColumn[]
-  setValue: (column: ListColumn, value: FieldValue) => void
-  values: FormValues
-}): ReactElement {
-  return (
-    <div className="field-grid two">
-      {columns.map((column) => {
-        if (isItemLevelRecurringTimeColumn(column)) {
-          const dateValue = dateFieldValue(values[column.id])
-          return (
-            <div className="item-recurring-field" key={column.id}>
-              <label>
-                <span>{column.name}</span>
-                <input
-                  onChange={(event) => setValue(column, { ...dateValue, value: event.target.value })}
-                  required={column.required}
-                  type="time"
-                  value={dateValue.value}
-                />
-              </label>
-              <label>
-                <span>Recurrence</span>
-                <select
-                  onChange={(event) => {
-                    const recurrence = event.target.value as RecurrenceMode
-                    setValue(column, {
-                      ...dateValue,
-                      recurrence,
-                      recurrenceDays: recurrenceNeedsWeekdays(recurrence) ? dateValue.recurrenceDays : [],
-                      recurrenceInterval: recurrenceNeedsInterval(recurrence) ? dateValue.recurrenceInterval : 1
-                    })
-                  }}
-                  value={dateValue.recurrence}
-                >
-                  <option value="none">None</option>
-                  <option value="daily">Daily</option>
-                  <option value="weekly">Weekly</option>
-                  <option value="interval_weeks">Every x weeks</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="interval_months">Every x months</option>
-                  <option value="custom_weekdays">Weekdays...</option>
-                </select>
-              </label>
-              {recurrenceNeedsInterval(dateValue.recurrence) && (
-                <label>
-                  <span>{dateValue.recurrence === 'interval_months' ? 'Months' : 'Weeks'}</span>
-                  <input
-                    min={1}
-                    onChange={(event) =>
-                      setValue(column, {
-                        ...dateValue,
-                        recurrenceInterval: normalizeRecurrenceInterval(Number.parseInt(event.target.value, 10))
-                      })
-                    }
-                    type="number"
-                    value={dateValue.recurrenceInterval}
-                  />
-                </label>
-              )}
-              {recurrenceNeedsWeekdays(dateValue.recurrence) && (
-                <fieldset className="weekday-picker">
-                  <legend>Days</legend>
-                  {weekdayLabels.map((day, index) => (
-                    <label key={day.long}>
-                      <input
-                        checked={dateValue.recurrenceDays.includes(index)}
-                        onChange={(event) =>
-                          setValue(column, {
-                            ...dateValue,
-                            recurrenceDays: event.target.checked
-                              ? [...dateValue.recurrenceDays, index].sort((a, b) => a - b)
-                              : dateValue.recurrenceDays.filter((dayIndex) => dayIndex !== index)
-                          })
-                        }
-                        type="checkbox"
-                      />
-                      {day.short}
-                    </label>
-                  ))}
-                </fieldset>
-              )}
-            </div>
-          )
-        }
-        return (
-          <label key={column.id}>
-            <span>{column.type === 'currency' ? `${column.name} (${column.currencyCode})` : column.name}</span>
-            {column.type === 'boolean' ? (
-              <input checked={Boolean(values[column.id])} onChange={(event) => setValue(column, event.target.checked)} type="checkbox" />
-            ) : column.type === 'choice' ? (
-              <select
-                multiple={column.choiceConfig?.selection === 'multi'}
-                onChange={(event) =>
-                  setValue(
-                    column,
-                    column.choiceConfig?.selection === 'multi'
-                      ? Array.from(event.target.selectedOptions, (option) => option.value)
-                      : event.target.value
-                  )
-                }
-                required={column.required}
-                value={choiceInputValue(values[column.id], column)}
-              >
-                {column.choiceConfig?.selection !== 'multi' && <option value="">None</option>}
-                {(column.choiceConfig?.options ?? []).map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                maxLength={column.maxLength ?? undefined}
-                onChange={(event) => setValue(column, event.target.value)}
-                required={column.required}
-                type={inputType(column)}
-                value={inputValue(values[column.id], column)}
-              />
-            )}
-          </label>
-        )
-      })}
-    </div>
-  )
-}
-
-function DependencyTreePicker({
-  currentItemId,
-  dependencies,
-  setDependencies,
-  snapshot
-}: {
-  currentItemId: string
-  dependencies: string[]
-  setDependencies: Dispatch<SetStateAction<string[]>>
-  snapshot: BoardSnapshot
-}): ReactElement {
-  const [boardExpanded, setBoardExpanded] = useState(false)
-  const [expandedLists, setExpandedLists] = useState<Record<string, boolean>>({})
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
-
-  useEffect(() => {
-    setBoardExpanded(false)
-    setExpandedLists({})
-    setExpandedGroups({})
-  }, [snapshot.id, currentItemId])
-
-  function toggleItemDependency(itemId: string, checked: boolean): void {
-    setDependencies((current) => (checked ? [...current, itemId] : current.filter((id) => id !== itemId)))
-  }
-
-  function renderItemRow(item: BoardItem, list: BoardList, depth: number): ReactElement {
-    return (
-      <div className="dependency-tree-row" key={item.id}>
-        <label className="dependency-tree-item" style={{ paddingInlineStart: `${0.65 + depth * 1.05}rem` }}>
-          <input
-            checked={dependencies.includes(item.id)}
-            onChange={(event) => toggleItemDependency(item.id, event.target.checked)}
-            type="checkbox"
-          />
-          <span>{itemTitle(item, list)}</span>
-          <small>{item.displayCode}</small>
-        </label>
-      </div>
-    )
-  }
-
-  function renderGroupRows(group: ItemGroup, list: BoardList, depth: number): ReactElement {
-    const expanded = expandedGroups[group.id] ?? true
-    const childGroups = list.groups.filter((candidate) => candidate.parentGroupId === group.id)
-    const childItems = projectRootItemsForBucket(list, group.id).filter((candidate) => candidate.id !== currentItemId)
-    const hasChildren = childGroups.length > 0 || childItems.length > 0
-
-    return (
-      <div key={group.id}>
-        <button
-          className="dependency-tree-branch dependency-tree-level-group"
-          onClick={() => {
-            if (hasChildren) {
-              setExpandedGroups((current) => ({ ...current, [group.id]: !expanded }))
-            }
-          }}
-          style={{ paddingInlineStart: `${0.65 + depth * 1.05}rem` }}
-          type="button"
-        >
-          <span className="dependency-tree-expander">
-            {hasChildren ? (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
-          </span>
-          <span>{group.name}</span>
-          <small>{group.code}</small>
-        </button>
-        {expanded && (
-          <>
-            {childGroups.map((child) => renderGroupRows(child, list, depth + 1))}
-            {childItems.map((child) => renderProjectDependencyItemRows(child, list, depth + 1, currentItemId, dependencies, setDependencies))}
-          </>
-        )}
-      </div>
-    )
-  }
-
-  function renderListRows(list: BoardList): ReactElement {
-    const expanded = expandedLists[list.id] ?? false
-    const childGroups = list.groups.filter((group) => !group.parentGroupId)
-    const rootItems = projectRootItemsForBucket(list, null).filter((candidate) => candidate.id !== currentItemId)
-    const hasChildren = childGroups.length > 0 || rootItems.length > 0
-
-    return (
-      <div key={list.id}>
-        <button
-          className="dependency-tree-branch dependency-tree-level-list"
-          onClick={() => {
-            if (hasChildren) {
-              setExpandedLists((current) => ({ ...current, [list.id]: !expanded }))
-            }
-          }}
-          style={{ paddingInlineStart: '1.7rem' }}
-          type="button"
-        >
-          <span className="dependency-tree-expander">
-            {hasChildren ? (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
-          </span>
-          <span>{list.name}</span>
-          <small>{list.code}</small>
-        </button>
-        {expanded && (
-          <>
-            {childGroups.map((group) => renderGroupRows(group, list, 2))}
-            {rootItems.map((rootItem) => renderProjectDependencyItemRows(rootItem, list, 2, currentItemId, dependencies, setDependencies))}
-          </>
-        )}
-      </div>
-    )
-  }
-
-  return (
-    <div className="dependency-tree-panel">
-      <div className="dependency-tree-toolbar">
-        <span>Board Dependency Tree</span>
-        <small>Select the tasks this item depends on.</small>
-      </div>
-      <div className="dependency-tree-scroll">
-        <button className="dependency-tree-branch dependency-tree-level-board" onClick={() => setBoardExpanded((current) => !current)} type="button">
-          <span className="dependency-tree-expander">{boardExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-          <span>{snapshot.name}</span>
-          <small>{snapshot.lists.length} lists</small>
-        </button>
-        {boardExpanded && (
-          <div className="dependency-tree-body">
-            {snapshot.lists.map((boardList) => renderListRows(boardList))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function EditorHeading({ eyebrow, title }: { eyebrow: string; title: string }): ReactElement {
-  return (
-    <header className="panel-heading">
-      <div>
-        <p className="eyebrow">{eyebrow}</p>
-        <h3>{title}</h3>
-      </div>
-    </header>
-  )
-}
-
-function CollapsibleEditorSectionHeader({
-  expanded,
-  onToggle,
-  title
-}: {
-  expanded: boolean
-  onToggle: () => void
-  title: string
-}): ReactElement {
-  return (
-    <button className="editor-section-toggle" onClick={onToggle} type="button">
-      <span className="editor-section-toggle-main">
-        <span className="editor-section-toggle-icon">{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
-        <h3>{title}</h3>
-      </span>
-    </button>
   )
 }
 
@@ -8224,24 +7047,6 @@ function canPlaceWidgetGrid(
   )
 }
 
-function visibleColumns(list: BoardList): ListColumn[] {
-  return list.columns.filter(
-    (column) =>
-      column.name !== 'Item ID' &&
-      !column.name.toLowerCase().includes('dependency') &&
-      (column.role !== 'deadline' || list.dueDateEnabled)
-  )
-}
-
-function isComputedTemplateColumn(list: BoardList, column: ListColumn): boolean {
-  if (list.templateType === 'shopping_list' && normalizeColumnName(column.name) === 'cost') return true
-  return list.templateType === 'wishlist' && normalizeColumnName(column.name) === 'total cost'
-}
-
-function editableItemColumns(list: BoardList): ListColumn[] {
-  return visibleColumns(list).filter((column) => !isComputedTemplateColumn(list, column))
-}
-
 function projectEditableFieldColumns(list: BoardList, columns: ListColumn[], values: FormValues): ListColumn[] {
   if (list.templateType !== 'project') return columns
   const type = projectTypeFromValues(list, values)
@@ -8264,25 +7069,6 @@ function boardVisibleColumns(list: BoardList): ListColumn[] {
     return birthdayCoreColumns(list).filter((column) => !isBirthdayBirthYearColumn(column))
   }
   return visibleColumns(list).filter((column) => column.showOnBoard)
-}
-
-function blankValues(columns: ListColumn[], list?: BoardList): FormValues {
-  return columns.reduce<FormValues>((acc, column) => {
-    if (list?.templateType === 'wishlist' && normalizeColumnName(column.name) === 'pieces') {
-      acc[column.id] = 1
-      return acc
-    }
-    acc[column.id] = column.type === 'boolean' ? false : column.type === 'choice' && column.choiceConfig?.selection === 'multi' ? [] : ''
-    return acc
-  }, {})
-}
-
-function valuesForItem(item: BoardItem, columns: ListColumn[]): FormValues {
-  return columns.reduce<FormValues>((acc, column) => {
-    acc[column.id] =
-      item.values[column.id] ?? (column.type === 'boolean' ? false : column.type === 'choice' && column.choiceConfig?.selection === 'multi' ? [] : '')
-    return acc
-  }, {})
 }
 
 type SubmitProjectItemMutationInput = {
@@ -8688,11 +7474,6 @@ function confineProjectChildDatesToTimeline(
   return nextValues
 }
 
-function itemTitle(item: BoardItem, list: BoardList): string {
-  const nameColumn = visibleColumns(list)[0]
-  return String(item.values[nameColumn?.id] ?? item.displayCode)
-}
-
 function wishlistMissingInputLabel(input: 'wishmeter' | 'priority' | 'price'): string {
   if (input === 'wishmeter') return 'Wishmeter'
   if (input === 'priority') return 'Priority'
@@ -8707,14 +7488,6 @@ function wishlistScoreTooltip(item: BoardItem): string {
   }
   const missing = recommendation.missingInputs.map(wishlistMissingInputLabel).join(', ')
   return `${missing} ${recommendation.missingInputs.length === 1 ? 'is' : 'are'} missing and ${recommendation.missingInputs.length === 1 ? 'does' : 'do'} not impact the result.`
-}
-
-function normalizeColumnName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
 }
 
 const summaryCountTextColumns = new Set(['item name', 'task', 'task name', 'product', 'entry', 'title', 'name'].map((name) => normalizeColumnName(name)))
@@ -8795,11 +7568,6 @@ function deadlineClass(tone: BoardItem['deadlineTone']): string {
   if (tone === 'soon') return 'deadline-soon'
   if (tone === 'ok') return 'deadline-ok'
   return 'deadline-none'
-}
-
-function dateStringFromField(value: FieldValue | undefined): string | null {
-  if (isDateFieldValue(value)) return value.value || null
-  return typeof value === 'string' && value.length > 0 ? value : null
 }
 
 function groupName(groupId: string | null, list: BoardList): string {
@@ -9199,50 +7967,6 @@ function defaultSortDirection(column: ListColumn): Exclude<ListSortDirection, 'm
   return 'asc'
 }
 
-function defaultChoiceConfig(name: string): ChoiceConfig {
-  const priority = name.toLowerCase().includes('priority')
-  const wishmeter = name.toLowerCase().includes('wishmeter')
-  const labels = wishmeter
-    ? ["It's so fluffy I'm gonna die!", 'My precious!', 'Shut up and take my money!', 'Gotta get me one of those!', 'Asking for a friend...']
-    : priority
-      ? ['Highest', 'High', 'Medium', 'Low', 'Lowest']
-      : ['Option 1', 'Option 2', 'Option 3']
-  return {
-    selection: 'single',
-    ranked: priority || wishmeter,
-    options: labels.map((label, index) => ({ id: choiceId(label, index), label, rank: index + 1 }))
-  }
-}
-
-function choiceConfigToText(config: ChoiceConfig): string {
-  return config.options.map((option) => `${option.rank}. ${option.label}`).join('\n')
-}
-
-function parseChoiceOptions(text: string, existing?: ChoiceConfig): ChoiceConfig['options'] {
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => {
-      const match = line.match(/^(\d+)\s*[).:|-]\s*(.+)$/)
-      const label = match ? match[2].trim() : line
-      const previous = existing?.options.find((option) => option.label === label) ?? existing?.options[index]
-      return {
-        id: previous?.id ?? choiceId(label, index),
-        label,
-        rank: match ? Number(match[1]) : index + 1
-      }
-    })
-}
-
-function choiceId(label: string, index: number): string {
-  const slug = label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-  return slug || `choice-${index + 1}`
-}
-
 function listInput(list: BoardList): Parameters<typeof window.lpl.updateList>[0] {
   return {
     listId: list.id,
@@ -9275,14 +7999,33 @@ function defaultListBehavior(templateType: ListTemplateType): ListBehavior {
 function listTemplateConfigForSave(
   templateType: ListTemplateType,
   behavior: ListBehavior,
+  systemDisplayNames: { itemId: string; dependencies: string; createdAt: string; createdBy: string; status: string },
   birthdayBoardView: BirthdayBoardView,
   wishlistProfile: WishlistRecommendationProfile,
-  showWishlistAdvisedBuyOrder: boolean
+  showWishlistAdvisedBuyOrder: boolean,
+  wishlistAdvisedBuyOrderDisplayName: string,
+  boardFieldOrder: string[] = []
 ) {
   return {
     behavior: templateType === 'custom' ? behavior : defaultListBehavior(templateType),
+    boardFieldOrder,
+    systemDisplayNames: {
+      itemId: systemDisplayNames.itemId.trim() || null,
+      dependencies: systemDisplayNames.dependencies.trim() || null,
+      createdAt: systemDisplayNames.createdAt.trim() || null,
+      createdBy: systemDisplayNames.createdBy.trim() || null,
+      status: systemDisplayNames.status.trim() || null
+    },
     ...(templateType === 'birthday_calendar' ? { birthday: { boardView: birthdayBoardView } } : {}),
-    ...(templateType === 'wishlist' ? { wishlist: { profile: wishlistProfile, showAdvisedBuyOrder: showWishlistAdvisedBuyOrder } } : {})
+    ...(templateType === 'wishlist'
+      ? {
+          wishlist: {
+            profile: wishlistProfile,
+            showAdvisedBuyOrder: showWishlistAdvisedBuyOrder,
+            advisedBuyOrderDisplayName: wishlistAdvisedBuyOrderDisplayName.trim() || null
+          }
+        }
+      : {})
   }
 }
 
@@ -9437,9 +8180,11 @@ function configureWizardList(
   const templateConfig = listTemplateConfigForSave(
     list.templateType,
     defaultListBehavior(list.templateType),
+    { itemId: '', dependencies: '', createdAt: '', createdBy: '', status: '' },
     data.birthdayBoardView,
     'default',
-    false
+    false,
+    ''
   )
   const birthdayCalendar = draft.templateType === 'birthday_calendar'
   return {
@@ -10351,6 +9096,7 @@ function tutorialColumn(
     id,
     listId,
     name,
+    displayName: null,
     type,
     order,
     required: options.required ?? false,
@@ -10361,7 +9107,7 @@ function tutorialColumn(
     role: options.role ?? null,
     choiceConfig: options.choiceConfig ?? null,
     dateDisplayFormat: options.dateDisplayFormat ?? 'date',
-    durationDisplayFormat: options.durationDisplayFormat ?? 'days_hours',
+    durationDisplayFormat: options.durationDisplayFormat ?? 'hours',
     recurrence: 'none',
     recurrenceDays: [],
     currencyCode: options.currencyCode ?? 'EUR',
@@ -10467,12 +9213,6 @@ function wizardWidgetConfig(draft: WizardWidgetDraft, existing: BoardWidgetConfi
   return existing
 }
 
-type BoardDisplayColumn =
-  | { kind: 'real'; key: string; label: string; column: ListColumn }
-  | { kind: 'birthday_turning'; key: string; label: string }
-  | { kind: 'wishlist_advised_buy_order'; key: string; label: string }
-  | { kind: 'project_gantt'; key: string; label: string }
-
 type BoardListSortDirection = 'asc' | 'desc'
 
 type BoardListSortState = {
@@ -10496,32 +9236,176 @@ function isBirthdayBirthYearColumn(column: ListColumn): boolean {
   return normalized === 'birth year' || normalized === 'year of birth'
 }
 
-function birthdayBoardColumns(list: BoardList, columns: ListColumn[]): BoardDisplayColumn[] {
-  if (list.templateType === 'wishlist') {
-    const entries: BoardDisplayColumn[] = columns.map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column }))
-    if (!list.templateConfig.wishlist?.showAdvisedBuyOrder) return entries
-    const priorityIndex = entries.findIndex((entry) => entry.kind === 'real' && normalizeColumnName(entry.column.name) === 'priority')
-    const insertIndex = priorityIndex >= 0 ? priorityIndex + 1 : entries.length
-    entries.splice(insertIndex, 0, { kind: 'wishlist_advised_buy_order', key: 'wishlist-advised-buy-order', label: 'Advised Buy Order' })
-    return entries
+function buildBoardDisplayColumns(list: BoardList): BoardDisplayColumn[] {
+  const templateModule = getListTemplateModule(list.templateType)
+  if (templateModule.buildBoardColumns) {
+    return templateModule.buildBoardColumns(list, {
+      boardVisibleColumns,
+      visibleColumns,
+      boardColumnLabel,
+      normalizeColumnName
+    })
   }
-  if (list.templateType === 'project') {
-    return [
-      ...columns.map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column })),
-      { kind: 'project_gantt' as const, key: 'project-gantt', label: 'Gantt' }
-    ]
-  }
-  if (list.templateType !== 'birthday_calendar') return columns.map((column) => ({ kind: 'real', key: column.id, label: column.name, column }))
-  const core = birthdayCoreColumns(list)
-  return [
-    ...core
-      .filter((column) => {
-        const normalized = normalizeColumnName(column.name)
-        return normalized !== 'birth year' && normalized !== 'year of birth'
-      })
-      .map((column) => ({ kind: 'real' as const, key: column.id, label: column.name, column })),
-    { kind: 'birthday_turning', key: 'birthday-turning', label: 'Turning' }
+  return boardVisibleColumns(list).map((column) => ({
+    kind: 'real',
+    key: column.id,
+    label: boardColumnLabel(column),
+    column
+  }))
+}
+
+function defaultStructureFieldEntries(
+  list: BoardList,
+  systemDisplayNames?: { itemId?: string; dependencies?: string; createdAt?: string; createdBy?: string; status?: string },
+  systemVisibility?: {
+    itemId?: boolean
+    dependencies?: boolean
+    createdAt?: boolean
+    createdBy?: boolean
+    status?: boolean
+  },
+  wishlistOverrides?: { showAdvisedBuyOrder?: boolean; advisedBuyOrderDisplayName?: string }
+): StructureFieldEntry[] {
+  const systemEntries: StructureFieldEntry[] = [
+    {
+      kind: 'system',
+      key: 'system:itemId',
+      field: 'itemId',
+      name: 'Item ID',
+      displayName: systemDisplayNames?.itemId ?? '',
+      typeLabel: 'system',
+      statusLabel: 'System',
+      showOnBoard: systemVisibility?.itemId ?? list.showItemIdOnBoard
+    },
+    {
+      kind: 'system',
+      key: 'system:dependencies',
+      field: 'dependencies',
+      name: 'Dependencies',
+      displayName: systemDisplayNames?.dependencies ?? '',
+      typeLabel: 'system',
+      statusLabel: 'System',
+      showOnBoard: systemVisibility?.dependencies ?? list.showDependenciesOnBoard
+    },
+    {
+      kind: 'system',
+      key: 'system:createdAt',
+      field: 'createdAt',
+      name: 'Created At',
+      displayName: systemDisplayNames?.createdAt ?? '',
+      typeLabel: 'system',
+      statusLabel: 'System',
+      showOnBoard: systemVisibility?.createdAt ?? list.showCreatedAtOnBoard
+    },
+    {
+      kind: 'system',
+      key: 'system:createdBy',
+      field: 'createdBy',
+      name: 'Created By',
+      displayName: systemDisplayNames?.createdBy ?? '',
+      typeLabel: 'system',
+      statusLabel: 'System',
+      showOnBoard: systemVisibility?.createdBy ?? list.showCreatedByOnBoard
+    },
+    {
+      kind: 'system',
+      key: 'system:status',
+      field: 'status',
+      name: 'Status',
+      displayName: systemDisplayNames?.status ?? '',
+      typeLabel: 'system',
+      statusLabel: 'System',
+      showOnBoard: systemVisibility?.status ?? list.showStatusOnBoard
+    }
   ]
+
+  const specialEntries: StructureFieldEntry[] =
+    list.templateType === 'wishlist'
+      ? [
+          {
+            kind: 'special',
+            key: 'special:wishlistAdvisedBuyOrder',
+            field: 'wishlistAdvisedBuyOrder',
+            name: 'Advised Buy Order',
+            displayName: wishlistOverrides?.advisedBuyOrderDisplayName ?? list.templateConfig.wishlist?.advisedBuyOrderDisplayName ?? '',
+            typeLabel: 'calculated',
+            statusLabel: 'Calculated',
+            showOnBoard: wishlistOverrides?.showAdvisedBuyOrder ?? list.templateConfig.wishlist?.showAdvisedBuyOrder ?? false
+          }
+        ]
+      : []
+
+  const columnEntries: StructureFieldEntry[] = visibleColumns(list).map((column) => ({
+    kind: 'column',
+    key: column.id,
+    column,
+    name: column.name,
+    displayName: column.displayName ?? '',
+    typeLabel: column.type,
+    statusLabel: column.required ? 'Required' : '',
+    showOnBoard: column.showOnBoard
+  }))
+
+  return [...systemEntries, ...specialEntries, ...columnEntries]
+}
+
+function normalizedBoardFieldOrderKeys(
+  list: BoardList,
+  structureEntries: StructureFieldEntry[] = defaultStructureFieldEntries(list)
+): BoardFieldOrderKey[] {
+  const defaults = structureEntries.map((entry) => entry.key)
+  const saved = list.templateConfig.boardFieldOrder ?? []
+  const validSaved = saved.filter((key) => defaults.includes(key))
+  const missingDefaults = defaults.filter((key) => !validSaved.includes(key))
+  return [...validSaved, ...missingDefaults]
+}
+
+function orderedStructureFieldEntries(
+  list: BoardList,
+  systemDisplayNames?: { itemId?: string; dependencies?: string; createdAt?: string; createdBy?: string; status?: string },
+  systemVisibility?: {
+    itemId?: boolean
+    dependencies?: boolean
+    createdAt?: boolean
+    createdBy?: boolean
+    status?: boolean
+  },
+  wishlistOverrides?: { showAdvisedBuyOrder?: boolean; advisedBuyOrderDisplayName?: string }
+): StructureFieldEntry[] {
+  const entries = defaultStructureFieldEntries(list, systemDisplayNames, systemVisibility, wishlistOverrides)
+  const order = normalizedBoardFieldOrderKeys(list, entries)
+  const entryMap = new Map(entries.map((entry) => [entry.key, entry]))
+  return order.map((key) => entryMap.get(key)).filter((entry): entry is StructureFieldEntry => Boolean(entry))
+}
+
+function orderedBoardRenderFields(list: BoardList): BoardRenderFieldEntry[] {
+  const displayColumns = buildBoardDisplayColumns(list)
+  const visibleMap = new Map<string, BoardRenderFieldEntry>()
+
+  if (list.showItemIdOnBoard) visibleMap.set('system:itemId', { kind: 'system', key: 'system:itemId', field: 'itemId', label: systemBoardLabel(list, 'itemId', 'Item ID') })
+  if (list.showDependenciesOnBoard)
+    visibleMap.set('system:dependencies', {
+      kind: 'system',
+      key: 'system:dependencies',
+      field: 'dependencies',
+      label: systemBoardLabel(list, 'dependencies', 'Dependencies')
+    })
+  if (list.showCreatedAtOnBoard)
+    visibleMap.set('system:createdAt', { kind: 'system', key: 'system:createdAt', field: 'createdAt', label: systemBoardLabel(list, 'createdAt', 'Created At') })
+  if (list.showCreatedByOnBoard)
+    visibleMap.set('system:createdBy', { kind: 'system', key: 'system:createdBy', field: 'createdBy', label: systemBoardLabel(list, 'createdBy', 'Created By') })
+  if (list.dueDateEnabled && list.showStatusOnBoard)
+    visibleMap.set('system:status', { kind: 'system', key: 'system:status', field: 'status', label: systemBoardLabel(list, 'status', 'Status') })
+
+  for (const column of displayColumns) {
+    const key = column.kind === 'wishlist_advised_buy_order' ? 'special:wishlistAdvisedBuyOrder' : column.key
+    visibleMap.set(key, { kind: 'display', key, column, label: column.label })
+  }
+
+  const orderedKeys = normalizedBoardFieldOrderKeys(list)
+  return orderedKeys
+    .map((key) => visibleMap.get(key))
+    .filter((entry): entry is BoardRenderFieldEntry => Boolean(entry))
 }
 
 function boardSortMetaForDisplayColumn(
@@ -10914,11 +9798,6 @@ function dayBeforeBirthday(date: Date): Date {
   return next
 }
 
-function localDateTimeInputValue(date: Date): string {
-  const offset = date.getTimezoneOffset()
-  return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 16)
-}
-
 type SummaryEntry = {
   id: string
   title: string
@@ -10981,14 +9860,6 @@ function dateOccurrencesInWindow(value: FieldValue | undefined, column: ListColu
   return single && single >= start && single <= end ? [single] : []
 }
 
-function parseColumnDateValue(value: string, column: ListColumn): Date | null {
-  if (column.role === 'deadline' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return new Date(`${value}T00:00:00`)
-  }
-  const candidate = new Date(value.includes('T') ? value : `${value}T00:00:00`)
-  return Number.isNaN(candidate.getTime()) ? null : candidate
-}
-
 function recurringTimeOccurrences(value: DateFieldValue, start: Date, end: Date): Date[] {
   const [hour, minute] = (value.value || '00:00').split(':').map((part) => Number(part))
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return []
@@ -11046,441 +9917,12 @@ function widgetInput(widget: BoardWidget): Parameters<typeof window.lpl.updateWi
   }
 }
 
-function defaultWorldClockConfig(): NonNullable<BoardWidgetConfig['worldClocks']> {
-  return {
-    locations: [
-      { id: 'bucharest', label: 'Bucharest', timeZone: 'Europe/Bucharest' },
-      { id: 'london', label: 'London', timeZone: 'Europe/London' },
-      { id: 'new-york', label: 'New York', timeZone: 'America/New_York' },
-      { id: 'tokyo', label: 'Tokyo', timeZone: 'Asia/Tokyo' }
-    ],
-    showSeconds: false,
-    style: 'panel'
-  }
-}
-
-function defaultWeatherConfig(): NonNullable<BoardWidgetConfig['weather']> {
-  return {
-    temperatureUnit: 'celsius',
-    locationMode: 'current',
-    customLocation: null
-  }
-}
-
-function defaultConfigForWidgetType(type: WidgetType): BoardWidgetConfig {
-  if (type === 'weather') return { weather: defaultWeatherConfig() }
-  if (type === 'word_of_day') return { wordOfDay: { accent: 'calm' } }
-  if (type === 'world_clocks') return { worldClocks: defaultWorldClockConfig() }
-  if (type === 'countdown') return { countdown: { label: 'Next milestone', targetAt: '', style: 'segmented' } }
-  return { clock: { showSeconds: true, style: 'segmented' } }
-}
-
-function clockTimeParts(date: Date): { hour: string; minute: string; dayPeriod: string } {
-  const parts = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  }).formatToParts(date)
-  return {
-    hour: parts.find((part) => part.type === 'hour')?.value ?? '00',
-    minute: parts.find((part) => part.type === 'minute')?.value ?? '00',
-    dayPeriod: (parts.find((part) => part.type === 'dayPeriod')?.value ?? 'AM').toUpperCase()
-  }
-}
-
-function formatWidgetDate(date: Date): string {
-  const weekday = date.toLocaleDateString(undefined, { weekday: 'long' })
-  const month = date.toLocaleDateString(undefined, { month: 'long' })
-  const year = date.getFullYear()
-  return `${weekday}, ${month} ${ordinalDay(date.getDate())}, ${year}`
-}
-
-function formatWidgetDateTime(date: Date): string {
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
-
-function ordinalDay(day: number): string {
-  const mod100 = day % 100
-  if (mod100 >= 11 && mod100 <= 13) return `${day}th`
-  const mod10 = day % 10
-  if (mod10 === 1) return `${day}st`
-  if (mod10 === 2) return `${day}nd`
-  if (mod10 === 3) return `${day}rd`
-  return `${day}th`
-}
-
-function zonedTimeParts(date: Date, timeZone: string): { hour: number; minute: number; second: number } {
-  const formatter = new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-    timeZone
-  })
-  const parts = formatter.formatToParts(date)
-  return {
-    hour: Number(parts.find((part) => part.type === 'hour')?.value ?? '0'),
-    minute: Number(parts.find((part) => part.type === 'minute')?.value ?? '0'),
-    second: Number(parts.find((part) => part.type === 'second')?.value ?? '0')
-  }
-}
-
-function timeZoneOffsetLabel(timeZone: string, date: Date): string {
-  const formatted = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    timeZoneName: 'shortOffset'
-  }).formatToParts(date)
-  return formatted.find((part) => part.type === 'timeZoneName')?.value ?? timeZone
-}
-
-function formatZonedWeekday(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: 'long',
-    timeZone
-  }).format(date)
-}
-
-function formatZonedWidgetDate(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    day: 'numeric',
-    timeZone
-  }).formatToParts(date)
-  const month = parts.find((part) => part.type === 'month')?.value ?? ''
-  const day = Number(parts.find((part) => part.type === 'day')?.value ?? '1')
-  return `${month} ${ordinalDay(day)}`
-}
-
-function inputType(column: ListColumn): string {
-  if (column.role === 'deadline') return column.dateDisplayFormat === 'datetime' ? 'datetime-local' : 'date'
-  if (column.type === 'date') {
-    if (column.dateDisplayFormat === 'datetime') return 'datetime-local'
-    if (column.dateDisplayFormat === 'time') return 'time'
-    return 'date'
-  }
-  if (column.type === 'hyperlink') return 'url'
-  if (column.type === 'duration') return 'text'
-  if (column.type === 'integer' || column.type === 'decimal' || column.type === 'currency') return 'number'
-  return 'text'
-}
-
-function inputValue(value: FieldValue | undefined, column: ListColumn): string {
-  if (value === null || value === undefined || Array.isArray(value)) return ''
-  if (isDateFieldValue(value)) return inputValue(value.value, column)
-  if (column.type === 'duration' && typeof value === 'number') return durationInputValue(value)
-  if (column.role === 'deadline' && typeof value === 'string') {
-    if (column.dateDisplayFormat === 'datetime' && value.length === 10) return `${value}T00:00`
-    if (column.dateDisplayFormat === 'date' && value.includes('T')) return value.slice(0, 10)
-  }
-  if (column.type === 'date' && typeof value === 'string') {
-    if (column.dateDisplayFormat === 'datetime' && value.length === 10) return `${value}T00:00`
-    if (column.dateDisplayFormat === 'date' && value.includes('T')) return value.slice(0, 10)
-    if (column.dateDisplayFormat === 'time') return value.includes('T') ? value.slice(11, 16) : value.slice(0, 5)
-  }
-  return String(value)
-}
-
-function choiceInputValue(value: FieldValue | undefined, column: ListColumn): string | string[] {
-  if (column.choiceConfig?.selection === 'multi') return Array.isArray(value) ? value : value ? [String(value)] : []
-  return Array.isArray(value) ? (value[0] ?? '') : value ? String(value) : ''
-}
-
-function coerceInputValue(column: ListColumn, value: FieldValue): FieldValue {
-  if (isDateFieldValue(value)) return value.value ? value : null
-  if (column.type === 'boolean') return Boolean(value)
-  if (column.type === 'choice') return value === '' ? null : value
-  if (value === '') return null
-  if (column.type === 'integer') return Number.parseInt(String(value), 10)
-  if (column.type === 'decimal' || column.type === 'currency') return Number.parseFloat(String(value))
-  if (column.type === 'duration') return parseDurationInput(String(value))
-  return String(value)
-}
-
-function parseDurationInput(value: string): number | null {
-  const trimmed = value.trim().toLowerCase()
-  if (!trimmed) return null
-  const hourMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*h$/)
-  if (hourMatch) return Math.round(Number(hourMatch[1]) * 60)
-  const parts = trimmed.split(':').map((part) => part.trim())
-  if (parts.length === 2) {
-    const hours = Number(parts[0])
-    const minutes = Number(parts[1])
-    if (Number.isFinite(hours) && Number.isFinite(minutes) && minutes >= 0 && minutes < 60) return Math.round(hours * 60 + minutes)
-  }
-  if (/^\d+(?:\.\d+)?$/.test(trimmed)) return Math.round(Number(trimmed) * 60)
-  return Number.NaN
-}
-
-function durationInputValue(minutes: number): string {
-  if (!Number.isFinite(minutes)) return ''
-  const totalMinutes = Math.max(0, Math.round(minutes))
-  const hours = Math.floor(totalMinutes / 60)
-  const remainderMinutes = totalMinutes % 60
-  return `${hours}:${String(remainderMinutes).padStart(2, '0')}`
-}
-
-function formatDurationMinutes(minutes: number, displayFormat: DurationDisplayFormat = 'days_hours'): string {
-  if (!Number.isFinite(minutes)) return '-'
-  const totalMinutes = Math.max(0, Math.round(minutes))
-  const hours = Math.floor(totalMinutes / 60)
-  const mins = totalMinutes % 60
-  if (displayFormat === 'hours') return `${hours}:${String(mins).padStart(2, '0')}`
-  const days = Math.floor(hours / 24)
-  const remainderHours = hours % 24
-  return days > 0
-    ? `${days}:${String(remainderHours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`
-    : `${remainderHours}:${String(mins).padStart(2, '0')}`
-}
-
-function formatValue(value: FieldValue | undefined, column: ListColumn): string {
-  if (isDateFieldValue(value)) {
-    if (!value.value) return '-'
-    if (column.type === 'date' && column.dateDisplayFormat === 'time') {
-      return recurrenceLabel(value.recurrence, value.recurrenceDays, formatTimeValue(value.value), value.recurrenceInterval)
-    }
-    return formatValue(value.value, column)
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => choiceLabel(entry, column)).join(', ')
-  }
-  if (value === null || value === undefined || value === '') return '-'
-  if (column.type === 'choice') return choiceLabel(String(value), column)
-  if (column.type === 'boolean') return value ? 'Yes' : 'No'
-  if (column.type === 'currency' && typeof value === 'number') {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: column.currencyCode }).format(value)
-  }
-  if (column.type === 'duration' && typeof value === 'number') return formatDurationMinutes(value, column.durationDisplayFormat)
-  if (normalizeColumnName(column.name) === '% done' && typeof value === 'number') return `${value}%`
-  if (column.type === 'date' && typeof value === 'string') {
-    if (column.dateDisplayFormat === 'datetime') return formatDateTimeValue(value)
-    if (column.dateDisplayFormat === 'time') {
-      return formatTimeValue(value)
-    }
-    return formatDateValue(value)
-  }
-  return String(value)
-}
-
-function formatDateValue(value: string): string {
-  if (!value.includes('T') && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(`${value}T00:00:00`))
-  }
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value))
-}
-
-function formatDateTimeValue(value: string): string {
-  if (!value.includes('T') && /^\d{4}-\d{2}-\d{2}$/.test(value)) return formatDateValue(value)
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-}
-
-function formatSystemDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-}
-
-function formatTimeValue(value: string): string {
-  const candidate = value.includes('T') ? value : `1970-01-01T${value}`
-  return new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date(candidate))
-}
-
-function isDateFieldValue(value: FieldValue | undefined): value is DateFieldValue {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'value' in value)
-}
-
-function dateFieldValue(value: FieldValue | undefined): DateFieldValue {
-  if (isDateFieldValue(value)) {
-    const recurrence = value.recurrence ?? 'none'
-    return {
-      value: value.value,
-      recurrence,
-      recurrenceDays: recurrenceNeedsWeekdays(recurrence) ? normalizeRecurrenceDays(value.recurrenceDays) : [],
-      recurrenceInterval: normalizeRecurrenceInterval(value.recurrenceInterval)
-    }
-  }
-  return {
-    value: typeof value === 'string' ? value : '',
-    recurrence: 'none',
-    recurrenceDays: [],
-    recurrenceInterval: 1
-  }
-}
-
-function isItemLevelRecurringTimeColumn(column: ListColumn): boolean {
-  return column.type === 'date' && column.role !== 'deadline' && column.dateDisplayFormat === 'time'
-}
-
-function recurrenceLabel(recurrence: RecurrenceMode, days: number[], time: string, interval = 1): string {
-  if (recurrence === 'daily') return `Daily, ${time}`
-  if (recurrence === 'weekly') return `${daysLabel(days, 'Weekly')}, ${time}`
-  if (recurrence === 'interval_weeks') return `${daysLabel(days, `Every ${normalizeRecurrenceInterval(interval)} weeks`)}, ${time}`
-  if (recurrence === 'monthly') return `Monthly, ${time}`
-  if (recurrence === 'interval_months') return `Every ${normalizeRecurrenceInterval(interval)} months, ${time}`
-  if (recurrence === 'custom_weekdays') return `${daysLabel(days, 'Selected days')}, ${time}`
-  return time
-}
-
-function daysLabel(days: number[], fallback: string): string {
-  if (days.length === 0) return fallback
-  return days.map((day) => weekdayLabels[day]?.long).filter(Boolean).join(', ')
-}
-
-function recurrenceNeedsWeekdays(recurrence: RecurrenceMode): boolean {
-  return recurrence === 'weekly' || recurrence === 'interval_weeks' || recurrence === 'custom_weekdays'
-}
-
-function recurrenceNeedsInterval(recurrence: RecurrenceMode): boolean {
-  return recurrence === 'interval_weeks' || recurrence === 'interval_months'
-}
-
-function normalizeRecurrenceDays(days: number[] | undefined): number[] {
-  return [...new Set((days ?? []).map((day) => Math.trunc(day)).filter((day) => day >= 0 && day <= 6))].sort((a, b) => a - b)
-}
-
-function normalizeRecurrenceInterval(interval: number | undefined): number {
-  return Number.isFinite(interval) ? Math.max(1, Math.min(24, Math.trunc(interval ?? 1))) : 1
-}
-
-function formatCellValue(value: FieldValue | undefined, column: ListColumn): string | ReactElement {
-  if (column.type !== 'hyperlink') return formatValue(value, column)
-  const label = formatValue(value, column)
-  if (label === '-') return label
-  return (
-    <button
-      className="link-cell-button"
-      onClick={(event) => {
-        event.stopPropagation()
-        window.lpl.openExternalUrl(label)
-      }}
-      type="button"
-    >
-      {linkLabel(label)}
-    </button>
-  )
-}
-
-function linkLabel(value: string): string {
-  try {
-    const url = new URL(value.startsWith('http://') || value.startsWith('https://') ? value : `https://${value}`)
-    return url.hostname.replace(/^www\./, '') || value
-  } catch {
-    return value
-  }
-}
-
-function choiceLabel(value: string, column: ListColumn): string {
-  return column.choiceConfig?.options.find((option) => option.id === value || option.label === value)?.label ?? value
-}
-
-function useNow(intervalMs: number): Date {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), intervalMs)
-    return () => window.clearInterval(timer)
-  }, [intervalMs])
-  return now
-}
-
-function weatherCodeLabel(code: number, isDay: boolean): string {
-  if (code === 0) return isDay ? 'Clear sky' : 'Clear night'
-  if (code === 1 || code === 2) return 'Partly cloudy'
-  if (code === 3) return 'Overcast'
-  if (code === 45 || code === 48) return 'Fog'
-  if (code >= 51 && code <= 67) return 'Rain'
-  if (code >= 71 && code <= 77) return 'Snow'
-  if (code >= 80 && code <= 82) return 'Showers'
-  if (code >= 95) return 'Storms'
-  return 'Weather update'
-}
-
-async function requestWeatherPosition(): Promise<GeolocationPosition> {
-  if (!('geolocation' in navigator)) throw new Error('geolocation-unsupported')
-  return new Promise<GeolocationPosition>((resolve, reject) =>
-    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 10000, maximumAge: 15 * 60 * 1000 })
-  )
-}
-
-async function resolveWeatherLocation(
-  config: BoardWidgetConfig['weather'] | undefined
-): Promise<{ latitude: number; longitude: number; kicker: string }> {
-  if (config?.locationMode === 'custom' && config.customLocation) {
-    return {
-      latitude: config.customLocation.latitude,
-      longitude: config.customLocation.longitude,
-      kicker: config.customLocation.label
-    }
-  }
-  try {
-    const position = await requestWeatherPosition()
-    return {
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-      kicker: 'Current location'
-    }
-  } catch (error) {
-    return requestApproximateWeatherLocation(error)
-  }
-}
-
-async function requestApproximateWeatherLocation(previousError: unknown): Promise<WeatherApproximateLocation> {
-  try {
-    return await window.lpl.fetchWeatherApproximateLocation()
-  } catch (error) {
-    throw error ?? previousError
-  }
-}
-
-function weatherLocationSearchError(error: unknown): string {
-  if (error instanceof Error && error.message.startsWith('weather-location-http-')) {
-    return 'The location service did not respond successfully. Please try again in a moment.'
-  }
-  if (error instanceof Error && error.message === 'weather-location-network') {
-    return 'The location search service could not be reached. Check connectivity and try again.'
-  }
-  return 'Location search is unavailable right now. Please try again in a moment.'
-}
-
-function weatherUnavailableDetail(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = Number((error as { code?: unknown }).code)
-    if (code === 1) return 'Location access is blocked and approximate lookup was unavailable. Check permissions or connectivity and try again.'
-    if (code === 2) return 'Current location could not be determined and approximate lookup was unavailable. Check location services and try again.'
-    if (code === 3) return 'Location lookup timed out and approximate lookup was unavailable. Check connectivity and try again.'
-  }
-  if (error instanceof Error && error.message.startsWith('weather-http-')) {
-    return 'The weather service did not respond successfully. Please try again in a moment.'
-  }
-  if (error instanceof Error && (error.message.startsWith('ip-location-http-') || error.message === 'ip-location-network')) {
-    return 'Approximate location lookup failed. Check connectivity and try again.'
-  }
-  if (error instanceof Error && (error.message === 'weather-network' || error.message === 'weather-missing')) {
-    return 'The weather service could not be reached. Check connectivity and try again.'
-  }
-  if (error instanceof TypeError) {
-    return 'The weather location service could not be reached. Check connectivity and try again.'
-  }
-  return 'Location permission or weather service unavailable.'
-}
-
 function summaryToneForSlot(slot: SummarySlot): 'positive' | 'alert' {
   if (slot.aggregationMethod === 'total_purchases' || slot.aggregationMethod === 'overdue_items' || slot.aggregationMethod === 'overdue_tasks') {
     return 'alert'
   }
   return 'positive'
 }
-
-const wordBank = [
-  { word: 'Steady', meaning: 'Move with calm consistency, even when the day is noisy.' },
-  { word: 'Clarity', meaning: 'Let the next right thing matter more than everything at once.' },
-  { word: 'Gentle', meaning: 'A softer pace can still carry real momentum.' },
-  { word: 'Resolve', meaning: 'Commit quietly, then keep going.' },
-  { word: 'Balance', meaning: 'Make room for what restores you, not only what demands you.' },
-  { word: 'Focus', meaning: 'Protect attention like a finite resource.' },
-  { word: 'Courage', meaning: 'Small brave actions count more than perfect plans.' }
-]
 
 function statusLabel(item: BoardItem): string {
   if (item.publicationStatus === 'dirty') return 'Unpublished edits'
@@ -11490,8 +9932,4 @@ function statusLabel(item: BoardItem): string {
 
 function deadlineRowClass(item: BoardItem): string | undefined {
   return item.deadlineTone === 'none' ? undefined : deadlineClass(item.deadlineTone)
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
 }

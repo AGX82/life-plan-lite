@@ -12,12 +12,18 @@ Purpose: map likely product evolution from the current stable desktop line towar
 
 ## Current Position
 
-- `v1.3.0` is the latest stable release.
+- As of 2026-05-08, `v1.4.0` is the latest shipped stable release.
+- The repository package version is currently `1.4.1-dev`.
 - The product now has:
   - stable board/list/widget foundations
   - a strong setup wizard
   - a reusable tutorial
+  - a real Help surface with search and browsable topic articles
   - mature baseline list templates
+  - board-view ad-hoc column sorting
+  - Weather widget support for `Current location` and `Custom location`
+  - Wishlist recommendation behavior
+  - a first-pass Project template with lightweight Gantt support
   - local-first persistence and display separation
 
 This is a solid desktop base, but not yet cloud-ready.
@@ -42,7 +48,7 @@ Future releases should extend these capabilities, not quietly replace or bypass 
 
 ## Proposed Release Path
 
-## v1.3.x - Stabilization And Design Prep
+## v1.4.x - Stabilization And Design Prep
 
 Focus:
 - small fixes

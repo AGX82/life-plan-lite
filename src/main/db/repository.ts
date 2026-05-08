@@ -245,7 +245,7 @@ function normalizeDateDisplayFormat(format: DateDisplayFormat | undefined): Date
 }
 
 function normalizeDurationDisplayFormat(format: DurationDisplayFormat | undefined): DurationDisplayFormat {
-  return format === 'hours' ? 'hours' : 'days_hours'
+  return 'hours'
 }
 
 function normalizeColumnSortOrder(order: ColumnSortOrder | undefined): ColumnSortOrder {
@@ -342,7 +342,7 @@ function defaultListTemplateConfig(type: ListTemplateType): ListTemplateConfig {
   if (type === 'birthday_calendar') return { behavior: 'calendar', birthday: { boardView: 'this_month' } }
   if (type === 'todo') return { behavior: 'tasks' }
   if (type === 'project') return { behavior: 'tasks' }
-  if (type === 'wishlist') return { behavior: 'purchases', wishlist: { profile: 'default', showAdvisedBuyOrder: false } }
+  if (type === 'wishlist') return { behavior: 'purchases', wishlist: { profile: 'default', showAdvisedBuyOrder: false, advisedBuyOrderDisplayName: null } }
   if (type === 'shopping_list') return { behavior: 'purchases' }
   if (type === 'health' || type === 'trips_events') return { behavior: 'calendar' }
   return {}
@@ -387,18 +387,11 @@ function minListGridWidthForTemplateType(type: ListTemplateType): number {
   return type === 'project' ? 10 : MIN_LIST_GRID_WIDTH
 }
 
-function formatDurationMinutes(minutes: number, displayFormat: DurationDisplayFormat = 'days_hours'): string {
+function formatDurationMinutes(minutes: number, displayFormat: DurationDisplayFormat = 'hours'): string {
   const totalMinutes = Math.max(0, Math.round(minutes))
   const hours = Math.floor(totalMinutes / 60)
   const mins = totalMinutes % 60
-  if (displayFormat === 'hours') {
-    return `${hours}:${String(mins).padStart(2, '0')}`
-  }
-  const days = Math.floor(hours / 24)
-  const remainderHours = hours % 24
-  return days > 0
-    ? `${days}:${String(remainderHours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`
-    : `${remainderHours}:${String(mins).padStart(2, '0')}`
+  return `${hours}h ${mins}min`
 }
 
 function isDateFieldValue(value: FieldValue | undefined): value is DateFieldValue {
@@ -1907,7 +1900,8 @@ export class LifePlanRepository {
           input.type === 'date' ? (input.recurrenceDays ?? []) : [],
           input.type === 'currency' ? input.currencyCode : undefined,
           input.showOnBoard ?? true,
-          input.type === 'duration' ? input.durationDisplayFormat : undefined
+          input.type === 'duration' ? input.durationDisplayFormat : undefined,
+          input.displayName ?? null
         )
       )
       if (!input.addOnTop && columnSortOrder !== 'manual') {
@@ -1954,7 +1948,7 @@ export class LifePlanRepository {
       : this.isWishlistTotalCostColumn(existing.list_type, existing.name)
         ? this.wishlistPriceCurrencyCode(existing.list_id)
         : requestedCurrencyCode
-    const durationDisplayFormat = type === 'duration' ? normalizeDurationDisplayFormat(input.durationDisplayFormat ?? existingFormat.durationDisplayFormat) : 'days_hours'
+    const durationDisplayFormat = type === 'duration' ? normalizeDurationDisplayFormat(input.durationDisplayFormat ?? existingFormat.durationDisplayFormat) : 'hours'
     const showOnBoard = input.showOnBoard ?? existingFormat.showOnBoard
     if (this.isProtectedBirthdayColumn(existing.list_type, existing.name)) {
       this.assertProtectedBirthdayColumnUpdateAllowed(existing, resolvedName, type, input)
@@ -1997,7 +1991,8 @@ export class LifePlanRepository {
           recurrenceDays,
           currencyCode,
           showOnBoard,
-          durationDisplayFormat
+          durationDisplayFormat,
+          input.displayName ?? existingFormat.displayName
         ),
         new Date().toISOString(),
         input.columnId
@@ -2375,6 +2370,7 @@ export class LifePlanRepository {
         id: row.id,
         listId: row.list_id,
         name: row.name,
+        displayName: displayFormat.displayName,
         type: row.column_type,
         order: row.sort_order,
         required: row.is_required === 1,
@@ -2748,23 +2744,26 @@ export class LifePlanRepository {
   }
 
   private calculateSystemSummary(method: AggregationMethod, boardId: string, displayLists: BoardList[]): string {
-    const allLists = this.getBoardLists(boardId, 'admin')
     if (method === 'open_tasks') {
-      return String(allLists.filter((list) => this.listBehavior(list) === 'tasks').reduce((count, list) => count + list.items.length, 0))
+      return String(this.summaryTaskLists(displayLists).reduce((count, list) => count + this.displayedItemCount(list), 0))
     }
     if (method === 'board_items') {
       return String(displayLists.reduce((count, list) => count + this.displayedItemCount(list), 0))
     }
     if (method === 'total_board_entries') {
-      return String(allLists.reduce((count, list) => count + list.items.length, 0))
+      return String(displayLists.reduce((count, list) => count + this.displayedItemCount(list), 0))
     }
-    if (method === 'total_purchases') return this.totalPurchasesSummary(allLists)
-    if (method === 'total_effort_tasks') return this.totalEffortTasksSummary(allLists)
+    if (method === 'total_purchases') return this.totalPurchasesSummary(displayLists)
+    if (method === 'total_effort_tasks') return this.totalEffortTasksSummary(displayLists)
     if (method === 'overdue_items') {
-      return String(allLists.filter((list) => ['tasks', 'purchases', 'calendar'].includes(this.listBehavior(list))).reduce((count, list) => count + list.items.filter((item) => item.isOverdue).length, 0))
+      return String(
+        displayLists
+          .filter((list) => ['tasks', 'purchases', 'calendar'].includes(this.listBehavior(list)))
+          .reduce((count, list) => count + list.items.filter((item) => item.isOverdue).length, 0)
+      )
     }
     if (method === 'overdue_tasks') {
-      return String(allLists.filter((list) => this.listBehavior(list) === 'tasks').reduce((count, list) => count + list.items.filter((item) => item.isOverdue).length, 0))
+      return String(this.summaryTaskLists(displayLists).reduce((count, list) => count + list.items.filter((item) => item.isOverdue).length, 0))
     }
     return '0'
   }
@@ -2799,7 +2798,7 @@ export class LifePlanRepository {
 
   private totalEffortTasksSummary(lists: BoardList[]): string {
     const totalMinutes = lists
-      .filter((list) => this.listBehavior(list) === 'tasks')
+      .filter((list) => this.isSummaryTaskList(list))
       .flatMap((list) => list.columns.filter((column) => column.type === 'duration' && normalizeReservedColumnName(column.name) === 'effort').map((column) => ({ list, column })))
       .reduce((sum, { list, column }) => {
         return sum + list.items.reduce((itemSum, item) => {
@@ -2811,13 +2810,7 @@ export class LifePlanRepository {
   }
 
   private formatEffortSummary(minutes: number): string {
-    const totalMinutes = Math.max(0, Math.round(minutes))
-    const hours = Math.floor(totalMinutes / 60)
-    const mins = totalMinutes % 60
-    if (hours < 24) return `${hours}h ${String(mins).padStart(2, '0')}m`
-    const days = Math.floor(hours / 24)
-    const remainderHours = hours % 24
-    return `${days}d ${remainderHours}h ${String(mins).padStart(2, '0')}m`
+    return formatDurationMinutes(minutes)
   }
 
   private displayedItemCount(list: BoardList): number {
@@ -2851,6 +2844,14 @@ export class LifePlanRepository {
     if (list.templateType === 'shopping_list' || list.templateType === 'wishlist') return 'purchases'
     if (list.templateType === 'health' || list.templateType === 'trips_events' || list.templateType === 'birthday_calendar') return 'calendar'
     return this.normalizeListBehavior(list.templateConfig.behavior)
+  }
+
+  private isSummaryTaskList(list: BoardList): boolean {
+    return this.listBehavior(list) === 'tasks' && list.templateType !== 'project'
+  }
+
+  private summaryTaskLists(lists: BoardList[]): BoardList[] {
+    return lists.filter((list) => this.isSummaryTaskList(list))
   }
 
   private publishItems(itemIds: string[]): void {
@@ -3235,8 +3236,9 @@ export class LifePlanRepository {
     recurrenceDays: number[]
     currencyCode: CurrencyCode
     showOnBoard: boolean
+    displayName: string | null
   } {
-    if (!format) return { role: null, choiceConfig: null, dateDisplayFormat: 'date', durationDisplayFormat: 'days_hours', recurrence: 'none', recurrenceDays: [], currencyCode: 'USD', showOnBoard: true }
+    if (!format) return { role: null, choiceConfig: null, dateDisplayFormat: 'date', durationDisplayFormat: 'hours', recurrence: 'none', recurrenceDays: [], currencyCode: 'USD', showOnBoard: true, displayName: null }
     try {
       const parsed = JSON.parse(format) as {
         role?: ColumnRole
@@ -3247,6 +3249,7 @@ export class LifePlanRepository {
         recurrenceDays?: number[]
         currencyCode?: CurrencyCode
         showOnBoard?: boolean
+        displayName?: string | null
       }
       const role = parsed.role === 'deadline' ? parsed.role : null
       const dateDisplayFormat = parsed.dateDisplayFormat ? normalizeDateDisplayFormat(parsed.dateDisplayFormat) : role === 'deadline' ? 'datetime' : 'date'
@@ -3260,10 +3263,11 @@ export class LifePlanRepository {
         recurrence,
         recurrenceDays: recurrenceNeedsDays(recurrence) ? normalizeRecurrenceDays(parsed.recurrenceDays) : [],
         currencyCode: normalizeCurrencyCode(parsed.currencyCode),
-        showOnBoard: parsed.showOnBoard !== false
+        showOnBoard: parsed.showOnBoard !== false,
+        displayName: typeof parsed.displayName === 'string' && parsed.displayName.trim() ? parsed.displayName.trim() : null
       }
     } catch {
-      return { role: null, choiceConfig: null, dateDisplayFormat: 'date', durationDisplayFormat: 'days_hours', recurrence: 'none', recurrenceDays: [], currencyCode: 'USD', showOnBoard: true }
+      return { role: null, choiceConfig: null, dateDisplayFormat: 'date', durationDisplayFormat: 'hours', recurrence: 'none', recurrenceDays: [], currencyCode: 'USD', showOnBoard: true, displayName: null }
     }
   }
 
@@ -3275,14 +3279,16 @@ export class LifePlanRepository {
     recurrenceDays: number[] = [],
     currencyCode: CurrencyCode | undefined = undefined,
     showOnBoard = true,
-    durationDisplayFormat: DurationDisplayFormat | undefined = undefined
+    durationDisplayFormat: DurationDisplayFormat | undefined = undefined,
+    displayName: string | null = null
   ): string | null {
     const normalizedDateDisplayFormat = normalizeDateDisplayFormat(dateDisplayFormat)
     const normalizedRecurrence = normalizedDateDisplayFormat === 'time' ? normalizeRecurrenceMode(recurrence) : 'none'
     const normalizedRecurrenceDays = recurrenceNeedsDays(normalizedRecurrence) ? normalizeRecurrenceDays(recurrenceDays) : []
     const normalizedCurrencyCode = normalizeCurrencyCode(currencyCode)
     const normalizedDurationDisplayFormat = normalizeDurationDisplayFormat(durationDisplayFormat)
-    if (!role && !choiceConfig && normalizedDateDisplayFormat === 'date' && normalizedRecurrence === 'none' && normalizedCurrencyCode === 'USD' && normalizedDurationDisplayFormat === 'days_hours' && showOnBoard) return null
+    const normalizedDisplayName = typeof displayName === 'string' && displayName.trim() ? displayName.trim() : null
+    if (!role && !choiceConfig && normalizedDateDisplayFormat === 'date' && normalizedRecurrence === 'none' && normalizedCurrencyCode === 'USD' && normalizedDurationDisplayFormat === 'hours' && showOnBoard && !normalizedDisplayName) return null
     return JSON.stringify({
       ...(role ? { role } : {}),
       ...(choiceConfig ? { choiceConfig: normalizeChoiceConfig(choiceConfig) } : {}),
@@ -3290,7 +3296,8 @@ export class LifePlanRepository {
       ...(normalizedRecurrence !== 'none' ? { recurrence: normalizedRecurrence } : {}),
       ...(normalizedRecurrenceDays.length > 0 ? { recurrenceDays: normalizedRecurrenceDays } : {}),
       ...(normalizedCurrencyCode !== 'USD' ? { currencyCode: normalizedCurrencyCode } : {}),
-      ...(normalizedDurationDisplayFormat !== 'days_hours' ? { durationDisplayFormat: normalizedDurationDisplayFormat } : {}),
+      ...(normalizedDurationDisplayFormat !== 'hours' ? { durationDisplayFormat: normalizedDurationDisplayFormat } : {}),
+      ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),
       ...(!showOnBoard ? { showOnBoard: false } : {})
     })
   }
@@ -3419,14 +3426,39 @@ export class LifePlanRepository {
     try {
       const parsed = JSON.parse(json) as {
         behavior?: string
+        boardFieldOrder?: string[]
+        systemDisplayNames?: {
+          itemId?: string | null
+          dependencies?: string | null
+          createdAt?: string | null
+          createdBy?: string | null
+          status?: string | null
+        }
         birthday?: { boardView?: string }
-        wishlist?: { profile?: string; showAdvisedBuyOrder?: boolean }
+        wishlist?: { profile?: string; showAdvisedBuyOrder?: boolean; advisedBuyOrderDisplayName?: string | null }
       }
       const boardView = parsed.birthday?.boardView
       const behavior = normalizedType === 'custom' ? this.normalizeListBehavior(parsed.behavior) : fallback.behavior
       return {
         ...fallback,
         behavior,
+        boardFieldOrder: Array.isArray(parsed.boardFieldOrder) ? parsed.boardFieldOrder.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : fallback.boardFieldOrder,
+        systemDisplayNames: {
+          itemId: typeof parsed.systemDisplayNames?.itemId === 'string' && parsed.systemDisplayNames.itemId.trim() ? parsed.systemDisplayNames.itemId.trim() : null,
+          dependencies:
+            typeof parsed.systemDisplayNames?.dependencies === 'string' && parsed.systemDisplayNames.dependencies.trim()
+              ? parsed.systemDisplayNames.dependencies.trim()
+              : null,
+          createdAt:
+            typeof parsed.systemDisplayNames?.createdAt === 'string' && parsed.systemDisplayNames.createdAt.trim()
+              ? parsed.systemDisplayNames.createdAt.trim()
+              : null,
+          createdBy:
+            typeof parsed.systemDisplayNames?.createdBy === 'string' && parsed.systemDisplayNames.createdBy.trim()
+              ? parsed.systemDisplayNames.createdBy.trim()
+              : null,
+          status: typeof parsed.systemDisplayNames?.status === 'string' && parsed.systemDisplayNames.status.trim() ? parsed.systemDisplayNames.status.trim() : null
+        },
         ...(normalizedType === 'birthday_calendar'
           ? {
               birthday: {
@@ -3446,7 +3478,11 @@ export class LifePlanRepository {
           ? {
               wishlist: {
                 profile: normalizeWishlistRecommendationProfile(parsed.wishlist?.profile),
-                showAdvisedBuyOrder: parsed.wishlist?.showAdvisedBuyOrder === true
+                showAdvisedBuyOrder: parsed.wishlist?.showAdvisedBuyOrder === true,
+                advisedBuyOrderDisplayName:
+                  typeof parsed.wishlist?.advisedBuyOrderDisplayName === 'string' && parsed.wishlist.advisedBuyOrderDisplayName.trim()
+                    ? parsed.wishlist.advisedBuyOrderDisplayName.trim()
+                    : null
               }
             }
           : {})
@@ -3525,7 +3561,7 @@ export class LifePlanRepository {
     )
     this.createSeedColumn(listId, 'People', 'text', 4, false, 160, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
     this.createSeedColumn(listId, 'Location', 'text', 5, false, 160, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
-    this.createSeedColumn(listId, 'Effort', 'duration', 6, false, null, true, true, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, true, 'days_hours'))
+    this.createSeedColumn(listId, 'Effort', 'duration', 6, false, null, true, true, true, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, true, 'hours'))
     this.createSeedColumn(listId, '% Done', 'integer', 7, false, null, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, true))
     this.createSeedColumn(listId, 'Comments', 'text', 8, false, 500, false, false, false, this.writeColumnDisplayFormat(null, null, 'date', 'none', [], undefined, false))
     this.run(

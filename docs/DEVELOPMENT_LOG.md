@@ -6,6 +6,8 @@ Date: 2026-04-23
 
 This log captures the major implementation decisions and milestones that led to the first usable baseline.
 
+It is intentionally a baseline-history document, not a full current release history. Later release progression is tracked in [`RELEASE_NOTES.md`](</c:/LPL%20-%20Life%20Plan%20Lite/RELEASE_NOTES.md>) and the versioned notes under `release-notes/`.
+
 ## Initial Build
 
 - Created an Electron desktop app structure with React renderer.
@@ -115,7 +117,9 @@ This log captures the major implementation decisions and milestones that led to 
 - Added local tag `v0.1.0`.
 - Pushed `main` and `v0.1.0` to GitHub at `https://github.com/AGX82/life-plan-lite`.
 
-## Known Next Areas
+## Known Next Areas At Baseline Time
+
+These were the next areas identified at the `v0.1.0` checkpoint. Several were completed in later versions and remain here for historical traceability.
 
 - Add automated tests around repository behavior and layout placement.
 - Add packaged installer/release workflow.
